@@ -1,0 +1,112 @@
+# AECS — Prompt de Continuação: Milestone 7 (Context Compiler)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+O MVP + Experiment Harness estão completos (73 testes). **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL (73 testes, Milestones 0-6 completos)
+
+**Implementado:**
+- Domain Models, State Machine, YAML Parser, Risk Classifier
+- OllamaAdapter, MockAgentAdapter, DockerSandbox, ExecutionController
+- BudgetEnforcer, ScopeEnforcer, CircuitBreaker, ControlKernel
+- BuildVerifier, TestVerifier, ScopeVerifier, BudgetVerifier, DecisionEngine
+- CLI `aecs run` e `aecs experiment`, SampleProject, 5 task YAML files
+- ExperimentRunner com relatório e CPVC
+
+---
+
+## 2. O QUE IMPLEMENTAR AGORA (MILESTONE 7)
+
+O Context Compiler seleciona o **menor conjunto de informações** que maximiza a chance de sucesso da tarefa. Em vez de enviar o repo inteiro para o LLM, seleciona apenas símbolos, arquivos e testes relevantes.
+
+### 2.1 Codebase Indexer (Roslyn)
+
+Implemente em `AECS.Application` ou `AECS.ContextCompiler`:
+
+```csharp
+public class CodebaseIndexer
+{
+    // Usa Roslyn para analisar um projeto C# e extrair:
+    // - Lista de arquivos .cs
+    // - Símbolos (classes, interfaces, métodos, propriedades)
+    // - Dependências entre símbolos (quem usa quem)
+    // - Testes associados
+    // Retorna CodebaseIndex
+}
+```
+
+**Para o MVP do Context Compiler, NÃO precisa de Roslyn completo.** Use uma abordagem simples:
+- Lista arquivos .cs com `Directory.GetFiles`
+- Extrai nomes de classes/interfaces com regex simples
+- Identifica arquivos de teste (contêm "Test" no nome)
+- Mapeia dependências por referências de namespace
+
+### 2.2 Context Selector
+
+```csharp
+public class ContextSelector
+{
+    // Dado um TaskContract e um CodebaseIndex, seleciona:
+    // 1. Arquivos diretamente mencionados no scope
+    // 2. Arquivos que dependem dos arquivos do scope
+    // 3. Testes associados aos arquivos do scope
+    // 4. Arquivos mencionados no objective (keyword matching)
+    // Retorna ContextPackage
+}
+```
+
+### 2.3 Context Package
+
+```csharp
+public class ContextPackage
+{
+    public string Id { get; } // CTX-<hash>
+    public List<string> SelectedFiles { get; }
+    public List<string> SelectedSymbols { get; }
+    public List<string> RelevantTests { get; }
+    public int EstimatedTokens { get; }
+}
+```
+
+### 2.4 Integração com OllamaAdapter
+
+O OllamaAdapter deve usar o ContextPackage para construir o prompt:
+- Em vez de enviar "modifique o código", envia o conteúdo dos arquivos relevantes
+- O prompt inclui: contexto do código + task + acceptance criteria
+
+### 2.5 Métrica CUD (Context Utility Density)
+
+```csharp
+// CUD = ΔP(VCC) / context_tokens
+// Para o MVP: registre tokens do contexto para medição futura
+```
+
+### 2.6 Testes obrigatórios
+
+- CodebaseIndexer: indexa SampleProject, encontra classes e testes
+- ContextSelector: seleciona arquivos relevantes para cada task
+- ContextPackage: ID único, contagem de tokens
+
+---
+
+## 3. O QUE NÃO IMPLEMENTAR AINDA
+
+- Semantic Linter (EB001-EB005) — Milestone 8
+- Adaptive Controller — Milestone 8
+- OpenTelemetry — pós-MVP
+- Jarvis CLI — Milestone 9
+
+---
+
+## 4. DEFINITION OF DONE
+
+1. CodebaseIndexer indexa SampleProject
+2. ContextSelector seleciona arquivos relevantes
+3. ContextPackage gerado com ID e contagem de tokens
+4. OllamaAdapter usa ContextPackage no prompt
+5. Todos os 73 testes existentes continuam passando
+6. Novos testes adicionados e passando
+7. Solution compila sem erros

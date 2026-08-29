@@ -1,0 +1,95 @@
+# AECS — Prompt de Continuação: Milestone 8 (Adaptive Controller)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+Milestones 0-7 estão completos (80 testes). **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL (80 testes, Milestones 0-7 completos)
+
+**Implementado:**
+- Domain Models, State Machine, YAML Parser, Risk Classifier
+- OllamaAdapter, MockAgentAdapter, DockerSandbox, ExecutionController
+- BudgetEnforcer, ScopeEnforcer, CircuitBreaker, ControlKernel
+- BuildVerifier, TestVerifier, ScopeVerifier, BudgetVerifier, DecisionEngine
+- CLI `aecs run` e `aecs experiment`, SampleProject, 5 task YAML files
+- ExperimentRunner com relatório e CPVC
+- Context Compiler (CodebaseIndexer, ContextSelector, ContextPackage)
+
+---
+
+## 2. O QUE IMPLEMENTAR AGORA (MILESTONE 8)
+
+O Adaptive Controller aprende com execuções passadas para melhorar decisões futuras. Começar com heurísticas simples, não ML.
+
+### 2.1 Execution History Store
+
+```csharp
+public class ExecutionHistoryStore
+{
+    // Armazena resultados de execuções anteriores
+    // Consulta: por task type, por modelo, por risk level
+    // Fonte: ExperimentReport + EvidenceEvents
+}
+```
+
+### 2.2 Heuristic Model Selector
+
+```csharp
+public class HeuristicModelSelector
+{
+    // Dado histórico de execuções, seleciona melhor modelo:
+    // - Qual modelo tem maior taxa de sucesso para este tipo de task?
+    // - Qual modelo tem menor custo para este risk level?
+    // - Fallback: modelo padrão por risk level
+}
+```
+
+### 2.3 Heuristic Budget Optimizer
+
+```csharp
+public class HeuristicBudgetOptimizer
+{
+    // Dado histórico, sugere budget otimizado:
+    // - Quantos tokens esta classe de task normalmente usa?
+    // - Qual o custo médio por risk level?
+    // - Ajusta budget para evitar waste sem comprometer sucesso
+}
+```
+
+### 2.4 Adaptive Controller (orquestrador)
+
+```csharp
+public class AdaptiveController
+{
+    // Combina heurísticas para tomar decisão adaptativa:
+    // 1. Consulta histórico
+    // 2. Seleciona modelo
+    // 3. Otimiza budget
+    // 4. Retorna ExecutionPlan adaptativo
+}
+```
+
+### 2.5 Integração
+
+Substituir `ExecutionController` estático por `AdaptiveController` quando houver dados suficientes. Fallback para estático quando histórico < 5 execuções.
+
+### 2.6 Testes obrigatórios
+
+- ExecutionHistoryStore: armazena e consulta
+- HeuristicModelSelector: seleciona por taxa de sucesso
+- HeuristicBudgetOptimizer: sugere budget baseado em histórico
+- AdaptiveController: integração com fallback
+
+---
+
+## 3. DEFINITION OF DONE
+
+1. ExecutionHistoryStore implementado e testado
+2. HeuristicModelSelector implementado e testado
+3. HeuristicBudgetOptimizer implementado e testado
+4. AdaptiveController implementado com fallback
+5. Todos os 80 testes existentes continuam passando
+6. Novos testes adicionados e passando
+7. Solution compila sem erros

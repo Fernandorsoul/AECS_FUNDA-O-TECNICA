@@ -1,0 +1,120 @@
+# AECS — Prompt de Continuação: Milestone 6 (Experiment Harness)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+O MVP (Milestones 0-5) está completo com 73 testes e fluxo end-to-end funcional. **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL (73 testes, MVP completo)
+
+**Projetos:** AECS.Domain, AECS.Application, AECS.Infrastructure, AECS.Cli, AECS.UnitTests, AECS.IntegrationTests
+
+**MVP completo:**
+- Domain Models, State Machine, YAML Parser, Risk Classifier
+- OllamaAdapter, MockAgentAdapter, DockerSandbox, ExecutionController
+- BudgetEnforcer, ScopeEnforcer, CircuitBreaker, ControlKernel
+- BuildVerifier, TestVerifier, ScopeVerifier, BudgetVerifier, DecisionEngine
+- CLI `aecs run`, SampleProject, 5 task YAML files
+
+**CLI funcional:**
+```bash
+aecs run --repo ./sample/SampleProject --task-file tasks/task-001-fix-null.yaml --mock
+```
+
+---
+
+## 2. O QUE IMPLEMENTAR AGORA (MILESTONE 6)
+
+### 2.1 Experiment Runner
+
+Implemente um comando que execute múltiplas tasks e gere relatório:
+
+```bash
+aecs experiment --repo ./sample/SampleProject --tasks ./tasks --mock
+```
+
+O runner deve:
+1. Carregar todos os YAML files do diretório `tasks/`
+2. Executar cada task sequencialmente
+3. Coletar métricas de cada execução
+4. Gerar relatório consolidado
+
+### 2.2 Métricas por execução
+
+Para cada task, registre:
+- Task ID
+- Risk Level
+- Modelo usado
+- Duração
+- Tokens (input + output)
+- Custo estimado
+- Arquivos modificados
+- Verificações (PASS/FAIL por verificador)
+- Decisão final (VERIFIED/REJECTED/HUMAN_REVIEW)
+- Retry count
+
+### 2.3 Relatório de experimento
+
+O output deve ser um relatório consolidado:
+
+```
+AECS EXPERIMENT REPORT
+
+Tasks executed: 5
+Verified: 2
+Rejected: 3
+
+TASK-001  Fix null handling         R1  VERIFIED   5.0s  $0.00  1 file
+TASK-002  Add validation            R1  VERIFIED   4.2s  $0.00  2 files
+TASK-003  Scope violation           R1  REJECTED   3.1s  $0.00  1 file  (Scope)
+TASK-004  Break tests               R1  REJECTED   6.3s  $0.00  1 file  (Tests)
+TASK-005  Budget exceed             R1  REJECTED   2.8s  $0.00  3 files (Budget)
+
+SUMMARY
+Total duration: 21.4s
+Total estimated cost: $0.00
+First-pass verification rate: 40% (2/5)
+Average files changed: 1.6
+```
+
+### 2.4 Persistência de resultados
+
+Salve os resultados no PostgreSQL (tabela `ExperimentRun`):
+- Experiment ID
+- Timestamp
+- Total tasks
+- Verified/Rejected counts
+- Total duration
+- Total cost
+
+### 2.5 CPVC (Cost per Verified Change)
+
+Calcule e exiba:
+```
+CPVC = Total Cost / Verified Changes
+```
+
+Para LLMs locais, CPVC será $0 (custo zero). Mas a métrica deve estar pronta para quando usar cloud APIs.
+
+---
+
+## 3. O QUE NÃO IMPLEMENTAR AINDA
+
+- Context Compiler (Roslyn) — Milestone 7
+- Semantic Linter — Milestone 7
+- Adaptive Controller — Milestone 8
+- OpenTelemetry — pós-MVP
+- Jarvis CLI — Milestone 9
+
+---
+
+## 4. DEFINITION OF DONE
+
+1. `aecs experiment --repo ./sample/SampleProject --tasks ./tasks --mock` funciona
+2. Executa os 5 cenários e gera relatório
+3. Resultados persistidos no PostgreSQL
+4. CPVC calculado
+5. Todos os 73 testes existentes continuam passando
+6. Novos testes adicionados e passando
+7. Solution compila sem erros

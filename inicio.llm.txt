@@ -1,0 +1,891 @@
+Use este como **prompt mestre inicial** no Codex, Claude Code ou outro coding agent. Ele força o agente a começar pequeno, preservar a tese e evitar overengineering.
+
+> **NOTA:** Se o projeto já possui código implementado (Domain Models, State Machine, ADRs, etc.), NÃO use este prompt. Use `inicio.llm.milestone2.txt` (ou o milestone correspondente) para continuar de onde parou.
+
+Você é o principal engenheiro responsável por iniciar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+Seu objetivo NÃO é construir um produto completo agora.
+
+Seu objetivo é implementar corretamente o **primeiro vertical slice funcional do AECS v0.1**, de forma que possamos executar um coding agent de maneira controlada, limitada, observável e verificável.
+
+Antes de alterar qualquer código, leia integralmente:
+
+`AECS_Fundacao_Tecnica_v0.1.md`
+
+Esse documento é a fonte de verdade arquitetural atual do projeto.
+
+Se alguma decisão sua entrar em conflito com esse documento, não ignore silenciosamente o conflito. Registre a divergência e proponha um ADR.
+
+---
+
+# 1. MISSÃO DO PRODUTO
+
+O AECS é um sistema de controle para engenharia de software agêntica.
+
+Ele deve ficar entre:
+
+* humano;
+* coding agent;
+* modelo de IA;
+* repositório;
+* ferramentas;
+* verificadores;
+* CI/CD.
+
+O AECS não é um chatbot e não é um clone de Copilot.
+
+Sua função é:
+
+1. receber uma intenção humana;
+2. transformá-la em um `TaskContract`;
+3. definir limites de execução;
+4. executar um coding agent em ambiente controlado;
+5. observar tudo o que o agente faz;
+6. limitar custo, tempo, escopo e retries;
+7. capturar a alteração produzida;
+8. verificar a alteração;
+9. produzir evidências;
+10. decidir entre:
+
+* VERIFIED;
+* REJECTED;
+* HUMAN_REVIEW_REQUIRED.
+
+Princípio fundamental:
+
+> Probabilistic Discovery. Deterministic Enforcement.
+
+Modelos podem sugerir e raciocinar.
+
+Regras críticas devem ser verificadas deterministicamente sempre que possível.
+
+---
+
+# 2. NÃO IMPLEMENTAR AINDA
+
+NÃO implemente neste momento:
+
+* interface gráfica;
+* Angular;
+* VS Code Extension;
+* voz;
+* experiência Jarvis;
+* multi-agent;
+* reinforcement learning;
+* contextual bandits;
+* Neo4j;
+* Kafka;
+* Kubernetes;
+* microservices;
+* suporte a várias linguagens;
+* memória sofisticada;
+* semantic linter avançado;
+* modelo local;
+* marketplace;
+* autenticação empresarial;
+* billing;
+* deploy cloud complexo.
+
+O objetivo é provar o kernel.
+
+Se algo não for necessário para executar o primeiro loop ponta a ponta, deixe para depois.
+
+---
+
+# 3. STACK
+
+Utilize:
+
+* .NET 10
+* C#
+* ASP.NET Core quando necessário
+* PostgreSQL
+* Entity Framework Core
+* Docker / Docker Compose
+* OpenTelemetry
+* xUnit
+* FluentAssertions
+
+Para análise C# futura e verificações arquiteturais:
+
+* Roslyn
+
+Arquitetura:
+
+* Modular Monolith
+* Clean boundaries
+* SOLID
+* composição explícita
+* baixo acoplamento
+* interfaces apenas quando existirem limites reais de substituição
+
+Evite abstrações desnecessárias.
+
+---
+
+# 4. ESTRUTURA INICIAL DA SOLUTION
+
+Crie inicialmente:
+
+```text
+src/
+  AECS.Api/
+  AECS.Application/
+  AECS.Domain/
+  AECS.Infrastructure/
+  AECS.ControlKernel/
+  AECS.AgentRuntime/
+  AECS.Verification/
+  AECS.Observability/
+
+tests/
+  AECS.UnitTests/
+  AECS.IntegrationTests/
+  AECS.SystemTests/
+
+docs/
+  adr/
+  architecture/
+
+experiments/
+
+policies/
+```
+
+Não crie projetos adicionais sem necessidade concreta.
+
+---
+
+# 5. PRIMEIRO OBJETIVO FUNCIONAL
+
+Precisamos conseguir executar:
+
+```bash
+aecs run \
+  --repo ./SampleProject \
+  --task "Fix null handling in CustomerMapper"
+```
+
+Pode inicialmente ser implementado por CLI, console application ou endpoint interno, escolhendo a solução mais simples.
+
+O fluxo esperado é:
+
+```text
+Human Task
+    ↓
+TaskContract
+    ↓
+Risk Classification
+    ↓
+ExecutionPlan
+    ↓
+AgentAdapter
+    ↓
+Sandbox
+    ↓
+Agent Execution
+    ↓
+Patch
+    ↓
+Verification DAG
+    ↓
+Evidence
+    ↓
+Decision
+```
+
+---
+
+# 6. DOMAIN MODEL INICIAL
+
+Implemente pelo menos os seguintes conceitos.
+
+## TaskContract
+
+Deve conter:
+
+* Id
+* Objective
+* AcceptanceCriteria
+* AllowedScope
+* ForbiddenScope
+* RiskLevel
+* Budget
+* VerificationProfile
+* ApprovalPolicy
+* Status
+* CreatedAt
+
+## ExecutionBudget
+
+* MaxTokens
+* MaxCostUsd
+* MaxRetries
+* MaxDuration
+* MaxFilesChanged
+
+## AgentRun
+
+* Id
+* TaskId
+* AgentType
+* Provider
+* Model
+* StartedAt
+* FinishedAt
+* InputTokens
+* OutputTokens
+* CachedTokens
+* EstimatedCost
+* RetryCount
+* ExitReason
+
+## VerificationResult
+
+* Id
+* AgentRunId
+* Verifier
+* Status
+* Severity
+* Message
+* CreatedAt
+
+## Evidence
+
+* Id
+* TaskId
+* AgentRunId
+* Type
+* Source
+* Authority
+* Payload
+* CreatedAt
+
+## PolicyDecision
+
+* Id
+* AgentRunId
+* Policy
+* Action
+* Decision
+* Reason
+* CreatedAt
+
+---
+
+# 7. TASK STATE MACHINE
+
+Não use estados implícitos espalhados em `if`.
+
+Implemente uma máquina de estados clara.
+
+Estados mínimos:
+
+```text
+Created
+ContractReady
+Planned
+Running
+Verifying
+Verified
+Rejected
+HumanReviewRequired
+BudgetExceeded
+ScopeViolation
+TimedOut
+AgentFailed
+Cancelled
+```
+
+Transições inválidas devem falhar explicitamente.
+
+Escreva testes para a máquina de estados.
+
+---
+
+# 8. INTERFACES ESSENCIAIS
+
+Crie interfaces equivalentes a:
+
+```csharp
+public interface IAgentAdapter
+{
+    Task<AgentRunResult> ExecuteAsync(
+        AgentExecutionRequest request,
+        CancellationToken cancellationToken);
+}
+```
+
+```csharp
+public interface IVerifier
+{
+    Task<VerificationResult> VerifyAsync(
+        VerificationContext context,
+        CancellationToken cancellationToken);
+}
+```
+
+```csharp
+public interface IExecutionController
+{
+    Task<ExecutionPlan> PlanAsync(
+        TaskContract task,
+        CancellationToken cancellationToken);
+}
+```
+
+```csharp
+public interface IEvidenceStore
+{
+    Task AppendAsync(
+        Evidence evidence,
+        CancellationToken cancellationToken);
+}
+```
+
+Adapte nomes e contratos se houver justificativa arquitetural clara.
+
+Não crie interfaces apenas por ritual.
+
+---
+
+# 9. PRIMEIRO AGENT ADAPTER
+
+Implemente somente UM adapter inicialmente.
+
+O adapter deve ser provider-agnostic do ponto de vista do domínio.
+
+Toda dependência específica de fornecedor deve ficar isolada em Infrastructure ou AgentRuntime.
+
+O domínio não pode depender de SDK de OpenAI, Anthropic, GitHub ou qualquer fornecedor.
+
+O primeiro adapter precisa retornar:
+
+* stdout;
+* stderr;
+* status;
+* duração;
+* tokens quando disponíveis;
+* custo estimado;
+* arquivos modificados;
+* exit reason.
+
+Não permita que detalhes do provider vazem para o domínio.
+
+---
+
+# 10. SANDBOX
+
+A execução do coding agent deve ocorrer de forma isolada.
+
+Na primeira versão utilize Docker.
+
+Cada execução deve possuir:
+
+* workspace temporário;
+* clone/cópia isolada do repository;
+* timeout;
+* limites de execução;
+* processo descartável;
+* captura de stdout;
+* captura de stderr.
+
+Não dê acesso irrestrito ao host.
+
+Não dê acesso a secrets permanentes.
+
+Não dê acesso irrestrito à rede se não for necessário.
+
+---
+
+# 11. CONTROL KERNEL
+
+O `ControlKernel` deve ser responsável por enforcement.
+
+Implemente inicialmente:
+
+## Budget enforcement
+
+Verifique:
+
+* tempo;
+* retries;
+* quantidade de arquivos modificados;
+* custo quando disponível.
+
+## Scope enforcement
+
+Exemplo:
+
+```text
+Allowed:
+src/Customers/**
+tests/Customers/**
+```
+
+Se o agente modificar:
+
+```text
+src/Billing/**
+```
+
+a execução deve ser marcada como:
+
+```text
+ScopeViolation
+```
+
+Não peça a um LLM para decidir isso.
+
+Faça deterministicamente.
+
+---
+
+# 12. CIRCUIT BREAKER
+
+Implemente limites configuráveis:
+
+```text
+MAX_COST
+MAX_TOKENS
+MAX_FILES_CHANGED
+MAX_RETRIES
+MAX_DURATION
+```
+
+Quando um limite for ultrapassado:
+
+1. interrompa a execução;
+2. registre a razão;
+3. crie Evidence;
+4. atualize o estado corretamente.
+
+---
+
+# 13. VERIFICATION DAG V0.1
+
+Implemente inicialmente apenas:
+
+## BuildVerifier
+
+Executa:
+
+```bash
+dotnet build
+```
+
+## UnitTestVerifier
+
+Executa:
+
+```bash
+dotnet test
+```
+
+## ScopeVerifier
+
+Verifica se o diff respeita o TaskContract.
+
+## BudgetVerifier
+
+Confirma se budget foi respeitado.
+
+Não crie ainda um LLM verifier.
+
+Cada verifier deve produzir `VerificationResult`.
+
+---
+
+# 14. DECISÃO FINAL
+
+Regra inicial:
+
+```text
+Todos os verificadores obrigatórios PASS
+→ VERIFIED
+```
+
+Se uma regra determinística obrigatória falhar:
+
+```text
+→ REJECTED
+```
+
+Se a mudança estiver tecnicamente válida, mas exigir decisão humana conforme ApprovalPolicy:
+
+```text
+→ HUMAN_REVIEW_REQUIRED
+```
+
+Mantenha a regra simples.
+
+---
+
+# 15. EVIDENCE
+
+Toda decisão relevante deve gerar evidência.
+
+Exemplos:
+
+```text
+AgentStarted
+AgentStopped
+BudgetExceeded
+ScopeViolation
+BuildPassed
+BuildFailed
+TestsPassed
+TestsFailed
+FileModified
+PatchProduced
+VerificationPassed
+VerificationFailed
+```
+
+O objetivo é que posteriormente seja possível reconstruir exatamente:
+
+> o que aconteceu nessa execução?
+
+---
+
+# 16. PERSISTÊNCIA
+
+Use PostgreSQL.
+
+Na primeira versão armazene:
+
+* TaskContracts;
+* AgentRuns;
+* VerificationResults;
+* Evidence;
+* PolicyDecisions.
+
+Utilize migrations.
+
+Não introduza banco de grafos agora.
+
+O futuro Evidence Graph poderá ser derivado dessas entidades.
+
+---
+
+# 17. OBSERVABILITY
+
+Instrumente desde o começo com OpenTelemetry.
+
+Precisamos conseguir observar:
+
+```text
+Task
+ └─ AgentRun
+     ├─ AgentExecution
+     ├─ ToolExecution
+     ├─ Verification.Build
+     ├─ Verification.Tests
+     ├─ Verification.Scope
+     └─ FinalDecision
+```
+
+Inclua correlation IDs.
+
+Não registre secrets ou prompts sensíveis indiscriminadamente.
+
+---
+
+# 18. PRIMEIRO SAMPLE PROJECT
+
+Crie um projeto C# pequeno especificamente para testar o AECS.
+
+Exemplo:
+
+```text
+SampleProject/
+  Customers/
+  Orders/
+  Billing/
+```
+
+Inclua testes.
+
+Crie pelo menos cinco tarefas reproduzíveis.
+
+Exemplos:
+
+### TASK-001
+
+Corrigir NullReferenceException em CustomerMapper.
+
+### TASK-002
+
+Adicionar validação em CustomerService.
+
+### TASK-003
+
+Alteração que deveria afetar apenas Customers, mas induza o agente a tocar Billing.
+
+### TASK-004
+
+Mudança que quebra unit test.
+
+### TASK-005
+
+Tarefa que force o agente a alterar arquivos demais.
+
+Esses cenários serão nosso primeiro harness experimental.
+
+---
+
+# 19. ADRs OBRIGATÓRIOS
+
+Crie:
+
+## ADR-001
+
+`Probabilistic Discovery, Deterministic Enforcement`
+
+## ADR-002
+
+`Modular Monolith as Initial Architecture`
+
+## ADR-003
+
+`PostgreSQL as Initial Operational and Evidence Store`
+
+## ADR-004
+
+`Docker-based Agent Isolation`
+
+## ADR-005
+
+`Provider-Agnostic Agent Adapter`
+
+## ADR-006
+
+`Verification Before Adaptive Learning`
+
+Cada ADR deve conter:
+
+* Status
+* Context
+* Decision
+* Consequences
+
+---
+
+# 20. TESTES
+
+Priorize testes nas partes que podem comprometer controle.
+
+Cobertura obrigatória para:
+
+* Task state machine;
+* budget enforcement;
+* scope matching;
+* circuit breaker;
+* final decision;
+* invalid state transitions.
+
+Inclua integration tests para:
+
+* PostgreSQL;
+* Agent Runtime;
+* Docker execution;
+* build verifier;
+* test verifier.
+
+---
+
+# 21. SEGURANÇA
+
+Considere desde o início:
+
+```text
+deny by default
+least privilege
+ephemeral execution
+explicit capabilities
+no permanent credentials
+sandbox isolation
+```
+
+Nunca implemente algo que permita ao agent:
+
+* aumentar suas próprias permissões;
+* alterar policy;
+* alterar seu próprio budget;
+* ignorar scope;
+* liberar acesso ao host.
+
+---
+
+# 22. REGRAS DE DESENVOLVIMENTO
+
+1. Faça mudanças pequenas.
+
+2. Não implemente funcionalidades futuras “porque serão úteis depois”.
+
+3. Evite abstrações especulativas.
+
+4. Toda nova dependência deve ter justificativa.
+
+5. Não utilize padrões arquiteturais apenas por moda.
+
+6. Prefira código explícito.
+
+7. Mantenha o domínio independente de fornecedores.
+
+8. Documente decisões irreversíveis com ADR.
+
+9. Se encontrar ambiguidade, escolha a solução mais simples compatível com o documento de fundação.
+
+10. Não reescreva partes funcionando sem justificativa.
+
+11. Não adicione frontend nesta fase.
+
+12. Não introduza IA onde uma regra determinística resolve o problema.
+
+---
+
+# 23. DEFINITION OF DONE — PRIMEIRO MILESTONE
+
+O primeiro milestone só está concluído quando for possível executar algo equivalente a:
+
+```bash
+aecs run \
+  --repo ./SampleProject \
+  --task "Fix null handling in CustomerMapper"
+```
+
+e receber:
+
+```text
+AECS RUN
+
+Task:
+Fix null handling in CustomerMapper
+
+Risk:
+R1
+
+Allowed Scope:
+src/Customers/**
+tests/Customers/**
+
+Budget:
+$0.20
+120 seconds
+1 retry
+
+Execution:
+SUCCESS
+
+Files changed:
+CustomerMapper.cs
+CustomerMapperTests.cs
+
+Verification:
+
+Build ........ PASS
+Tests ........ PASS
+Scope ........ PASS
+Budget ....... PASS
+
+Decision:
+
+VERIFIED
+
+Duration:
+...
+
+Estimated AI cost:
+...
+
+Evidence ID:
+...
+```
+
+Além disso, o PostgreSQL deve permitir reconstruir a execução.
+
+---
+
+# 24. COMO COMEÇAR AGORA
+
+Execute nesta ordem:
+
+### STEP 1
+
+Leia:
+
+`AECS_Fundacao_Tecnica_v0.1.md`
+
+### STEP 2
+
+Inspecione o repositório atual.
+
+### STEP 3
+
+Crie um plano de implementação curto dividido em milestones.
+
+### STEP 4
+
+Crie os ADRs iniciais.
+
+### STEP 5
+
+Crie a solution e projetos mínimos.
+
+### STEP 6
+
+Implemente Domain Model + State Machine.
+
+### STEP 7
+
+Implemente persistence.
+
+### STEP 8
+
+Implemente AgentRuntime mínimo.
+
+### STEP 9
+
+Implemente ControlKernel.
+
+### STEP 10
+
+Implemente Verification DAG mínimo.
+
+### STEP 11
+
+Crie SampleProject.
+
+### STEP 12
+
+Faça o primeiro fluxo end-to-end.
+
+---
+
+# 25. IMPORTANTE
+
+Não tente impressionar com quantidade de código.
+
+O objetivo é produzir o menor sistema capaz de provar ou refutar a seguinte hipótese:
+
+> **É possível colocar uma camada independente entre um humano e um coding agent que controle sua execução, imponha limites determinísticos, verifique o resultado e produza evidências suficientes para avaliar custo e confiabilidade da mudança.**
+
+Se esse loop funcionar, evoluiremos posteriormente para:
+
+* Context Compiler;
+* Semantic Engineering Linter;
+* Evidence Graph;
+* Adaptive Controller;
+* Model Router;
+* Agent Supervisor;
+* Jarvis;
+* multi-agent;
+* CPVC longitudinal.
+
+Mas NÃO implemente essas funcionalidades agora.
+
+Primeiro prove o kernel.
+
+Comece o desenvolvimento.
+

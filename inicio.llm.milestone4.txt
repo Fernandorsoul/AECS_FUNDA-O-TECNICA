@@ -1,0 +1,103 @@
+# AECS — Prompt de Continuação: Milestone 4 (Verification DAG + Decision Engine)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+O projeto já possui base + Agent Runtime + Control Kernel. **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL (62 testes passando)
+
+**Projetos:** AECS.Domain, AECS.Application, AECS.Infrastructure, AECS.Cli, AECS.UnitTests, AECS.IntegrationTests
+
+**Implementado:**
+- Domain Models (TaskContract, AgentRun, VerificationResult, EvidenceEvent, PolicyDecision, etc.)
+- Task State Machine (13 estados, 14 testes)
+- YAML Parser (TaskContractParser, 5 testes)
+- Risk Classifier (R0-R3, 9 testes)
+- OllamaAdapter (IAgentAdapter via Ollama REST, 5 testes)
+- DockerSandbox (isolamento via Docker)
+- ExecutionController (modelo por risco, 6 testes)
+- BudgetEnforcer (5 limites, 6 testes)
+- ScopeEnforcer (glob matching, 8 testes)
+- CircuitBreaker (budget + scope + timeout, 4 testes)
+- ControlKernel (orquestrador, 5 testes)
+- EvidenceStore (PostgreSQL)
+- 6 ADRs, 5 task YAML files
+
+---
+
+## 2. O QUE IMPLEMENTAR AGORA (MILESTONE 4)
+
+### 4.1 Verification DAG
+
+Implemente 4 verificadores em `AECS.Application` ou `AECS.Verification`:
+
+**BuildVerifier:**
+- Executa `dotnet build` no workspace
+- Retorna PASS/FAIL baseado no exit code
+- Tipo: Deterministic
+
+**TestVerifier:**
+- Executa `dotnet test` no workspace
+- Retorna PASS/FAIL baseado no exit code
+- Tipo: HighConfidence
+
+**ScopeVerifier:**
+- Compara `git diff --name-only` com ScopeDefinition do TaskContract
+- Usa ScopeEnforcer existente
+- Tipo: Deterministic
+
+**BudgetVerifier:**
+- Compara métricas do AgentRunResult com ExecutionBudget
+- Usa BudgetEnforcer existente
+- Tipo: Deterministic
+
+Cada verificador implementa `IVerifier`:
+```csharp
+public interface IVerifier
+{
+    string Name { get; }
+    VerificationCategory Category { get; }
+    Task<VerificationResult> VerifyAsync(VerificationContext context, CancellationToken ct);
+}
+```
+
+### 4.2 Decision Engine
+
+Implemente regra de decisão final:
+
+```csharp
+public class DecisionEngine
+{
+    // Regra 1: qualquer verificador obrigatório com Fail → REJECTED
+    // Regra 2: todos passam + approval=human → HUMAN_REVIEW_REQUIRED
+    // Regra 3: todos passam + approval=none → VERIFIED
+}
+```
+
+### 4.3 Testes obrigatórios
+
+- BuildVerifier: mock processo, testa PASS/FAIL
+- TestVerifier: mock processo, testa PASS/FAIL
+- ScopeVerifier: testa com arquivos allowed/forbidden
+- BudgetVerifier: testa com budget ok/excedido
+- DecisionEngine: testa as 3 regras de decisão
+
+---
+
+## 3. O QUE NÃO IMPLEMENTAR AINDA
+
+- CLI `aecs run` completo — Milestone 5
+- SampleProject C# — Milestone 5
+- OpenTelemetry — pós-MVP
+
+---
+
+## 4. DEFINITION OF DONE
+
+1. 4 verificadores implementados e testados
+2. DecisionEngine implementado e testado
+3. Todos os 62 testes existentes continuam passando
+4. Novos testes adicionados e passando
+5. Solution compila sem erros
