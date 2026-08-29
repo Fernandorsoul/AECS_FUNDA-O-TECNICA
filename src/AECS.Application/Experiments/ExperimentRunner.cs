@@ -1,4 +1,5 @@
 using AECS.Application.Classification;
+using AECS.Application.ContextCompiler;
 using AECS.Application.ControlKernel;
 using AECS.Application.Parsing;
 using AECS.Application.Verification;
@@ -16,6 +17,8 @@ public class ExperimentRunner
     private readonly ExecutionController _executionController = new();
     private readonly ControlKernel.ControlKernel _kernel = new();
     private readonly DecisionEngine _decisionEngine = new();
+    private readonly CodebaseIndexer _indexer = new();
+    private readonly ContextSelector _contextSelector = new();
 
     public ExperimentRunner(IAgentAdapter agentAdapter)
     {
@@ -72,7 +75,40 @@ public class ExperimentRunner
         // 2. Plan execution
         var plan = await _executionController.PlanAsync(contract, cancellationToken);
 
-        // 3. Execute agent
+        // 3. Context Compiler — select relevant files
+        var codeContext = new Dictionary<string, string>();
+        try
+        {
+            var srcPath = Path.Combine(repoPath, "Backend");
+            if (Directory.Exists(srcPath))
+            {
+                var index = _indexer.Index(srcPath);
+                var contextPackage = _contextSelector.Select(
+                    index, contract.Id, contract.Objective, contract.Scope.Allowed);
+
+                // Read file contents for context (limit to avoid token overflow)
+                var totalChars = 0;
+                var maxChars = 20000; // ~5000 tokens
+                foreach (var file in contextPackage.SelectedFiles)
+                {
+                    var fullPath = Path.Combine(repoPath, file);
+                    if (File.Exists(fullPath) && !fullPath.Contains("obj") && !fullPath.Contains("bin"))
+                    {
+                        var content = await File.ReadAllTextAsync(fullPath, cancellationToken);
+                        if (totalChars + content.Length > maxChars)
+                            break;
+                        codeContext[file] = content;
+                        totalChars += content.Length;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Context compilation is best-effort
+        }
+
+        // 4. Execute agent
         var request = new AgentExecutionRequest
         {
             TaskId = contract.Id,
@@ -82,7 +118,8 @@ public class ExperimentRunner
             Scope = contract.Scope,
             Budget = contract.Budget,
             Risk = risk,
-            Model = plan.Model
+            Model = plan.Model,
+            CodeContext = codeContext
         };
 
         var agentResult = await _agentAdapter.ExecuteAsync(request, cancellationToken);

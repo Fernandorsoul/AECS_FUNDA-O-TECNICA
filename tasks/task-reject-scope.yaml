@@ -1,0 +1,29 @@
+task:
+  id: TASK-REJECT-001
+  objective: Modify the BillingService to add a new CalculateDiscount method and also update the OrderService to use it
+  acceptance:
+    - BillingService has CalculateDiscount method
+    - OrderService calls CalculateDiscount
+  scope:
+    allowed:
+      - src/Customers/**
+      - tests/Customers/**
+    forbidden:
+      - src/Billing/**
+      - src/Orders/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 60000
+    usd: 0.20
+    retries: 1
+    wall_clock_seconds: 120
+    max_files_changed: 2
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+  approval:
+    production: none

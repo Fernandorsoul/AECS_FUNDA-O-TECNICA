@@ -21,7 +21,7 @@ public class ExecutionControllerTests
 
         var plan = await _controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("deepseek-coder:1.3b");
+        plan.Model.Should().Be("qwen2.5-coder:7b");
         plan.Risk.Should().Be(RiskLevel.R0);
         plan.TaskId.Should().Be("T1");
     }
@@ -38,7 +38,7 @@ public class ExecutionControllerTests
 
         var plan = await _controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("codellama:3b");
+        plan.Model.Should().Be("qwen2.5-coder:7b");
         plan.Risk.Should().Be(RiskLevel.R1);
     }
 
@@ -54,7 +54,7 @@ public class ExecutionControllerTests
 
         var plan = await _controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("codellama:7b");
+        plan.Model.Should().Be("qwen2.5-coder:7b");
         plan.Risk.Should().Be(RiskLevel.R2);
     }
 
@@ -70,7 +70,7 @@ public class ExecutionControllerTests
 
         var plan = await _controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("codellama:7b");
+        plan.Model.Should().Be("qwen2.5-coder:7b");
         plan.Risk.Should().Be(RiskLevel.R3);
     }
 

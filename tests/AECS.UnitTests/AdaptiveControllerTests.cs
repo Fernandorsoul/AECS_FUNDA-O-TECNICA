@@ -150,7 +150,7 @@ public class AdaptiveControllerTests
 
         var plan = await controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("codellama:3b"); // Fallback default
+        plan.Model.Should().Be("qwen2.5-coder:7b"); // Fallback default
     }
 
     [Fact]

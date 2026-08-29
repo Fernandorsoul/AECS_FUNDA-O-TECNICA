@@ -8,10 +8,10 @@ public class ExecutionController : IExecutionController
 {
     private static readonly Dictionary<RiskLevel, string> ModelByRisk = new()
     {
-        [RiskLevel.R0] = "deepseek-coder:1.3b",
-        [RiskLevel.R1] = "codellama:3b",
-        [RiskLevel.R2] = "codellama:7b",
-        [RiskLevel.R3] = "codellama:7b"
+        [RiskLevel.R0] = "qwen2.5-coder:7b",
+        [RiskLevel.R1] = "qwen2.5-coder:7b",
+        [RiskLevel.R2] = "qwen2.5-coder:7b",
+        [RiskLevel.R3] = "qwen2.5-coder:7b"
     };
 
     public Task<ExecutionPlan> PlanAsync(TaskContract task, CancellationToken cancellationToken)

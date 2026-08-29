@@ -4,16 +4,19 @@ using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
 using AECS.Application.Parsing;
 using AECS.Application.Verification;
+using AECS.Cli.Jarvis;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
 
 // Determine command
-var command = args.Length > 0 ? args[0] : "run";
+var command = args.Length > 0 ? args[0] : "jarvis";
 
 if (command == "experiment")
     return await RunExperiment(args[1..]);
+else if (command == "jarvis")
+    return await RunJarvis(args[1..]);
 else
     return await RunSingle(args);
 
@@ -245,5 +248,25 @@ static async Task<int> RunSingle(string[] args)
     Console.WriteLine($"Estimated AI cost: ${agentResult.EstimatedCost:F2}");
     Console.WriteLine($"Evidence ID: {Guid.NewGuid():N}");
 
+    return 0;
+}
+
+static async Task<int> RunJarvis(string[] args)
+{
+    string? repoPath = null;
+    bool useMock = false;
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--repo" && i + 1 < args.Length)
+            repoPath = args[++i];
+        else if (args[i] == "--mock")
+            useMock = true;
+    }
+
+    repoPath ??= ".";
+
+    var repl = new JarvisRepl(repoPath, useMock);
+    await repl.RunAsync(CancellationToken.None);
     return 0;
 }

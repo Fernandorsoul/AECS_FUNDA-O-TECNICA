@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 
@@ -104,7 +105,16 @@ public class OllamaAdapter : IAgentAdapter
     private static string BuildPrompt(AgentExecutionRequest request)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are a C# developer. Given the following task, make the necessary code changes.");
+        sb.AppendLine("You are a C# developer. Your task is to fix or modify code files.");
+        sb.AppendLine("You MUST output each modified file using EXACTLY this format:");
+        sb.AppendLine();
+        sb.AppendLine("FILE: src/Path/To/File.cs");
+        sb.AppendLine("```csharp");
+        sb.AppendLine("// full file content here");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("IMPORTANT: Always start each file with 'FILE:' followed by the path.");
+        sb.AppendLine("Do NOT include explanations. Output ONLY the FILE blocks.");
         sb.AppendLine();
         sb.AppendLine($"TASK: {request.Objective}");
         sb.AppendLine();
@@ -117,6 +127,19 @@ public class OllamaAdapter : IAgentAdapter
                 sb.AppendLine($"- {criterion}");
             }
             sb.AppendLine();
+        }
+
+        // Include code context from Context Compiler
+        if (request.CodeContext.Count > 0)
+        {
+            sb.AppendLine("EXISTING CODE (for reference):");
+            sb.AppendLine();
+            foreach (var (filePath, content) in request.CodeContext)
+            {
+                sb.AppendLine($"--- {filePath} ---");
+                sb.AppendLine(content);
+                sb.AppendLine();
+            }
         }
 
         if (request.Scope.Allowed.Count > 0)
@@ -139,11 +162,7 @@ public class OllamaAdapter : IAgentAdapter
             sb.AppendLine();
         }
 
-        sb.AppendLine("Output the modified files with their full content. Use this format:");
-        sb.AppendLine("FILE: <filepath>");
-        sb.AppendLine("```csharp");
-        sb.AppendLine("<content>");
-        sb.AppendLine("```");
+        sb.AppendLine("Now output the modified files:");
 
         return sb.ToString();
     }
@@ -164,6 +183,24 @@ public class OllamaAdapter : IAgentAdapter
                 var filePath = trimmed[5..].Trim();
                 if (!string.IsNullOrEmpty(filePath))
                     files.Add(filePath);
+            }
+        }
+
+        // If no FILE: markers found, try to extract from code block headers
+        if (files.Count == 0)
+        {
+            var codeBlockRegex = new System.Text.RegularExpressions.Regex(
+                @"```\w*\s*\n(.*?)\n```",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            // Look for file paths in the response text
+            var pathRegex = new System.Text.RegularExpressions.Regex(
+                @"(?:src|tests?|lib)/[\w/]+\.\w+");
+
+            foreach (Match match in pathRegex.Matches(response))
+            {
+                if (!files.Contains(match.Value))
+                    files.Add(match.Value);
             }
         }
 

@@ -43,3 +43,6 @@ Thumbs.db
 
 # MiMoCode internal
 .mimocode/
+
+# External repos for testing
+real-world-demo/
