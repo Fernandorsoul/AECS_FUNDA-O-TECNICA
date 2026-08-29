@@ -25,6 +25,9 @@ static async Task<int> RunExperiment(string[] args)
     string? repoPath = null;
     string? tasksDir = null;
     bool useMock = false;
+    string? cloudKey = null;
+    string? cloudModel = null;
+    string? cloudUrl = null;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -34,11 +37,17 @@ static async Task<int> RunExperiment(string[] args)
             tasksDir = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
+        else if (args[i] == "--cloud-key" && i + 1 < args.Length)
+            cloudKey = args[++i];
+        else if (args[i] == "--cloud-model" && i + 1 < args.Length)
+            cloudModel = args[++i];
+        else if (args[i] == "--cloud-url" && i + 1 < args.Length)
+            cloudUrl = args[++i];
     }
 
     if (repoPath is null || tasksDir is null)
     {
-        Console.WriteLine("Usage: aecs experiment --repo <path> --tasks <dir> [--mock]");
+        Console.WriteLine("Usage: aecs experiment --repo <path> --tasks <dir> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
         return 1;
     }
 
@@ -53,9 +62,7 @@ static async Task<int> RunExperiment(string[] args)
         return 1;
     }
 
-    IAgentAdapter agent = useMock
-        ? new MockAgentAdapter()
-        : new OllamaAdapter(new HttpClient());
+    IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
 
     var runner = new ExperimentRunner(agent);
     var report = await runner.RunAsync(repoPath, taskFiles, CancellationToken.None);
@@ -71,6 +78,10 @@ static async Task<int> RunSingle(string[] args)
     string? taskFile = null;
     bool useMock = false;
 
+    string? cloudKey = null;
+    string? cloudModel = null;
+    string? cloudUrl = null;
+
     for (int i = 0; i < args.Length; i++)
     {
         if (args[i] == "--repo" && i + 1 < args.Length)
@@ -79,12 +90,18 @@ static async Task<int> RunSingle(string[] args)
             taskFile = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
+        else if (args[i] == "--cloud-key" && i + 1 < args.Length)
+            cloudKey = args[++i];
+        else if (args[i] == "--cloud-model" && i + 1 < args.Length)
+            cloudModel = args[++i];
+        else if (args[i] == "--cloud-url" && i + 1 < args.Length)
+            cloudUrl = args[++i];
     }
 
     if (repoPath is null || taskFile is null)
     {
-        Console.WriteLine("Usage: aecs run --repo <path> --task-file <path> [--mock]");
-        Console.WriteLine("       aecs experiment --repo <path> --tasks <dir> [--mock]");
+        Console.WriteLine("Usage: aecs run --repo <path> --task-file <path> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
+        Console.WriteLine("       aecs experiment --repo <path> --tasks <dir> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
         return 1;
     }
 
@@ -150,9 +167,7 @@ static async Task<int> RunSingle(string[] args)
     // 4. Execute agent
     Console.WriteLine("Execution:");
 
-    IAgentAdapter agent = useMock
-        ? new MockAgentAdapter()
-        : new OllamaAdapter(new HttpClient());
+    IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
 
     var agentRequest = new AgentExecutionRequest
     {
@@ -269,4 +284,26 @@ static async Task<int> RunJarvis(string[] args)
     var repl = new JarvisRepl(repoPath, useMock);
     await repl.RunAsync(CancellationToken.None);
     return 0;
+}
+
+static IAgentAdapter BuildAgent(bool useMock, string? cloudKey, string? cloudModel, string? cloudUrl)
+{
+    if (useMock)
+        return new MockAgentAdapter();
+
+    var localAdapter = new OllamaAdapter(new HttpClient());
+
+    if (string.IsNullOrEmpty(cloudKey))
+        return localAdapter;
+
+    // Cloud fallback configured — wrap with FallbackAdapter
+    var cloudOptions = new CloudAdapterOptions
+    {
+        ApiKey = cloudKey,
+        Model = cloudModel ?? "gpt-4o-mini",
+        BaseUrl = cloudUrl ?? "https://api.openai.com/v1"
+    };
+
+    var cloudAdapter = new CloudAdapter(new HttpClient(), cloudOptions);
+    return new FallbackAdapter(localAdapter, cloudAdapter);
 }
