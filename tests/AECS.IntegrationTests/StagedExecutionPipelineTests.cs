@@ -75,6 +75,67 @@ public sealed class StagedExecutionPipelineTests
     }
 
     [Fact]
+    public async Task AcceptanceCriterionWithPassingVerifierEvidence_IsVerifiedAndPersisted()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var criterion = new AcceptanceCriterion
+        {
+            Id = "AC-001",
+            Description = "A real candidate change is produced",
+            Evidence = new AcceptanceEvidenceRequirement
+            {
+                Type = AcceptanceEvidenceType.Verifier,
+                Reference = "NonEmptyChange"
+            }
+        };
+
+        var result = await new StagedExecutionPipeline(
+                Agent.Success(Response("src/new-file.txt")),
+                repository.ProcessRunner,
+                store)
+            .RunAsync(
+                repository.Path,
+                ContractWithAcceptance(criterion),
+                CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        result.VerificationResults.Single(item => item.Verifier == "AcceptanceCriteria")
+            .Status.Should().Be(VerificationStatus.Pass);
+        result.AcceptanceCriteriaResults.Should().ContainSingle(item =>
+            item.CriterionId == "AC-001" &&
+            item.Status == VerificationStatus.Pass &&
+            item.EvidenceReferences.Count == 1);
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence!.AcceptanceCriteriaResults.Should().BeEquivalentTo(
+            result.AcceptanceCriteriaResults);
+        var json = await File.ReadAllTextAsync(result.EvidenceLocation);
+        json.Should().Contain("\"acceptanceCriteriaResults\"");
+        json.Should().Contain("\"criterionId\": \"AC-001\"");
+        json.Should().Contain("\"evidenceReferences\"");
+    }
+
+    [Fact]
+    public async Task TextualAcceptanceWithoutExecutableEvidence_IsRejectedFailClosed()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+
+        var result = await Pipeline(repository, Agent.Success(Response("src/new-file.txt")))
+            .RunAsync(
+                repository.Path,
+                ContractWithAcceptance(criterion: null),
+                CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+        result.VerificationResults.Single(item => item.Verifier == "AcceptanceCriteria")
+            .Status.Should().Be(VerificationStatus.Fail);
+        result.AcceptanceCriteriaResults.Should().ContainSingle(item =>
+            item.Status == VerificationStatus.Fail &&
+            item.Message.Contains("No executable evidence"));
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SuccessfulAgentWithZeroDiff_IsRejected_AndOriginalRemainsUnchanged()
     {
         await using var repository = await TemporaryGitRepository.CreateAsync();
@@ -470,6 +531,23 @@ public sealed class StagedExecutionPipelineTests
         },
         Approval = new ApprovalPolicy { Production = ApprovalLevel.None }
     };
+
+    private static TaskContract ContractWithAcceptance(AcceptanceCriterion? criterion)
+    {
+        var contract = Contract();
+        return new TaskContract
+        {
+            Id = contract.Id,
+            Objective = contract.Objective,
+            AcceptanceCriteria = ["A real candidate change is produced"],
+            AcceptanceRequirements = criterion is null ? [] : [criterion],
+            Scope = contract.Scope,
+            Budget = contract.Budget,
+            Execution = contract.Execution,
+            Verification = contract.Verification,
+            Approval = contract.Approval
+        };
+    }
 
     private static string Response(string path) =>
         $"FILE: {path}\n```text\ncandidate\n```";

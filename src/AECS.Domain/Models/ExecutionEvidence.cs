@@ -23,6 +23,7 @@ public class ExecutionEvidence
     public ContextManifest ContextManifest { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public List<VerificationResult> VerificationResults { get; init; } = [];
+    public List<AcceptanceCriterionResult> AcceptanceCriteriaResults { get; init; } = [];
     public List<ExecutionCommandEvidence> CandidateCommands { get; init; } = [];
     public FinalDecisionRecord FinalDecision { get; init; } = new();
     public List<string> StateTransitions { get; init; } = [];

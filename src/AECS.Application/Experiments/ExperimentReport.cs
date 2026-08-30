@@ -1,4 +1,5 @@
 using AECS.Domain.Enums;
+using AECS.Domain.Models;
 
 namespace AECS.Application.Experiments;
 
@@ -16,6 +17,7 @@ public class TaskExperimentResult
     public decimal EstimatedCost { get; init; }
     public int FilesChanged { get; init; }
     public Dictionary<string, VerificationStatus> Verifications { get; init; } = new();
+    public List<AcceptanceCriterionResult> AcceptanceCriteria { get; init; } = [];
     public int RetryCount { get; init; }
     public Guid EvidenceId { get; init; }
     public bool OriginalRepositoryUnchanged { get; init; }

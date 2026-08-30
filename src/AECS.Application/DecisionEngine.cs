@@ -1,3 +1,4 @@
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 
@@ -44,6 +45,22 @@ public class DecisionEngine
             var result = matches[0];
             if (result.Status != VerificationStatus.Pass)
                 failures.Add($"{result.Verifier}: {result.Status} - {result.Message}");
+        }
+
+        if (contract.Verification.BlockCriticalSemanticFailures)
+        {
+            var criticalSemanticFailures = results.Where(result =>
+                result.Verifier.StartsWith("EB", StringComparison.OrdinalIgnoreCase) &&
+                result.Severity == Severity.Critical &&
+                result.Status != VerificationStatus.Pass);
+            foreach (var result in criticalSemanticFailures)
+            {
+                if (!requiredVerifiers.Contains(result.Verifier))
+                {
+                    failures.Add(
+                        $"{result.Verifier}: critical semantic policy blocked {result.Status} - {result.Message}");
+                }
+            }
         }
 
         if (failures.Count > 0)
@@ -98,8 +115,12 @@ public class DecisionEngine
         if (contract.Verification.SecurityScan)
             required.Add("SecurityScan");
 
-        // EB001-EB005 são verificadores semânticos informativos, não gates
-        // Eles podem ter falsos positivos e não devem bloquear automaticamente
+        if (contract.AcceptanceCriteria.Count > 0 || contract.AcceptanceRequirements.Count > 0)
+            required.Add(AcceptanceCriteriaVerifier.Name);
+
+        foreach (var verifier in contract.Verification.RequiredSemanticVerifiers)
+            required.Add(verifier);
+
         return required;
     }
 }

@@ -34,12 +34,15 @@ public class TaskContractParser
         var execution = model.Execution ?? model.execution;
         var verification = model.Verification ?? model.verification;
         var approval = model.Approval ?? model.approval;
+        var acceptance = model.Acceptance ?? model.acceptance ?? [];
+        var acceptanceEvidence = model.AcceptanceEvidence ?? model.acceptance_evidence ?? [];
 
         return new TaskContract
         {
             Id = model.Id ?? model.id ?? string.Empty,
             Objective = model.Objective ?? model.objective ?? string.Empty,
-            AcceptanceCriteria = model.Acceptance ?? model.acceptance ?? [],
+            AcceptanceCriteria = acceptance,
+            AcceptanceRequirements = MapAcceptanceCriteria(acceptance, acceptanceEvidence),
             Scope = new ScopeDefinition
             {
                 Allowed = scope?.Allowed ?? scope?.allowed ?? [],
@@ -73,7 +76,14 @@ public class TaskContractParser
                 IntegrationTests = IsRequired(verification?.IntegrationTests ?? verification?.integration_tests ?? "optional"),
                 Scope = IsRequired(verification?.Scope ?? verification?.scope ?? "required"),
                 SecurityScan = IsRequired(verification?.SecurityScan ?? verification?.security_scan ?? "optional"),
-                Architecture = IsRequired(verification?.Architecture ?? verification?.architecture ?? "optional")
+                Architecture = IsRequired(verification?.Architecture ?? verification?.architecture ?? "optional"),
+                BlockCriticalSemanticFailures = IsRequired(
+                    verification?.CriticalSemanticFailures
+                    ?? verification?.critical_semantic_failures
+                    ?? "required"),
+                RequiredSemanticVerifiers = verification?.RequiredSemanticVerifiers
+                    ?? verification?.required_semantic_verifiers
+                    ?? []
             },
             Approval = new ApprovalPolicy
             {
@@ -83,6 +93,86 @@ public class TaskContractParser
             CreatedAt = DateTime.UtcNow
         };
     }
+
+    private static List<AcceptanceCriterion> MapAcceptanceCriteria(
+        IReadOnlyList<string> criteria,
+        IReadOnlyList<AcceptanceEvidenceYamlModel> mappings)
+    {
+        var mappedCriteria = new List<AcceptanceCriterion>();
+        var consumedMappings = new HashSet<AcceptanceEvidenceYamlModel>();
+
+        foreach (var mapping in mappings)
+        {
+            var matchingIndexes = Enumerable.Range(0, criteria.Count).Where(index =>
+                string.Equals(
+                    mapping.Id ?? mapping.id,
+                    $"AC-{index + 1:000}",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    mapping.Criterion ?? mapping.criterion,
+                    criteria[index],
+                    StringComparison.Ordinal)).ToList();
+            if (matchingIndexes.Count != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Acceptance evidence mapping does not match exactly one criterion: " +
+                    $"'{mapping.Id ?? mapping.id ?? mapping.Criterion ?? mapping.criterion}'.");
+            }
+        }
+
+        for (var index = 0; index < criteria.Count; index++)
+        {
+            var id = $"AC-{index + 1:000}";
+            var description = criteria[index];
+            var matches = mappings.Where(mapping =>
+                string.Equals(mapping.Id ?? mapping.id, id, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    mapping.Criterion ?? mapping.criterion,
+                    description,
+                    StringComparison.Ordinal)).ToList();
+            if (matches.Count > 1)
+                throw new InvalidOperationException($"Acceptance criterion '{id}' has duplicate evidence mappings.");
+
+            var mapping = matches.SingleOrDefault();
+            if (mapping is not null)
+                consumedMappings.Add(mapping);
+            mappedCriteria.Add(new AcceptanceCriterion
+            {
+                Id = id,
+                Description = description,
+                Required = mapping?.Required ?? mapping?.required ?? true,
+                Behavioral = mapping?.Behavioral ?? mapping?.behavioral ?? false,
+                Evidence = new AcceptanceEvidenceRequirement
+                {
+                    Type = ParseAcceptanceEvidenceType(mapping?.Type ?? mapping?.type),
+                    Reference = mapping?.Reference ?? mapping?.reference ?? string.Empty,
+                    TestPath = mapping?.TestPath ?? mapping?.test_path ?? string.Empty,
+                    EquivalentBehavioralEvidence = mapping?.EquivalentBehavioralEvidence
+                        ?? mapping?.equivalent_behavioral_evidence
+                        ?? false
+                }
+            });
+        }
+
+        var unbound = mappings.Except(consumedMappings).FirstOrDefault();
+        if (unbound is not null)
+        {
+            throw new InvalidOperationException(
+                $"Acceptance evidence mapping does not match a criterion: " +
+                $"'{unbound.Id ?? unbound.id ?? unbound.Criterion ?? unbound.criterion}'.");
+        }
+
+        return mappedCriteria;
+    }
+
+    private static AcceptanceEvidenceType ParseAcceptanceEvidenceType(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => AcceptanceEvidenceType.None,
+            "verifier" => AcceptanceEvidenceType.Verifier,
+            "test" => AcceptanceEvidenceType.Test,
+            _ => throw new InvalidOperationException($"Unknown acceptance evidence type: '{value}'.")
+        };
 
     private static RiskLevel ParseRiskLevel(string value) => value.ToLowerInvariant() switch
     {
@@ -116,6 +206,8 @@ public class TaskYamlModel
     public string? objective { get; set; }
     public List<string>? Acceptance { get; set; }
     public List<string>? acceptance { get; set; }
+    public List<AcceptanceEvidenceYamlModel>? AcceptanceEvidence { get; set; }
+    public List<AcceptanceEvidenceYamlModel>? acceptance_evidence { get; set; }
     public ScopeYamlModel? Scope { get; set; }
     public ScopeYamlModel? scope { get; set; }
     public ConstraintsYamlModel? Constraints { get; set; }
@@ -184,6 +276,30 @@ public class VerificationYamlModel
     public string? security_scan { get; set; }
     public string? Architecture { get; set; }
     public string? architecture { get; set; }
+    public string? CriticalSemanticFailures { get; set; }
+    public string? critical_semantic_failures { get; set; }
+    public List<string>? RequiredSemanticVerifiers { get; set; }
+    public List<string>? required_semantic_verifiers { get; set; }
+}
+
+public class AcceptanceEvidenceYamlModel
+{
+    public string? Id { get; set; }
+    public string? id { get; set; }
+    public string? Criterion { get; set; }
+    public string? criterion { get; set; }
+    public string? Type { get; set; }
+    public string? type { get; set; }
+    public string? Reference { get; set; }
+    public string? reference { get; set; }
+    public string? TestPath { get; set; }
+    public string? test_path { get; set; }
+    public bool? EquivalentBehavioralEvidence { get; set; }
+    public bool? equivalent_behavioral_evidence { get; set; }
+    public bool? Required { get; set; }
+    public bool? required { get; set; }
+    public bool? Behavioral { get; set; }
+    public bool? behavioral { get; set; }
 }
 
 public class ApprovalYamlModel

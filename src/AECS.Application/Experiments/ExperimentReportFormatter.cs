@@ -49,6 +49,27 @@ public static class ExperimentReportFormatter
 
         sb.AppendLine();
 
+        var acceptanceCriteria = report.Results
+            .Where(result => result.AcceptanceCriteria.Count > 0)
+            .ToList();
+        if (acceptanceCriteria.Count > 0)
+        {
+            sb.AppendLine("ACCEPTANCE EVIDENCE MATRIX");
+            foreach (var result in acceptanceCriteria)
+            {
+                foreach (var criterion in result.AcceptanceCriteria)
+                {
+                    var reference = string.IsNullOrWhiteSpace(criterion.EvidenceReference)
+                        ? "missing"
+                        : $"{criterion.EvidenceType}:{criterion.EvidenceReference}";
+                    sb.AppendLine(
+                        $"{result.TaskId,-10} {criterion.CriterionId,-8} {criterion.Status,-5} " +
+                        $"{reference} -> {criterion.Description}");
+                }
+            }
+            sb.AppendLine();
+        }
+
         // Summary
         sb.AppendLine("SUMMARY");
         sb.AppendLine($"Total duration: {report.TotalDuration.TotalSeconds:F1}s");

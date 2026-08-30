@@ -20,6 +20,7 @@ public sealed class StagedExecutionResult
     public IReadOnlyList<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
     public ContextManifest ContextManifest { get; init; } = new();
     public IReadOnlyList<VerificationResult> VerificationResults { get; init; } = [];
+    public IReadOnlyList<AcceptanceCriterionResult> AcceptanceCriteriaResults { get; init; } = [];
     public IReadOnlyList<ExecutionCommandEvidence> CandidateCommands { get; init; } = [];
     public DecisionResult Decision { get; init; } = new();
     public TaskState FinalState { get; init; }
@@ -132,6 +133,7 @@ public sealed class StagedExecutionPipeline
                 RepositoryContextCompiler.EmptyManifest(contract.Id, baseline.Commit),
                 [],
                 [],
+                [],
                 baselineDecision,
                 stateMachine,
                 cancellationToken);
@@ -142,6 +144,7 @@ public sealed class StagedExecutionPipeline
         ContextManifest contextManifest;
         CandidateChangeSet candidate;
         List<VerificationResult> verificationResults;
+        var acceptanceCriteriaResults = new List<AcceptanceCriterionResult>();
         DecisionResult decision;
         var candidateCommands = new List<ExecutionCommandEvidence>();
 
@@ -199,6 +202,7 @@ public sealed class StagedExecutionPipeline
             verificationResults = await VerifyAsync(
                 verificationContext,
                 applicationResult,
+                acceptanceCriteriaResults,
                 cancellationToken);
             decision = _decisionEngine.Decide(verificationResults, contract);
             stateMachine.TransitionTo(decision.TargetState);
@@ -217,6 +221,7 @@ public sealed class StagedExecutionPipeline
             baselineCommands,
             contextManifest,
             verificationResults,
+            acceptanceCriteriaResults,
             candidateCommands,
             decision,
             stateMachine,
@@ -236,6 +241,7 @@ public sealed class StagedExecutionPipeline
         List<ExecutionCommandEvidence> baselineCommands,
         ContextManifest contextManifest,
         List<VerificationResult> verificationResults,
+        List<AcceptanceCriterionResult> acceptanceCriteriaResults,
         List<ExecutionCommandEvidence> candidateCommands,
         DecisionResult decision,
         TaskStateMachine stateMachine,
@@ -274,6 +280,7 @@ public sealed class StagedExecutionPipeline
             ContextManifest = contextManifest,
             CandidateChangeSet = candidate,
             VerificationResults = verificationResults,
+            AcceptanceCriteriaResults = acceptanceCriteriaResults,
             CandidateCommands = candidateCommands,
             FinalDecision = new FinalDecisionRecord
             {
@@ -310,6 +317,7 @@ public sealed class StagedExecutionPipeline
             BaselineCommands = baselineCommands,
             ContextManifest = contextManifest,
             VerificationResults = verificationResults,
+            AcceptanceCriteriaResults = acceptanceCriteriaResults,
             CandidateCommands = candidateCommands,
             Decision = decision,
             FinalState = stateMachine.CurrentState,
@@ -371,6 +379,7 @@ public sealed class StagedExecutionPipeline
     private async Task<List<VerificationResult>> VerifyAsync(
         VerificationContext context,
         FileApplicatorResult applicationResult,
+        List<AcceptanceCriterionResult> acceptanceCriteriaResults,
         CancellationToken cancellationToken)
     {
         var results = new List<VerificationResult>();
@@ -421,6 +430,17 @@ public sealed class StagedExecutionPipeline
                 results.Add(await RunVerifierAsync(verifier, context, cancellationToken));
         }
 
+        if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)
+        {
+            var acceptance = await new AcceptanceCriteriaVerifier(_processRunner).VerifyAsync(
+                context,
+                results,
+                prerequisitesPassed && buildPassed,
+                cancellationToken);
+            acceptanceCriteriaResults.AddRange(acceptance.Criteria);
+            results.Add(acceptance.AggregateResult);
+        }
+
         return results;
     }
 
@@ -463,6 +483,7 @@ public sealed class StagedExecutionPipeline
         Id = contract.Id,
         Objective = contract.Objective,
         AcceptanceCriteria = contract.AcceptanceCriteria,
+        AcceptanceRequirements = contract.AcceptanceRequirements,
         Scope = contract.Scope,
         Constraints = new TaskConstraints
         {
