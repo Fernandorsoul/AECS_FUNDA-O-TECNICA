@@ -18,11 +18,13 @@ Uma tarefa percorre o seguinte pipeline:
 1. `TaskContractParser` converte o YAML em um `TaskContract`.
 2. `RiskClassifier` recalcula o risco a partir do objetivo, dos critérios, das restrições e do tamanho do escopo.
 3. `ExecutionController` escolhe o modelo local e cria um `ExecutionPlan`.
-4. Um `IAgentAdapter` executa o pedido por mock, Ollama ou fallback cloud.
-5. `FileApplicator` interpreta blocos `FILE:` e grava o conteúdo no workspace.
-6. `ControlKernel` aplica circuit breaker, escopo e orçamento.
-7. Os verificadores executam build, testes, escopo, orçamento e regras EB001–EB005.
-8. `DecisionEngine` produz `Verified`, `Rejected` ou `HumanReviewRequired`.
+4. `GitWorkspaceManager` captura uma baseline limpa e cria um worktree Git descartável.
+5. Um `IAgentAdapter` executa o pedido por mock, Ollama ou fallback cloud.
+6. `FileApplicator` interpreta blocos `FILE:` e grava o conteúdo somente no worktree.
+7. `ControlKernel` aplica circuit breaker, escopo e orçamento.
+8. Os verificadores executam build, testes, escopo, orçamento e regras EB001–EB005 no candidato isolado.
+9. `DecisionEngine` produz `Verified`, `Rejected` ou `HumanReviewRequired`, e a evidência JSON é persistida fora do repositório.
+10. Opcionalmente, `CandidatePromotionService` revalida evidência, baseline, hash e aprovação antes de aplicar atomicamente o diff no checkout original.
 
 No modo `experiment`, o pipeline também tenta compilar um pacote de contexto e agrega métricas de todas as tarefas.
 
@@ -33,9 +35,9 @@ No modo `experiment`, o pipeline também tenta compilar um pacote de contexto e 
 | `AECS.Domain` | Modelo independente de infraestrutura | `TaskContract`, `AgentRunResult`, `ExecutionBudget`, estados, decisões e interfaces |
 | `AECS.Application` | Casos de uso e regras de controle | parser, classificador de risco, Control Kernel, verificadores, Context Compiler e experimentos |
 | `AECS.Infrastructure` | Integrações externas | adaptadores Ollama/cloud/mock, EF Core/PostgreSQL e sandbox Docker |
-| `AECS.Cli` | Composição e experiência de terminal | modos `run`, `experiment` e `jarvis` |
+| `AECS.Cli` | Composição e experiência de terminal | `run`, `experiment`, `jarvis`, `promote` e `export-patch` |
 | `AECS.UnitTests` | Cobertura das regras e dos adaptadores | testes xUnit das camadas Domain, Application e Infrastructure |
-| `AECS.IntegrationTests` | Espaço reservado para testes integrados | projeto configurado, ainda sem testes descobertos |
+| `AECS.IntegrationTests` | Testes integrados com Git e projetos reais | staging, baseline, promoção, concorrência, rollback e fixture AgronomoPlus |
 
 A solução segue um monólito modular: as fronteiras são projetos .NET separados, mas a implantação ainda é uma única CLI. Veja o [ADR-002](adr/ADR-002-modular-monolith.md).
 
@@ -123,25 +125,19 @@ As integrações ainda não são uniformes:
 
 `AecsDbContext` e `EvidenceStore` fornecem a base de persistência em PostgreSQL, coerente com o [ADR-003](adr/ADR-003-postgresql-evidence-store.md). O `docker-compose.yml` da raiz sobe uma instância local do banco.
 
-Entretanto, a composição atual da CLI não instancia o contexto nem grava os resultados. O identificador de evidência exibido por `run` é gerado para aquela saída e não representa ainda um registro persistido.
+A execução staged usa `JsonExecutionEvidenceStore` e grava cada resultado fora do repositório-alvo. O identificador exibido por `run` referencia esse documento, que contém contrato, baseline, candidato, comandos, verificações, decisão e tentativas posteriores de exportação ou promoção. O store PostgreSQL permanece como infraestrutura futura e ainda não compõe a CLI.
 
 ## Fronteiras de confiança
 
-O protótipo ainda deve ser tratado como um executor com acesso de escrita ao repositório-alvo:
+O agente escreve somente em um worktree descartável e a execução atesta que o checkout original permaneceu inalterado. A fronteira de escrita no repositório-alvo fica no caso de uso de promoção, que exige uma baseline limpa e idêntica, hash confirmado, candidato elegível e aprovação explícita. O patch passa por preflight, aplicação atômica e verificação posterior do hash; falha de auditoria após a aplicação aciona rollback.
 
-- arquivos são aplicados antes da verificação de escopo;
-- não existe transação ou rollback do workspace;
-- o sandbox Docker não envolve o caminho padrão da CLI;
-- caminhos retornados pelo modelo precisam de endurecimento adicional antes de uso hostil;
-- chaves de API devem permanecer exclusivamente em `.env` ou no ambiente.
-
-Para experimentar com segurança, use uma working tree limpa, uma branch dedicada ou uma cópia descartável do repositório.
+O sandbox Docker ainda não envolve o caminho padrão da CLI e chaves de API devem permanecer exclusivamente em `.env` ou no ambiente. A promoção continua sendo uma operação de escrita deliberada: prefira branch dedicada e revise o diff staged antes do commit. Veja [Promoção controlada](controlled-promotion.md).
 
 ## Pontos de extensão
 
 - implemente `IAgentAdapter` para adicionar outro runtime;
 - implemente `IVerifier` para produzir uma nova evidência;
 - evolua `RiskClassifier` e `ExecutionController` para novas políticas de roteamento;
-- conecte `IEvidenceStore` na composição da CLI para persistência;
+- implemente outro `IExecutionEvidenceStore` para trocar a persistência JSON;
 - transforme uma regra semântica confirmada em enforcement determinístico;
-- envolva `FileApplicator` com staging, validação prévia e rollback.
+- estenda as políticas de promoção sem mover a decisão de elegibilidade para o runtime probabilístico.

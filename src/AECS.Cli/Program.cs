@@ -3,6 +3,7 @@ using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
 using AECS.Application.Parsing;
+using AECS.Application.Promotion;
 using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Cli.Jarvis;
@@ -23,8 +24,146 @@ if (command == "experiment")
     return await RunExperiment(args[1..]);
 else if (command == "jarvis")
     return await RunJarvis(args[1..]);
+else if (command == "promote")
+    return await RunPromotion(args[1..]);
+else if (command == "export-patch")
+    return await RunPatchExport(args[1..]);
 else
     return await RunSingle(args);
+
+static async Task<int> RunPromotion(string[] args)
+{
+    string? repositoryPath = null;
+    string? evidenceIdValue = null;
+    string? expectedDiffHash = null;
+    string? actor = null;
+    string? evidenceRoot = null;
+    string? policyReference = null;
+    string? humanApprovalReference = null;
+    var userConfirmed = false;
+
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--repo" && index + 1 < args.Length)
+            repositoryPath = args[++index];
+        else if (args[index] == "--evidence" && index + 1 < args.Length)
+            evidenceIdValue = args[++index];
+        else if (args[index] == "--diff-hash" && index + 1 < args.Length)
+            expectedDiffHash = args[++index];
+        else if (args[index] == "--actor" && index + 1 < args.Length)
+            actor = args[++index];
+        else if (args[index] == "--evidence-root" && index + 1 < args.Length)
+            evidenceRoot = args[++index];
+        else if (args[index] == "--policy" && index + 1 < args.Length)
+            policyReference = args[++index];
+        else if (args[index] == "--human-approval" && index + 1 < args.Length)
+            humanApprovalReference = args[++index];
+        else if (args[index] == "--confirm")
+            userConfirmed = true;
+    }
+
+    var confirmationCount = (userConfirmed ? 1 : 0) +
+        (policyReference is null ? 0 : 1) +
+        (humanApprovalReference is null ? 0 : 1);
+    if (repositoryPath is null ||
+        !Guid.TryParse(evidenceIdValue, out var evidenceId) ||
+        string.IsNullOrWhiteSpace(expectedDiffHash) ||
+        string.IsNullOrWhiteSpace(actor) ||
+        confirmationCount != 1)
+    {
+        Console.WriteLine(
+            "Usage: aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
+            "--actor <actor> (--confirm | --policy <reference> | --human-approval <reference>) " +
+            "[--evidence-root <path>]");
+        return 1;
+    }
+
+    var approval = userConfirmed
+        ? new PromotionApproval { Kind = PromotionApprovalKind.UserConfirmation }
+        : policyReference is not null
+            ? new PromotionApproval
+            {
+                Kind = PromotionApprovalKind.Policy,
+                Reference = policyReference
+            }
+            : new PromotionApproval
+            {
+                Kind = PromotionApprovalKind.HumanReview,
+                Reference = humanApprovalReference!
+            };
+    var store = new JsonExecutionEvidenceStore(
+        evidenceRoot ?? JsonExecutionEvidenceStore.GetDefaultRootPath());
+    var service = new CandidatePromotionService(new SystemProcessRunner(), store);
+    var result = await service.PromoteAsync(new CandidatePromotionRequest
+    {
+        EvidenceId = evidenceId,
+        RepositoryPath = repositoryPath,
+        ExpectedDiffHash = expectedDiffHash,
+        Actor = actor,
+        Approval = approval
+    }, CancellationToken.None);
+
+    PrintPromotionResult(result);
+    return result.Succeeded ? 0 : 1;
+}
+
+static async Task<int> RunPatchExport(string[] args)
+{
+    string? evidenceIdValue = null;
+    string? expectedDiffHash = null;
+    string? outputPath = null;
+    string? actor = null;
+    string? evidenceRoot = null;
+
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--evidence" && index + 1 < args.Length)
+            evidenceIdValue = args[++index];
+        else if (args[index] == "--diff-hash" && index + 1 < args.Length)
+            expectedDiffHash = args[++index];
+        else if (args[index] == "--output" && index + 1 < args.Length)
+            outputPath = args[++index];
+        else if (args[index] == "--actor" && index + 1 < args.Length)
+            actor = args[++index];
+        else if (args[index] == "--evidence-root" && index + 1 < args.Length)
+            evidenceRoot = args[++index];
+    }
+
+    if (!Guid.TryParse(evidenceIdValue, out var evidenceId) ||
+        string.IsNullOrWhiteSpace(expectedDiffHash) ||
+        string.IsNullOrWhiteSpace(outputPath) ||
+        string.IsNullOrWhiteSpace(actor))
+    {
+        Console.WriteLine(
+            "Usage: aecs export-patch --evidence <id> --diff-hash <sha256> " +
+            "--output <path> --actor <actor> [--evidence-root <path>]");
+        return 1;
+    }
+
+    var store = new JsonExecutionEvidenceStore(
+        evidenceRoot ?? JsonExecutionEvidenceStore.GetDefaultRootPath());
+    var service = new CandidatePromotionService(new SystemProcessRunner(), store);
+    var result = await service.ExportPatchAsync(new CandidatePatchExportRequest
+    {
+        EvidenceId = evidenceId,
+        DestinationPath = outputPath,
+        ExpectedDiffHash = expectedDiffHash,
+        Actor = actor
+    }, CancellationToken.None);
+
+    PrintPromotionResult(result);
+    return result.Succeeded ? 0 : 1;
+}
+
+static void PrintPromotionResult(CandidatePromotionResult result)
+{
+    Console.WriteLine($"Status: {result.Status}");
+    Console.WriteLine($"Message: {result.Message}");
+    Console.WriteLine($"Promotion evidence: {result.Evidence.Id:N}");
+    Console.WriteLine($"Diff hash: {result.Evidence.DiffHash}");
+    if (!string.IsNullOrWhiteSpace(result.OutputPath))
+        Console.WriteLine($"Output: {result.OutputPath}");
+}
 
 static async Task<int> RunExperiment(string[] args)
 {
@@ -108,6 +247,8 @@ static async Task<int> RunSingle(string[] args)
     {
         Console.WriteLine("Usage: aecs run --repo <path> --task-file <path> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
         Console.WriteLine("       aecs experiment --repo <path> --tasks <dir> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
+        Console.WriteLine("       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> --actor <actor> --confirm");
+        Console.WriteLine("       aecs export-patch --evidence <id> --diff-hash <sha256> --output <path> --actor <actor>");
         return 1;
     }
 
