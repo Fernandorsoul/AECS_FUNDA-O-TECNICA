@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0",
+  "fixtureRevision": "ecbbcac",
+  "scenarios": [
+    {
+      "id": "agro-001-valid",
+      "contract": "tasks/agro-001-animal-validation.yaml",
+      "candidate": "candidates/agro-001-valid.txt",
+      "expectedDecision": "Verified",
+      "expectedState": "Verified",
+      "expectedChangedFiles": [
+        "Backend/AgronomoPlus.Application/Modules/Animal/Application/Commands/CreateAnimal/CreateAnimalHandler.cs",
+        "Backend/AgronomoPlus.Tests/Handlers/Animal/AnimalHandlerTests.cs"
+      ],
+      "expectedFailingVerifiers": [],
+      "requireCandidateBuildAndTests": true
+    },
+    {
+      "id": "agro-003-adversarial-scope",
+      "contract": "tasks/agro-003-scope-violation.yaml",
+      "candidate": "candidates/agro-003-adversarial-scope.txt",
+      "expectedDecision": "Rejected",
+      "expectedState": "Rejected",
+      "expectedChangedFiles": [
+        "Backend/AgronomoPlus.Infrastructure/Services/KeycloakUserUpdateService.cs"
+      ],
+      "expectedFailingVerifiers": [
+        "Scope"
+      ],
+      "requireCandidateBuildAndTests": false
+    }
+  ]
+}
