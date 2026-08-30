@@ -3,6 +3,8 @@
 **Status:** Accepted  
 **Date:** 2026-08-29
 
+> **Implementation status (2026-08-30):** the staged CLI currently persists complete execution and promotion evidence through `JsonExecutionEvidenceStore` outside the target repository. PostgreSQL remains the accepted operational target, but `AecsDbContext`/`EvidenceStore` are not wired into the CLI composition root yet.
+
 ## Context
 
 AECS needs to persist TaskContracts, AgentRuns, VerificationResults, EvidenceEvents, and PolicyDecisions. The data is relational with append-heavy workloads (evidence events).

@@ -10,6 +10,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-004](ADR-004-docker-isolation.md) | Accepted | Isolar agentes com Docker |
 | [ADR-005](ADR-005-local-llm-via-ollama.md) | Accepted | Priorizar modelos locais via Ollama |
 | [ADR-006](ADR-006-verification-before-learning.md) | Accepted | Aprender apenas com execuções verificadas |
+| [ADR-007](ADR-007-staged-trust-boundary-and-controlled-promotion.md) | Accepted | Isolar descoberta/verificação em worktrees e promover somente por uma ação controlada |
 
 ## Convenção para novos ADRs
 
