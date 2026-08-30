@@ -238,7 +238,8 @@ static async Task<int> RunSingle(string[] args)
         new TestVerifier(),
         new ScopeVerifier(),
         new BudgetVerifier(),
-        new EB001Verifier()
+        new EB001Verifier(),
+        new EB002Verifier()
     };
 
     var verificationResults = new List<VerificationResult>();
