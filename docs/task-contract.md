@@ -181,7 +181,7 @@ Os verificadores EB001–EB005 executam quando o resultado passa pelo kernel. Po
 | --- | --- | --- |
 | `approval.production` | `none` ou `human` | `none` |
 
-Com `human`, uma execução que passou nas verificações obrigatórias termina como `HumanReviewRequired`. O protótipo não implementa ainda a ação posterior de aprovar ou promover a mudança.
+Com `human`, uma execução que passou nas verificações obrigatórias termina como `HumanReviewRequired`. Ela só pode ser promovida depois por `aecs promote --human-approval <referência>`; uma confirmação comum ou de política não substitui essa aprovação humana.
 
 ## Decisões possíveis
 

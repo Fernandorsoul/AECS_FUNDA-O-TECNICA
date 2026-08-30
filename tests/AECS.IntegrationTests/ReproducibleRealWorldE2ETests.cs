@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using AECS.Application.Parsing;
+using AECS.Application.Promotion;
 using AECS.Application.Staging;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -85,6 +86,63 @@ public sealed class ReproducibleRealWorldE2ETests
 
         if (!preserveArtifacts)
             Directory.Delete(artifactRoot, recursive: true);
+    }
+
+    [Fact]
+    [Trait("Category", "RealWorldE2E")]
+    public async Task VerifiedAgronomoPlusCandidate_IsPromotedWithExactVerifiedDiff()
+    {
+        await using var repository = await RealWorldFixtureRepository.CreateAsync();
+        var contract = new TaskContractParser().ParseFromFile(System.IO.Path.Combine(
+            repository.Path,
+            "tasks",
+            "agro-001-animal-validation.yaml"));
+        var response = await File.ReadAllTextAsync(System.IO.Path.Combine(
+            RealWorldFixtureRepository.FixturePath,
+            "candidates",
+            "agro-001-valid.txt"));
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var execution = await new StagedExecutionPipeline(
+                new FixtureAgent(response),
+                repository.ProcessRunner,
+                store,
+                retryDelay: (_, _) => Task.CompletedTask)
+            .RunAsync(repository.Path, contract, CancellationToken.None);
+
+        execution.Decision.Decision.Should().Be(TaskDecision.Verified);
+        var promotion = await new CandidatePromotionService(repository.ProcessRunner, store)
+            .PromoteAsync(new CandidatePromotionRequest
+            {
+                EvidenceId = execution.EvidenceId,
+                RepositoryPath = repository.Path,
+                ExpectedDiffHash = execution.CandidateChangeSet.DiffHash,
+                Actor = "real-world-e2e",
+                Approval = new PromotionApproval
+                {
+                    Kind = PromotionApprovalKind.Policy,
+                    Reference = "ci/real-world-promotion"
+                }
+            }, CancellationToken.None);
+
+        promotion.Status.Should().Be(CandidatePromotionStatus.Promoted);
+        var promotedDiff = (await repository.ProcessRunner.RunAsync(new ProcessExecutionRequest
+        {
+            FileName = "git",
+            Arguments =
+            [
+                "diff", "--cached", "--binary", "--no-ext-diff",
+                execution.Baseline.Commit, "--"
+            ],
+            WorkingDirectory = repository.Path,
+            Timeout = TimeSpan.FromMinutes(2)
+        }, CancellationToken.None));
+        promotedDiff.Succeeded.Should().BeTrue(promotedDiff.StandardError);
+        promotedDiff.StandardOutput.Should().Be(execution.CandidateChangeSet.Diff);
+        var persisted = await store.LoadAsync(execution.EvidenceId, CancellationToken.None);
+        persisted!.Promotions.Should().ContainSingle(record =>
+            record.Status == CandidatePromotionStatus.Promoted &&
+            record.ApprovalKind == PromotionApprovalKind.Policy &&
+            record.ApprovalReference == "ci/real-world-promotion");
     }
 
     private static async Task<RealWorldScenarioOutcome> RunScenarioAsync(

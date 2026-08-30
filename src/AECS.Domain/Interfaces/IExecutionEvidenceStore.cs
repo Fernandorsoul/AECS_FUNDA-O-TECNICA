@@ -7,4 +7,8 @@ public interface IExecutionEvidenceStore
     void EnsureRepositoryIsolation(string repositoryPath);
     Task<string> SaveAsync(ExecutionEvidence evidence, CancellationToken cancellationToken);
     Task<ExecutionEvidence?> LoadAsync(Guid evidenceId, CancellationToken cancellationToken);
+    Task AppendPromotionAsync(
+        Guid evidenceId,
+        CandidatePromotionEvidence promotion,
+        CancellationToken cancellationToken);
 }

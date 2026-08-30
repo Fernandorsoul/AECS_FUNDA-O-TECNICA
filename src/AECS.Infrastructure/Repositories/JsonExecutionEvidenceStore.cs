@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -6,11 +7,16 @@ namespace AECS.Infrastructure.Repositories;
 
 public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
 {
+    private static readonly TimeSpan EvidenceLockTimeout = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> WriteLocks = new(
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
 
     private readonly string _rootPath;
 
@@ -85,6 +91,82 @@ public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
             stream,
             SerializerOptions,
             cancellationToken);
+    }
+
+    public async Task AppendPromotionAsync(
+        Guid evidenceId,
+        CandidatePromotionEvidence promotion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(promotion);
+        var targetPath = GetEvidencePath(evidenceId);
+        var writeLock = WriteLocks.GetOrAdd(targetPath, _ => new SemaphoreSlim(1, 1));
+        await writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            await using var fileLock = await AcquireFileLockAsync(
+                targetPath + ".lock",
+                cancellationToken);
+            if (!File.Exists(targetPath))
+                throw new FileNotFoundException("Execution evidence not found.", targetPath);
+
+            ExecutionEvidence evidence;
+            await using (var stream = File.OpenRead(targetPath))
+            {
+                evidence = await JsonSerializer.DeserializeAsync<ExecutionEvidence>(
+                        stream,
+                        SerializerOptions,
+                        cancellationToken)
+                    ?? throw new InvalidOperationException("Execution evidence JSON is invalid.");
+            }
+
+            if (evidence.Id != evidenceId)
+                throw new InvalidOperationException("Execution evidence ID does not match its file name.");
+            if (evidence.Promotions.Any(item => item.Id == promotion.Id))
+                throw new InvalidOperationException("Promotion evidence has already been recorded.");
+
+            evidence.Promotions.Add(promotion);
+            var temporaryPath = targetPath + $".{Guid.NewGuid():N}.tmp";
+            try
+            {
+                var json = JsonSerializer.Serialize(evidence, SerializerOptions);
+                await File.WriteAllTextAsync(temporaryPath, json, cancellationToken);
+                File.Move(temporaryPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+        }
+        finally
+        {
+            writeLock.Release();
+        }
+    }
+
+    private static async Task<FileStream> AcquireFileLockAsync(
+        string lockPath,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + EvidenceLockTimeout;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.Asynchronous);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            }
+        }
     }
 
     private string GetEvidencePath(Guid evidenceId) =>

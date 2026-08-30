@@ -116,7 +116,34 @@ ollama pull qwen2.5-coder:14b
 ollama serve
 ```
 
-> **Atenção:** respostas reais no formato `FILE: caminho` são aplicadas somente em um worktree descartável. O AECS exige o checkout original limpo, deriva o diff com Git e persiste a decisão, mas ainda não promove automaticamente um candidato verificado para a branch do usuário.
+> **Atenção:** respostas reais no formato `FILE: caminho` são aplicadas primeiro em um worktree descartável. O checkout original só recebe o diff em uma segunda ação explícita de promoção, após a validação da evidência, do commit-base e do hash confirmado pelo operador.
+
+### Promover ou exportar um candidato
+
+O comando `run` informa o `Evidence ID` e o `Diff hash`. Para aplicar um candidato `Verified` no mesmo repositório em que a evidência foi produzida:
+
+```powershell
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- promote `
+  --repo C:\caminho\para\repositorio `
+  --evidence <evidence-id> `
+  --diff-hash <sha256-do-candidato> `
+  --actor operador@example.com `
+  --confirm
+```
+
+A promoção exige o checkout limpo, na mesma branch e no mesmo commit da baseline. O patch é validado, aplicado atomicamente e deixado no index do Git para inspeção; o AECS não cria commit. Em vez de `--confirm`, uma automação pode informar `--policy <referência>` e uma decisão `HumanReviewRequired` pode usar `--human-approval <referência>`.
+
+Para revisão externa, exporte o patch sem modificar o repositório-alvo:
+
+```powershell
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- export-patch `
+  --evidence <evidence-id> `
+  --diff-hash <sha256-do-candidato> `
+  --output C:\revisoes\candidate.patch `
+  --actor operador@example.com
+```
+
+O destino precisa estar fora do repositório-alvo e não pode existir. Ambas as ações acrescentam à evidência o ator, a confirmação, a baseline, o hash e o resultado. Consulte [Promoção controlada](docs/controlled-promotion.md) para as garantias e os casos de recusa.
 
 ### Fallback em nuvem
 
@@ -198,6 +225,8 @@ A referência de campos, padrões de escopo, valores padrão e regras de decisã
 | Tarefa única | `run --repo <path> --task-file <file>` | Executa e verifica um contrato |
 | Experimento | `experiment --repo <path> --tasks <dir>` | Executa um conjunto de contratos |
 | Jarvis | `jarvis --repo <path>` | Abre o REPL interativo |
+| Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
+| Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
 
 Comandos disponíveis dentro do Jarvis:
 
@@ -233,12 +262,13 @@ tasks/                    # TaskContracts de exemplo e de experimento
 
 - [Arquitetura atual](docs/architecture.md) — fluxo, componentes, fronteiras e limitações;
 - [Referência do TaskContract](docs/task-contract.md) — schema YAML e semântica dos campos;
+- [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
 
 ## Limitações conhecidas
 
-- não há promoção automática de um candidato verificado para o checkout original;
+- a promoção é deliberadamente manual ou autorizada por uma referência de política e deixa as mudanças staged, sem criar commit;
 - a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
 - a persistência de evidências em PostgreSQL ainda não está conectada à CLI;
 - o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
