@@ -156,16 +156,68 @@ public class JarvisRepl
             CreatedAt = contract.CreatedAt
         };
 
+        // Context Compiler: Index and select relevant files
+        var sourcePath = Path.Combine(_repoPath, "src");
+        var testPath = Path.Combine(_repoPath, "tests");
+        CodebaseIndex? index = null;
+        
+        if (Directory.Exists(sourcePath))
+        {
+            var indexer = new CodebaseIndexer();
+            index = indexer.Index(sourcePath);
+            
+            // Merge test files if available
+            if (Directory.Exists(testPath))
+            {
+                var testIndex = indexer.Index(testPath);
+                index = new CodebaseIndex
+                {
+                    RootPath = index.RootPath,
+                    SourceFiles = index.SourceFiles,
+                    TestFiles = testIndex.TestFiles,
+                    Symbols = index.Symbols.Concat(testIndex.Symbols).ToList(),
+                    Dependencies = index.Dependencies.Concat(testIndex.Dependencies)
+                        .ToDictionary(kv => kv.Key, kv => kv.Value)
+                };
+            }
+        }
+
+        ContextPackage? contextPackage = null;
+        if (index != null)
+        {
+            var selector = new ContextSelector();
+            contextPackage = selector.Select(index, contract.Id, contract.Objective, contract.Scope.Allowed);
+        }
+
         var plan = await _executionController.PlanAsync(contract, ct);
 
         Console.WriteLine($"Task: {contract.Objective}");
         Console.WriteLine($"Risk: {risk}");
         Console.WriteLine($"Model: {plan.Model}");
+        if (contextPackage != null)
+        {
+            Console.WriteLine($"Context: {contextPackage.SelectedFiles.Count} files, ~{contextPackage.EstimatedTokens} tokens");
+        }
         Console.WriteLine();
 
         IAgentAdapter agent = _useMock
             ? new MockAgentAdapter()
             : new OllamaAdapter(new HttpClient());
+
+        // Build CodeContext from selected files
+        var codeContext = new Dictionary<string, string>();
+        if (contextPackage != null && index != null)
+        {
+            foreach (var filePath in contextPackage.SelectedFiles)
+            {
+                var fullPath = Path.Combine(index.RootPath, filePath);
+                if (File.Exists(fullPath))
+                {
+                    var content = await File.ReadAllTextAsync(fullPath, ct);
+                    codeContext[filePath] = content;
+                }
+            }
+        }
 
         var request = new AgentExecutionRequest
         {
@@ -176,7 +228,8 @@ public class JarvisRepl
             Scope = contract.Scope,
             Budget = contract.Budget,
             Risk = risk,
-            Model = plan.Model
+            Model = plan.Model,
+            CodeContext = codeContext
         };
 
         var agentResult = await agent.ExecuteAsync(request, ct);
