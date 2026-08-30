@@ -10,6 +10,9 @@ using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
 
+// Load .env file if present
+LoadEnvFile();
+
 // Determine command
 var command = args.Length > 0 ? args[0] : "jarvis";
 
@@ -293,17 +296,60 @@ static IAgentAdapter BuildAgent(bool useMock, string? cloudKey, string? cloudMod
 
     var localAdapter = new OllamaAdapter(new HttpClient());
 
-    if (string.IsNullOrEmpty(cloudKey))
+    // Read from CLI args first, then environment variables
+    var key = cloudKey
+        ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+        ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+
+    var model = cloudModel
+        ?? Environment.GetEnvironmentVariable("OPENAI_MODEL")
+        ?? Environment.GetEnvironmentVariable("ANTHROPIC_MODEL")
+        ?? "gpt-4o-mini";
+
+    var url = cloudUrl
+        ?? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
+        ?? Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL")
+        ?? "https://api.openai.com/v1";
+
+    if (string.IsNullOrEmpty(key))
         return localAdapter;
 
     // Cloud fallback configured — wrap with FallbackAdapter
+    Console.WriteLine($"  [AECS] Cloud fallback enabled: {model}");
+
     var cloudOptions = new CloudAdapterOptions
     {
-        ApiKey = cloudKey,
-        Model = cloudModel ?? "gpt-4o-mini",
-        BaseUrl = cloudUrl ?? "https://api.openai.com/v1"
+        ApiKey = key,
+        Model = model,
+        BaseUrl = url
     };
 
     var cloudAdapter = new CloudAdapter(new HttpClient(), cloudOptions);
     return new FallbackAdapter(localAdapter, cloudAdapter);
+}
+
+static void LoadEnvFile()
+{
+    var envFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".env");
+    var fullPath = Path.GetFullPath(envFile);
+
+    if (!File.Exists(fullPath))
+        return;
+
+    foreach (var line in File.ReadAllLines(fullPath))
+    {
+        var trimmed = line.Trim();
+        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#'))
+            continue;
+
+        var separatorIndex = trimmed.IndexOf('=');
+        if (separatorIndex <= 0)
+            continue;
+
+        var key = trimmed[..separatorIndex].Trim();
+        var value = trimmed[(separatorIndex + 1)..].Trim();
+
+        if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
+            Environment.SetEnvironmentVariable(key, value);
+    }
 }

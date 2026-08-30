@@ -46,3 +46,6 @@ Thumbs.db
 
 # External repos for testing
 real-world-demo/
+
+# Environment variables (NEVER commit)
+.env
