@@ -330,13 +330,23 @@ static IAgentAdapter BuildAgent(bool useMock, string? cloudKey, string? cloudMod
 
 static void LoadEnvFile()
 {
-    var envFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".env");
-    var fullPath = Path.GetFullPath(envFile);
+    // Search for .env starting from current directory and walking up
+    var dir = Directory.GetCurrentDirectory();
+    while (dir is not null)
+    {
+        var envPath = Path.Combine(dir, ".env");
+        if (File.Exists(envPath))
+        {
+            LoadEnvFromFile(envPath);
+            return;
+        }
+        dir = Directory.GetParent(dir)?.FullName;
+    }
+}
 
-    if (!File.Exists(fullPath))
-        return;
-
-    foreach (var line in File.ReadAllLines(fullPath))
+static void LoadEnvFromFile(string path)
+{
+    foreach (var line in File.ReadAllLines(path))
     {
         var trimmed = line.Trim();
         if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#'))

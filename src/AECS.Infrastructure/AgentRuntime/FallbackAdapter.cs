@@ -34,6 +34,13 @@ public class FallbackAdapter : IAgentAdapter
 
         var fallbackResult = await _fallback.ExecuteAsync(request, cancellationToken);
 
+        if (!fallbackResult.Success)
+            Console.WriteLine($"  [AECS] Cloud API also failed: {fallbackResult.StdErr}");
+        else if (fallbackResult.FilesChanged.Count == 0)
+            Console.WriteLine($"  [AECS] Cloud API returned no files.");
+        else
+            Console.WriteLine($"  [AECS] Cloud API succeeded: {fallbackResult.FilesChanged.Count} file(s).");
+
         // Mark as fallback execution
         return new AgentRunResult
         {

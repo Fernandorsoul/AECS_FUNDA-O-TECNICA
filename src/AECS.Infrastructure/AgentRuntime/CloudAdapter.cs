@@ -37,7 +37,7 @@ public class CloudAdapter : IAgentAdapter
         try
         {
             var prompt = BuildPrompt(request);
-            var model = string.IsNullOrEmpty(request.Model) ? _options.Model : request.Model;
+            var model = _options.Model; // Always use cloud model, not local model name
 
             var requestBody = new CloudRequest
             {
@@ -61,7 +61,19 @@ public class CloudAdapter : IAgentAdapter
             requestMsg.Headers.Add("Authorization", $"Bearer {_options.ApiKey}");
 
             var response = await _httpClient.SendAsync(requestMsg, cancellationToken);
-            response.EnsureSuccessStatusCode();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                return new AgentRunResult
+                {
+                    Success = false,
+                    StdErr = $"Cloud API error {(int)response.StatusCode}: {errorBody}",
+                    ExitCode = (int)response.StatusCode,
+                    Duration = stopwatch.Elapsed,
+                    ExitReason = "ApiError"
+                };
+            }
 
             var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
             var cloudResponse = JsonSerializer.Deserialize(responseJson, CloudJsonContext.Default.CloudResponse);
