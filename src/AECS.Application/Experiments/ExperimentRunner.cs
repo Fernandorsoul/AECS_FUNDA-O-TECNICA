@@ -164,7 +164,8 @@ public class ExperimentRunner
             new BuildVerifier(),
             new TestVerifier(),
             new ScopeVerifier(),
-            new BudgetVerifier()
+            new BudgetVerifier(),
+            new EB001Verifier()
         };
 
         var verificationResults = new List<VerificationResult>();

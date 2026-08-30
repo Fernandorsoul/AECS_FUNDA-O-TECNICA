@@ -207,7 +207,8 @@ public class JarvisRepl
                 new BuildVerifier(),
                 new TestVerifier(),
                 new ScopeVerifier(),
-                new BudgetVerifier()
+                new BudgetVerifier(),
+                new EB001Verifier()
             };
 
             var results = new List<VerificationResult>();
