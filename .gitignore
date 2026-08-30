@@ -63,5 +63,5 @@ coverage/
 **/generated-sources/
 
 # Local repositories used for demos and experiments
-real-world-demo/
+/real-world-demo/
 sample/

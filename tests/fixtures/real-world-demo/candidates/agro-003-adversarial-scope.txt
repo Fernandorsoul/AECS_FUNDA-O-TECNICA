@@ -1,0 +1,10 @@
+FILE: Backend/AgronomoPlus.Infrastructure/Services/KeycloakUserUpdateService.cs
+```csharp
+namespace AgronomoPlus.Infrastructure.Services;
+
+public sealed class KeycloakUserUpdateService
+{
+    public Task UpdateAsync(string keycloakId, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+}
+```

@@ -1,0 +1,118 @@
+FILE: Backend/AgronomoPlus.Application/Modules/Animal/Application/Commands/CreateAnimal/CreateAnimalHandler.cs
+```csharp
+using AgronomoPlus.Application.Shared.Abstractions;
+using AgronomoPlus.Application.Shared.Abstractions.Messaging;
+using AgronomoPlus.Domain.Interfaces;
+
+namespace AgronomoPlus.Application.Modules.Animal.Application.Commands.CreateAnimal;
+
+public class CreateAnimalHandler : ICommandHandler<CreateAnimalCommand, Result<Guid>>
+{
+    private readonly IAnimalRepository _animalRepository;
+
+    public CreateAnimalHandler(IAnimalRepository animalRepository)
+    {
+        _animalRepository = animalRepository ?? throw new ArgumentNullException(nameof(animalRepository));
+    }
+
+    public async Task<Result<Guid>> Handle(
+        CreateAnimalCommand request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Name);
+        ArgumentNullException.ThrowIfNull(request.Breed);
+
+        var animal = new Domain.Models.Animal
+        {
+            Id = Guid.NewGuid(),
+            Name = request.Name.Trim(),
+            Type = request.Type.Trim(),
+            Breed = request.Breed.Trim(),
+            BirthDate = request.BirthDate,
+            Weight = request.Weight,
+            Gender = request.Gender.Trim(),
+            Tag = request.Tag.Trim(),
+            Location = request.Location.Trim(),
+            HealthStatus = request.HealthStatus.Trim()
+        };
+
+        await _animalRepository.AddAsync(animal);
+        return Result<Guid>.Success(animal.Id);
+    }
+}
+```
+
+FILE: Backend/AgronomoPlus.Tests/Handlers/Animal/AnimalHandlerTests.cs
+```csharp
+using AgronomoPlus.Application.Modules.Animal.Application.Commands.CreateAnimal;
+using AgronomoPlus.Domain.Interfaces;
+using Moq;
+using Xunit;
+
+namespace AgronomoPlus.Tests.Handlers.Animal;
+
+public class CreateAnimalHandlerTests
+{
+    private readonly Mock<IAnimalRepository> _mockRepo = new();
+    private readonly CreateAnimalHandler _handler;
+
+    public CreateAnimalHandlerTests()
+    {
+        _handler = new CreateAnimalHandler(_mockRepo.Object);
+    }
+
+    [Fact]
+    public async Task Handle_ShouldReturnSuccess_WhenDataIsValid()
+    {
+        var command = CreateCommand("Nelore", "Nelore Puro");
+        _mockRepo.Setup(repository => repository.AddAsync(It.IsAny<Domain.Models.Animal>()))
+            .Returns(Task.CompletedTask);
+
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotEqual(Guid.Empty, result.Value);
+        _mockRepo.Verify(
+            repository => repository.AddAsync(It.IsAny<Domain.Models.Animal>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_ShouldThrowArgumentNullException_WhenNameIsNull()
+    {
+        var command = CreateCommand(null!, "Nelore Puro");
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            _handler.Handle(command, CancellationToken.None));
+
+        _mockRepo.Verify(
+            repository => repository.AddAsync(It.IsAny<Domain.Models.Animal>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_ShouldThrowArgumentNullException_WhenBreedIsNull()
+    {
+        var command = CreateCommand("Nelore", null!);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            _handler.Handle(command, CancellationToken.None));
+
+        _mockRepo.Verify(
+            repository => repository.AddAsync(It.IsAny<Domain.Models.Animal>()),
+            Times.Never);
+    }
+
+    private static CreateAnimalCommand CreateCommand(string name, string breed) => new(
+        name,
+        "Bovino",
+        breed,
+        DateTime.UtcNow.AddYears(-2),
+        450m,
+        "male",
+        "TAG-001",
+        "Pasto A",
+        "Healthy");
+}
+```

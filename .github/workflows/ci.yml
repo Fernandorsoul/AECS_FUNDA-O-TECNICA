@@ -22,7 +22,9 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
       - name: Restore
         run: dotnet restore AECS.slnx
@@ -31,7 +33,25 @@ jobs:
         run: dotnet build AECS.slnx --configuration Release --no-restore --nologo
 
       - name: Test
-        run: dotnet test AECS.slnx --configuration Release --no-build --nologo
+        run: dotnet test AECS.slnx --configuration Release --no-build --nologo --filter "Category!=RealWorldE2E"
+
+      - name: Reproducible AgronomoPlus E2E
+        env:
+          AECS_E2E_REPORT_PATH: ${{ runner.temp }}/aecs-real-world-e2e/report.json
+        run: >-
+          dotnet test tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --nologo
+          --filter "Category=RealWorldE2E"
+
+      - name: Publish AgronomoPlus E2E report and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aecs-real-world-e2e
+          path: ${{ runner.temp }}/aecs-real-world-e2e/
+          if-no-files-found: error
 
       - name: Smoke test CLI
         shell: bash

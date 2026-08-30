@@ -2,7 +2,7 @@
 
 O AECS é um protótipo de **plano de controle para engenharia de software com agentes de IA**. Ele transforma uma solicitação em um contrato explícito, avalia a execução contra limites de escopo e orçamento, verifica o resultado com ferramentas determinísticas e só então classifica a mudança como verificada, rejeitada ou pendente de revisão humana.
 
-> **Status:** protótipo experimental em .NET 10. Use em repositórios de teste ou em uma working tree limpa. A CLI ainda não oferece rollback automático nem isolamento completo da escrita de arquivos.
+> **Status:** protótipo experimental com projetos `net8.0` e SDK .NET 9 fixado em `global.json`. A execução exige uma working tree limpa e avalia candidatos em worktrees Git descartáveis; o checkout original não recebe a mudança automaticamente.
 
 ## Por que este projeto existe
 
@@ -45,7 +45,8 @@ Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes j
 
 ## Pré-requisitos
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0);
+- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0), selecionado por `global.json`;
+- [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0), necessário para executar os projetos AECS `net8.0`;
 - Git, recomendado para revisar e descartar mudanças produzidas pelo agente;
 - [Ollama](https://ollama.com/), opcional para execução com modelo local;
 - Docker, opcional para subir o PostgreSQL definido no repositório.
@@ -61,6 +62,18 @@ dotnet restore AECS.slnx
 dotnet build AECS.slnx
 dotnet test AECS.slnx
 ```
+
+O CI executa separadamente a suíte E2E reproduzível do AgronomoPlus, que usa um fixture
+versionado `net9.0`, cria repositórios Git temporários e publica relatório e evidências em JSON:
+
+```powershell
+$env:AECS_E2E_REPORT_PATH = Join-Path $env:TEMP "aecs-real-world-e2e/report.json"
+dotnet test tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj `
+  --filter "Category=RealWorldE2E"
+```
+
+Os contratos, candidatos determinísticos e resultados esperados ficam em
+[`tests/fixtures/real-world-demo/`](tests/fixtures/real-world-demo/).
 
 Para explorar o Jarvis sem chamar um modelo e sem aplicar blocos de código:
 
@@ -103,7 +116,7 @@ ollama pull qwen2.5-coder:14b
 ollama serve
 ```
 
-> **Atenção:** respostas reais no formato `FILE: caminho` são escritas no repositório antes da decisão final dos verificadores. Execute o AECS em uma branch dedicada, mantenha o Git limpo e revise o diff ao terminar.
+> **Atenção:** respostas reais no formato `FILE: caminho` são aplicadas somente em um worktree descartável. O AECS exige o checkout original limpo, deriva o diff com Git e persiste a decisão, mas ainda não promove automaticamente um candidato verificado para a branch do usuário.
 
 ### Fallback em nuvem
 
@@ -209,7 +222,8 @@ src/
 └── AECS.Cli/             # Entry point e Jarvis REPL
 tests/
 ├── AECS.UnitTests/
-└── AECS.IntegrationTests/
+├── AECS.IntegrationTests/
+└── fixtures/real-world-demo/ # contratos e repositório E2E reproduzível
 docs/
 └── adr/                  # Registros de decisões arquiteturais
 tasks/                    # TaskContracts de exemplo e de experimento
@@ -224,16 +238,11 @@ tasks/                    # TaskContracts de exemplo e de experimento
 
 ## Limitações conhecidas
 
-- não há rollback automático quando uma mudança é rejeitada;
-- a aplicação de arquivos ocorre antes da validação final de escopo;
+- não há promoção automática de um candidato verificado para o checkout original;
 - a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
 - a persistência de evidências em PostgreSQL ainda não está conectada à CLI;
 - o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
 - os verificadores EB001–EB005 são executados, porém ainda não bloqueiam a decisão final;
-- falha do adaptador do agente não é, por si só, um verificador obrigatório; um repositório já verde pode produzir uma decisão enganosa sem mudança útil;
-- o projeto de testes de integração ainda não contém casos descobertos pelo runner;
-- há avisos de resolução entre versões do Entity Framework Core durante o build;
-- subprocessos com saída muito volumosa podem bloquear os verificadores internos de build/teste;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.
 
 Essas limitações são deliberadamente explícitas: hoje o AECS é uma base de pesquisa executável, não um gate de produção pronto para uso autônomo.
