@@ -5,13 +5,19 @@ namespace AECS.Application.Classification;
 
 public class RiskClassifier
 {
+    private static readonly HashSet<string> CriticalRiskKeywords =
+    [
+        "infrastructure", "terraform", "docker", "kubernetes", "deploy",
+        "ci/cd", "pipeline", "production", "staging", "environment",
+        "dns", "ssl", "certificate", "firewall", "load balancer",
+        "database schema", "migration", "migrate"
+    ];
+
     private static readonly HashSet<string> HighRiskKeywords =
     [
         "auth", "authentication", "authorization", "login", "password", "token",
         "jwt", "oauth", "secret", "credential", "encrypt", "decrypt", "hash",
         "payment", "billing", "charge", "refund", "subscription",
-        "migration", "migrate", "database", "schema",
-        "infrastructure", "terraform", "docker", "kubernetes", "deploy",
         "permission", "role", "policy", "security"
     ];
 
@@ -30,6 +36,14 @@ public class RiskClassifier
         if (text.Contains("comment") || text.Contains("documentation") || text.Contains("readme")
             || text.Contains("format") || text.Contains("rename"))
             return RiskLevel.R0;
+
+        // R4: explicit critical-risk constraints
+        if (contract.Constraints.SecurityRisk == RiskLevel.R4)
+            return RiskLevel.R4;
+
+        // R4: critical infrastructure keywords
+        if (CriticalRiskKeywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            return RiskLevel.R4;
 
         // R3: explicit high-risk constraints
         if (contract.Constraints.SecurityRisk == RiskLevel.R3)

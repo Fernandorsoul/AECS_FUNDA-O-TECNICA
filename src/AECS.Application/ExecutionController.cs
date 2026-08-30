@@ -11,7 +11,8 @@ public class ExecutionController : IExecutionController
         [RiskLevel.R0] = "qwen2.5-coder:7b",
         [RiskLevel.R1] = "qwen2.5-coder:7b",
         [RiskLevel.R2] = "qwen2.5-coder:14b",
-        [RiskLevel.R3] = "qwen2.5-coder:14b"
+        [RiskLevel.R3] = "qwen2.5-coder:14b",
+        [RiskLevel.R4] = "qwen2.5-coder:14b" // R4 always uses cloud fallback
     };
 
     public Task<ExecutionPlan> PlanAsync(TaskContract task, CancellationToken cancellationToken)
