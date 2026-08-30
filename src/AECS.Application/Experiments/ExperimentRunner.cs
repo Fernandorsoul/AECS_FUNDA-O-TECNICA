@@ -19,6 +19,7 @@ public class ExperimentRunner
     private readonly DecisionEngine _decisionEngine = new();
     private readonly CodebaseIndexer _indexer = new();
     private readonly ContextSelector _contextSelector = new();
+    private readonly FileApplicator _fileApplicator = new();
 
     public ExperimentRunner(IAgentAdapter agentAdapter)
     {
@@ -123,6 +124,28 @@ public class ExperimentRunner
         };
 
         var agentResult = await _agentAdapter.ExecuteAsync(request, cancellationToken);
+
+        // 3.5 Apply model changes to workspace
+        if (agentResult.Success && !string.IsNullOrEmpty(agentResult.StdOut))
+        {
+            var applyResult = _fileApplicator.ApplyChanges(agentResult.StdOut, repoPath);
+            if (applyResult.AppliedChanges.Count > 0)
+            {
+                agentResult = new AgentRunResult
+                {
+                    Success = agentResult.Success,
+                    StdOut = agentResult.StdOut,
+                    StdErr = agentResult.StdErr,
+                    ExitCode = agentResult.ExitCode,
+                    Duration = agentResult.Duration,
+                    InputTokens = agentResult.InputTokens,
+                    OutputTokens = agentResult.OutputTokens,
+                    EstimatedCost = agentResult.EstimatedCost,
+                    FilesChanged = applyResult.AppliedChanges.Select(c => c.FilePath).ToList(),
+                    ExitReason = agentResult.ExitReason
+                };
+            }
+        }
 
         // 4. Control Kernel
         var kernelDecision = _kernel.ValidateExecution(contract, agentResult);

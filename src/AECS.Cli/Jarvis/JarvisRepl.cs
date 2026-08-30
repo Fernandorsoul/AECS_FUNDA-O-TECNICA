@@ -181,6 +181,30 @@ public class JarvisRepl
 
         var agentResult = await agent.ExecuteAsync(request, ct);
 
+        // Apply model changes to workspace
+        if (agentResult.Success && !string.IsNullOrEmpty(agentResult.StdOut))
+        {
+            var fileApplicator = new FileApplicator();
+            var applyResult = fileApplicator.ApplyChanges(agentResult.StdOut, _repoPath);
+            if (applyResult.AppliedChanges.Count > 0)
+            {
+                agentResult = new AgentRunResult
+                {
+                    Success = agentResult.Success,
+                    StdOut = agentResult.StdOut,
+                    StdErr = agentResult.StdErr,
+                    ExitCode = agentResult.ExitCode,
+                    Duration = agentResult.Duration,
+                    InputTokens = agentResult.InputTokens,
+                    OutputTokens = agentResult.OutputTokens,
+                    EstimatedCost = agentResult.EstimatedCost,
+                    FilesChanged = applyResult.AppliedChanges.Select(c => c.FilePath).ToList(),
+                    ExitReason = agentResult.ExitReason
+                };
+                Console.WriteLine($"  [AECS] Applied {applyResult.AppliedChanges.Count} file change(s) to workspace");
+            }
+        }
+
         var kernelDecision = _kernel.ValidateExecution(contract, agentResult);
 
         TaskDecision decision;

@@ -1,0 +1,32 @@
+task:
+  id: REAL-002
+  objective: Fix CustomerMapper to throw ArgumentNullException instead of NullReferenceException when customer is null. Add null checks to all methods.
+  acceptance:
+    - MapToDisplay(null) throws ArgumentNullException
+    - MapPhone(null) throws ArgumentNullException
+    - MapToSummary(null) throws ArgumentNullException
+    - All CustomerMapperTests pass
+  scope:
+    allowed:
+      - src/RealProject/Customers/**
+      - tests/RealProject.Tests/Customers/**
+    forbidden:
+      - src/RealProject/Orders/**
+      - src/RealProject/Billing/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 80000
+    usd: 0.30
+    retries: 2
+    wall_clock_seconds: 180
+    max_files_changed: 3
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    budget: required
+  approval:
+    production: none
