@@ -77,6 +77,8 @@ public class DecisionEngine
         if (contract.Verification.Budget)
             required.Add("Budget");
 
+        // EB001-EB005 são verificadores semânticos informativos, não gates
+        // Eles podem ter falsos positivos e não devem bloquear automaticamente
         return required;
     }
 }

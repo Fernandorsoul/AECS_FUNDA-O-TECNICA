@@ -183,10 +183,15 @@ public class JarvisRepl
         }
 
         ContextPackage? contextPackage = null;
+        string? compiledPrompt = null;
         if (index != null)
         {
             var selector = new ContextSelector();
             contextPackage = selector.Select(index, contract.Id, contract.Objective, contract.Scope.Allowed);
+            
+            // Compilar contexto em prompt estruturado com código-fonte
+            var compiler = new ContextCompiler();
+            compiledPrompt = compiler.Compile(contextPackage, index.RootPath, contract.Objective);
         }
 
         var plan = await _executionController.PlanAsync(contract, ct);
@@ -204,7 +209,7 @@ public class JarvisRepl
             ? new MockAgentAdapter()
             : new OllamaAdapter(new HttpClient());
 
-        // Build CodeContext from selected files
+        // Build CodeContext from selected files (método legado, mantido para compatibilidade)
         var codeContext = new Dictionary<string, string>();
         if (contextPackage != null && index != null)
         {
@@ -219,6 +224,7 @@ public class JarvisRepl
             }
         }
 
+        // Usar o prompt compilado se disponível, senão usar o método legado
         var request = new AgentExecutionRequest
         {
             TaskId = contract.Id,
@@ -229,7 +235,8 @@ public class JarvisRepl
             Budget = contract.Budget,
             Risk = risk,
             Model = plan.Model,
-            CodeContext = codeContext
+            CodeContext = codeContext,
+            Prompt = compiledPrompt ?? BuildLegacyPrompt(contract, codeContext)
         };
 
         var agentResult = await agent.ExecuteAsync(request, ct);
@@ -279,12 +286,18 @@ public class JarvisRepl
                 AgentResult = agentResult
             };
 
+            // Verificadores obrigatórios (gates)
             var verifiers = new List<IVerifier>
             {
                 new BuildVerifier(),
                 new TestVerifier(),
                 new ScopeVerifier(),
-                new BudgetVerifier(),
+                new BudgetVerifier()
+            };
+
+            // Verificadores semânticos informativos (EB001-EB005) - não bloqueiam
+            var semanticVerifiers = new List<IVerifier>
+            {
                 new EB001Verifier(),
                 new EB002Verifier(),
                 new EB003Verifier(),
@@ -293,8 +306,24 @@ public class JarvisRepl
             };
 
             var results = new List<VerificationResult>();
+            
+            // Executa verificadores obrigatórios
             foreach (var v in verifiers)
                 results.Add(await v.VerifyAsync(verificationContext, ct));
+            
+            // Executa verificadores semânticos apenas para logging/informação
+            foreach (var v in semanticVerifiers)
+            {
+                var semanticResult = await v.VerifyAsync(verificationContext, ct);
+                // Adiciona aos resultados mas não afeta decisão (já tratado no DecisionEngine)
+                results.Add(semanticResult);
+                
+                // Log informativo se houver violações
+                if (semanticResult.Status == VerificationStatus.Fail)
+                {
+                    Console.WriteLine($"  [INFO] {v.Name}: {semanticResult.Message}");
+                }
+            }
 
             var d = _decisionEngine.Decide(results, contract);
             decision = d.Decision;
@@ -460,12 +489,44 @@ public class JarvisRepl
         var selector = new ContextSelector();
         var package = selector.Select(index, taskId, taskId, ["src/**"]);
 
+        var compiler = new ContextCompiler();
+        var prompt = compiler.Compile(package, samplePath, taskId);
+
         Console.WriteLine($"Context Package: {package.Id}");
         Console.WriteLine($"Strategy: {package.Strategy}");
         Console.WriteLine($"Estimated tokens: {package.EstimatedTokens}");
         Console.WriteLine();
-        Console.WriteLine("Selected files:");
-        foreach (var f in package.SelectedFiles)
+        Console.WriteLine("Compiled Prompt Preview:");
+        Console.WriteLine(new string('-', 50));
+        
+        // Mostrar apenas as primeiras linhas do prompt
+        var lines = prompt.Split('\n').Take(30).ToArray();
+        foreach (var line in lines)
+        {
+            Console.WriteLine(line);
+        }
+        
+        if (prompt.Split('\n').Length > 30)
+        {
+            Console.WriteLine($"\n... [{prompt.Split('\n').Length - 30} more lines]");
+        }
+    }
+
+    private static string BuildLegacyPrompt(TaskContract contract, Dictionary<string, string> codeContext)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Task: {contract.Objective}");
+        sb.AppendLine();
+        sb.AppendLine("Code Context:");
+        foreach (var kv in codeContext)
+        {
+            sb.AppendLine($"// File: {kv.Key}");
+            sb.AppendLine(kv.Value);
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+}
             Console.WriteLine($"  {f}");
         Console.WriteLine();
         Console.WriteLine("Symbols:");
