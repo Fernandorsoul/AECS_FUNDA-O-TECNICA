@@ -152,7 +152,7 @@ public class JarvisRepl
             Model = execution.Model,
             Decision = execution.Decision.Decision,
             DecisionReason = execution.Decision.Reason,
-            Duration = execution.AgentResult.Duration,
+            Duration = execution.BudgetUsage.WallClockElapsed,
             InputTokens = execution.AgentResult.InputTokens,
             OutputTokens = execution.AgentResult.OutputTokens,
             EstimatedCost = execution.AgentResult.EstimatedCost,
@@ -161,6 +161,9 @@ public class JarvisRepl
                 verification => verification.Verifier,
                 verification => verification.Status),
             AcceptanceCriteria = execution.AcceptanceCriteriaResults.ToList(),
+            AgentAttempts = execution.AgentAttempts.ToList(),
+            BudgetUsage = execution.BudgetUsage,
+            RetryCount = execution.AgentRun.RetryCount,
             EvidenceId = execution.EvidenceId,
             OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
         };
@@ -275,6 +278,19 @@ public class JarvisRepl
         Console.WriteLine($"Tokens: {record.InputTokens} in / {record.OutputTokens} out");
         Console.WriteLine($"Cost: ${record.EstimatedCost:F2}");
         Console.WriteLine($"Files changed: {record.FilesChanged}");
+        Console.WriteLine(
+            $"Budget: {record.BudgetUsage.AttemptsUsed}/{record.BudgetUsage.MaximumAttempts} attempts, " +
+            $"{record.BudgetUsage.WallClockElapsed.TotalSeconds:F1}/{record.BudgetUsage.WallClockLimitSeconds}s");
+        if (record.AgentAttempts.Count > 0)
+        {
+            Console.WriteLine("Agent attempts:");
+            foreach (var attempt in record.AgentAttempts)
+            {
+                Console.WriteLine(
+                    $"  #{attempt.AttemptNumber} {attempt.FailureKind} " +
+                    $"retry={attempt.WillRetry} — {attempt.DecisionReason}");
+            }
+        }
         if (record.AcceptanceCriteria.Count > 0)
         {
             Console.WriteLine("Acceptance evidence:");
@@ -339,14 +355,14 @@ public class JarvisRepl
         Console.WriteLine();
         Console.WriteLine("Compiled Prompt Preview:");
         Console.WriteLine(new string('-', 50));
-        
+
         // Mostrar apenas as primeiras linhas do prompt
         var lines = prompt.Split('\n').Take(30).ToArray();
         foreach (var line in lines)
         {
             Console.WriteLine(line);
         }
-        
+
         if (prompt.Split('\n').Length > 30)
         {
             Console.WriteLine($"\n... [{prompt.Split('\n').Length - 30} more lines]");

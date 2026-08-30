@@ -226,14 +226,13 @@ tasks/                    # TaskContracts de exemplo e de experimento
 
 - não há rollback automático quando uma mudança é rejeitada;
 - a aplicação de arquivos ocorre antes da validação final de escopo;
-- custo, tokens e duração são conferidos após a resposta do agente, sem cancelamento preventivo pelo orçamento;
+- a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
 - a persistência de evidências em PostgreSQL ainda não está conectada à CLI;
 - o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
 - os verificadores EB001–EB005 são executados, porém ainda não bloqueiam a decisão final;
 - falha do adaptador do agente não é, por si só, um verificador obrigatório; um repositório já verde pode produzir uma decisão enganosa sem mudança útil;
 - o projeto de testes de integração ainda não contém casos descobertos pelo runner;
 - há avisos de resolução entre versões do Entity Framework Core durante o build;
-- o campo de retries é verificado pelo kernel, mas a CLI ainda não executa novas tentativas automaticamente;
 - subprocessos com saída muito volumosa podem bloquear os verificadores internos de build/teste;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.
 

@@ -472,6 +472,109 @@ public sealed class StagedExecutionPipelineTests
     }
 
     [Fact]
+    public async Task TransientAgentFailure_RetriesWithinBudget_AndPersistsEveryAttempt()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var agent = new SequenceAgent(
+            new AgentRunResult
+            {
+                Success = false,
+                ExitCode = 429,
+                ExitReason = "RateLimited",
+                FailureKind = AgentFailureKind.RateLimited,
+                RetryAfter = TimeSpan.FromSeconds(1),
+                InputTokens = 5,
+                OutputTokens = 5,
+                EstimatedCost = 0.001m,
+                Duration = TimeSpan.FromMilliseconds(5)
+            },
+            new AgentRunResult
+            {
+                Success = true,
+                StdOut = Response("src/retried.txt"),
+                ExitCode = 0,
+                ExitReason = "Completed",
+                InputTokens = 10,
+                OutputTokens = 10,
+                EstimatedCost = 0.002m,
+                Duration = TimeSpan.FromMilliseconds(5)
+            });
+        var pipeline = new StagedExecutionPipeline(
+            agent,
+            repository.ProcessRunner,
+            store,
+            retryDelay: (_, _) => Task.CompletedTask);
+
+        var result = await pipeline.RunAsync(
+            repository.Path,
+            Contract(budget: new ExecutionBudget
+            {
+                MaxTokens = 100,
+                MaxCostUsd = 1m,
+                MaxRetries = 1,
+                MaxDurationSeconds = 60,
+                MaxFilesChanged = 10
+            }),
+            CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        result.AgentAttempts.Should().HaveCount(2);
+        result.AgentAttempts[0].WillRetry.Should().BeTrue();
+        result.AgentAttempts[0].RetryDelay.Should().Be(TimeSpan.FromSeconds(1));
+        result.AgentAttempts[1].Success.Should().BeTrue();
+        result.AgentRun.RetryCount.Should().Be(1);
+        result.AgentResult.InputTokens.Should().Be(15);
+        result.AgentResult.OutputTokens.Should().Be(15);
+        result.BudgetUsage.AttemptsUsed.Should().Be(2);
+        result.BudgetUsage.MaximumAttempts.Should().Be(2);
+        agent.Requests[1].Budget.MaxTokens.Should().Be(90);
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence.Should().NotBeNull();
+        evidence!.AgentAttempts.Should().HaveCount(2);
+        evidence.BudgetUsage.AttemptsUsed.Should().Be(2);
+        evidence.AgentRun.RetryCount.Should().Be(1);
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CallerCancellation_DuringAgent_StopsRetriesAndPersistsCancellation()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        using var cancellation = new CancellationTokenSource();
+        var agent = new CancellingAgent(cancellation);
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var contract = Contract(budget: new ExecutionBudget
+        {
+            MaxTokens = 100,
+            MaxCostUsd = 1m,
+            MaxRetries = 3,
+            MaxDurationSeconds = 60,
+            MaxFilesChanged = 10
+        });
+
+        var result = await new StagedExecutionPipeline(
+                agent,
+                repository.ProcessRunner,
+                store,
+                retryDelay: (_, _) => Task.CompletedTask)
+            .RunAsync(repository.Path, contract, cancellation.Token);
+
+        agent.CallCount.Should().Be(1);
+        result.FinalState.Should().Be(TaskState.Cancelled);
+        result.AgentAttempts.Should().ContainSingle(attempt =>
+            attempt.FailureKind == AgentFailureKind.Cancelled && !attempt.WillRetry);
+        result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence.Should().NotBeNull();
+        evidence!.FinalDecision.State.Should().Be(TaskState.Cancelled);
+        evidence.AgentAttempts.Should().ContainSingle();
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProcessTimeout_TerminatesProcessAndReturnsTimedOut()
     {
         var runner = new SystemProcessRunner();
@@ -498,6 +601,36 @@ public sealed class StagedExecutionPipelineTests
         result.Duration.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 
+    [Fact]
+    public async Task ProcessCancellation_TerminatesProcessTreeAndReturnsCancelled()
+    {
+        var runner = new SystemProcessRunner();
+        var request = OperatingSystem.IsWindows()
+            ? new ProcessExecutionRequest
+            {
+                FileName = "powershell",
+                Arguments = ["-NoProfile", "-Command", "Start-Sleep -Seconds 30"],
+                WorkingDirectory = System.IO.Path.GetTempPath(),
+                Timeout = TimeSpan.FromSeconds(30)
+            }
+            : new ProcessExecutionRequest
+            {
+                FileName = "sh",
+                Arguments = ["-c", "sleep 30"],
+                WorkingDirectory = System.IO.Path.GetTempPath(),
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+        using var cancellation = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(200));
+
+        var result = await runner.RunAsync(request, cancellation.Token);
+
+        result.Cancelled.Should().BeTrue();
+        result.TimedOut.Should().BeFalse();
+        result.Succeeded.Should().BeFalse();
+        result.Duration.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
     private static StagedExecutionPipeline Pipeline(
         TemporaryGitRepository repository,
         Agent agent) => new(
@@ -508,29 +641,30 @@ public sealed class StagedExecutionPipelineTests
     private static TaskContract Contract(
         bool build = false,
         bool tests = false,
-        RepositoryExecutionProfile? execution = null) => new()
-    {
-        Id = $"E2E-{Guid.NewGuid():N}",
-        Objective = "Produce a staged candidate",
-        Scope = new ScopeDefinition { Allowed = ["src/**"] },
-        Budget = new ExecutionBudget
+        RepositoryExecutionProfile? execution = null,
+        ExecutionBudget? budget = null) => new()
         {
-            MaxTokens = 10000,
-            MaxCostUsd = 10m,
-            MaxRetries = 0,
-            MaxDurationSeconds = 60,
-            MaxFilesChanged = 10
-        },
-        Execution = execution ?? new RepositoryExecutionProfile(),
-        Verification = new VerificationProfile
-        {
-            Build = build,
-            UnitTests = tests,
-            Scope = true,
-            Budget = true
-        },
-        Approval = new ApprovalPolicy { Production = ApprovalLevel.None }
-    };
+            Id = $"E2E-{Guid.NewGuid():N}",
+            Objective = "Produce a staged candidate",
+            Scope = new ScopeDefinition { Allowed = ["src/**"] },
+            Budget = budget ?? new ExecutionBudget
+            {
+                MaxTokens = 10000,
+                MaxCostUsd = 10m,
+                MaxRetries = 0,
+                MaxDurationSeconds = 60,
+                MaxFilesChanged = 10
+            },
+            Execution = execution ?? new RepositoryExecutionProfile(),
+            Verification = new VerificationProfile
+            {
+                Build = build,
+                UnitTests = tests,
+                Scope = true,
+                Budget = true
+            },
+            Approval = new ApprovalPolicy { Production = ApprovalLevel.None }
+        };
 
     private static TaskContract ContractWithAcceptance(AcceptanceCriterion? criterion)
     {
@@ -580,17 +714,17 @@ public sealed class StagedExecutionPipelineTests
             string output,
             List<string>? claimedFiles = null,
             Action<string>? workspaceAction = null) => new(new AgentRunResult
-        {
-            Success = true,
-            StdOut = output,
-            ExitCode = 0,
-            Duration = TimeSpan.FromMilliseconds(10),
-            InputTokens = 10,
-            OutputTokens = 10,
-            EstimatedCost = 0.01m,
-            FilesChanged = claimedFiles ?? [],
-            ExitReason = "Completed"
-        }, workspaceAction);
+            {
+                Success = true,
+                StdOut = output,
+                ExitCode = 0,
+                Duration = TimeSpan.FromMilliseconds(10),
+                InputTokens = 10,
+                OutputTokens = 10,
+                EstimatedCost = 0.01m,
+                FilesChanged = claimedFiles ?? [],
+                ExitReason = "Completed"
+            }, workspaceAction);
 
         public static Agent Success(string output, Action<string> workspaceAction) =>
             Success(output, null, workspaceAction);
@@ -604,6 +738,54 @@ public sealed class StagedExecutionPipelineTests
             Duration = TimeSpan.FromMilliseconds(10),
             ExitReason = "Failed"
         });
+    }
+
+    private sealed class SequenceAgent : IAgentAdapter
+    {
+        private readonly Queue<AgentRunResult> _results;
+
+        public SequenceAgent(params AgentRunResult[] results)
+        {
+            _results = new Queue<AgentRunResult>(results);
+        }
+
+        public List<AgentExecutionRequest> Requests { get; } = [];
+
+        public Task<AgentRunResult> ExecuteAsync(
+            AgentExecutionRequest request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class CancellingAgent : IAgentAdapter
+    {
+        private readonly CancellationTokenSource _cancellation;
+
+        public CancellingAgent(CancellationTokenSource cancellation)
+        {
+            _cancellation = cancellation;
+        }
+
+        public int CallCount { get; private set; }
+
+        public Task<AgentRunResult> ExecuteAsync(
+            AgentExecutionRequest request,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            _cancellation.Cancel();
+            return Task.FromResult(new AgentRunResult
+            {
+                Success = false,
+                ExitCode = -1,
+                ExitReason = "Cancelled",
+                FailureKind = AgentFailureKind.Cancelled,
+                Duration = TimeSpan.FromMilliseconds(1)
+            });
+        }
     }
 
     private sealed class TemporaryGitRepository : IAsyncDisposable

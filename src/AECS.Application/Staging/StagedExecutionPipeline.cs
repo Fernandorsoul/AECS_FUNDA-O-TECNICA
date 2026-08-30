@@ -1,5 +1,6 @@
 using AECS.Application.Classification;
 using AECS.Application.ContextCompiler;
+using AECS.Application.Execution;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -14,6 +15,8 @@ public sealed class StagedExecutionResult
     public string Model { get; init; } = string.Empty;
     public AgentRun AgentRun { get; init; } = new();
     public AgentRunResult AgentResult { get; init; } = new();
+    public IReadOnlyList<AgentAttemptEvidence> AgentAttempts { get; init; } = [];
+    public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public BaselineSnapshot Baseline { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public IReadOnlyList<VerificationResult> BaselineVerificationResults { get; init; } = [];
@@ -40,18 +43,25 @@ public sealed class StagedExecutionPipeline
     private readonly ExecutionController _executionController = new();
     private readonly DecisionEngine _decisionEngine = new();
     private readonly FileApplicator _fileApplicator = new();
+    private readonly AgentExecutionCoordinator _agentExecutionCoordinator;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
         IProcessRunner processRunner,
         IExecutionEvidenceStore evidenceStore,
-        RepositoryContextCompiler? contextCompiler = null)
+        RepositoryContextCompiler? contextCompiler = null,
+        Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
+        TimeSpan? maximumRetryBackoff = null)
     {
         _agentAdapter = agentAdapter;
         _processRunner = processRunner;
         _evidenceStore = evidenceStore;
         _workspaceManager = new GitWorkspaceManager(processRunner);
         _contextCompiler = contextCompiler ?? new RepositoryContextCompiler();
+        _agentExecutionCoordinator = new AgentExecutionCoordinator(
+            agentAdapter,
+            retryDelay,
+            maximumRetryBackoff);
     }
 
     public async Task<StagedExecutionResult> RunAsync(
@@ -59,17 +69,20 @@ public sealed class StagedExecutionPipeline
         TaskContract inputContract,
         CancellationToken cancellationToken)
     {
+        using var budgetScope = new ExecutionBudgetScope(
+            inputContract.Budget,
+            cancellationToken);
         var stateMachine = new TaskStateMachine();
         stateMachine.TransitionTo(TaskState.ContractReady);
 
         var risk = _riskClassifier.Classify(inputContract);
         var contract = WithRisk(inputContract, risk);
-        var plan = await _executionController.PlanAsync(contract, cancellationToken);
+        var plan = await _executionController.PlanAsync(contract, budgetScope.Token);
         stateMachine.TransitionTo(TaskState.Planned);
 
         var baseline = await _workspaceManager.CaptureBaselineAsync(
             repositoryPath,
-            cancellationToken);
+            budgetScope.Token);
         _evidenceStore.EnsureRepositoryIsolation(baseline.RepositoryPath);
 
         var agentRunId = Guid.NewGuid().ToString("N");
@@ -80,7 +93,7 @@ public sealed class StagedExecutionPipeline
         List<VerificationResult> baselineVerificationResults;
         await using (var preflightWorkspace = await _workspaceManager.CreateWorkspaceAsync(
             baseline,
-            cancellationToken))
+            budgetScope.Token))
         {
             baselineVerificationResults = await VerifyBaselineAsync(
                 new VerificationContext
@@ -91,7 +104,8 @@ public sealed class StagedExecutionPipeline
                     Contract = contract,
                     CommandEvidence = baselineCommands
                 },
-                cancellationToken);
+                budgetScope.Token,
+                () => budgetScope.RemainingDuration);
         }
 
         await _workspaceManager.EnsureBaselineUnchangedAsync(
@@ -104,14 +118,21 @@ public sealed class StagedExecutionPipeline
             .ToList();
         if (baselineFailures.Count > 0)
         {
-            var baselineDecision = new DecisionResult
+            var baselineAgentResult = new AgentRunResult
+            {
+                Success = false,
+                StdErr = $"Baseline preflight failed: {string.Join("; ", baselineFailures)}",
+                ExitCode = -1,
+                ExitReason = "BaselinePreflightFailed"
+            };
+            var baselineDecision = ApplyTerminalExecutionState(new DecisionResult
             {
                 Decision = TaskDecision.Rejected,
                 TargetState = TaskState.Rejected,
                 Reason = $"Baseline preflight failed: {string.Join("; ", baselineFailures)}",
                 Failures = baselineFailures
-            };
-            stateMachine.TransitionTo(TaskState.Rejected);
+            }, baselineAgentResult, budgetScope, string.Empty);
+            stateMachine.TransitionTo(baselineDecision.TargetState);
 
             return await PublishAsync(
                 contract,
@@ -120,13 +141,9 @@ public sealed class StagedExecutionPipeline
                 baseline,
                 agentRunId,
                 startedAt,
-                new AgentRunResult
-                {
-                    Success = false,
-                    StdErr = baselineDecision.Reason,
-                    ExitCode = -1,
-                    ExitReason = "BaselinePreflightFailed"
-                },
+                baselineAgentResult,
+                [],
+                string.Empty,
                 EmptyCandidate(contract.Id, agentRunId, baseline.Commit),
                 baselineVerificationResults,
                 baselineCommands,
@@ -136,11 +153,13 @@ public sealed class StagedExecutionPipeline
                 [],
                 baselineDecision,
                 stateMachine,
-                cancellationToken);
+                budgetScope);
         }
 
         stateMachine.TransitionTo(TaskState.Running);
         AgentRunResult agentResult;
+        List<AgentAttemptEvidence> agentAttempts;
+        string budgetExhaustionReason;
         ContextManifest contextManifest;
         CandidateChangeSet candidate;
         List<VerificationResult> verificationResults;
@@ -150,7 +169,7 @@ public sealed class StagedExecutionPipeline
 
         await using (var workspace = await _workspaceManager.CreateWorkspaceAsync(
             baseline,
-            cancellationToken))
+            budgetScope.Token))
         {
             var compiledContext = _contextCompiler.Compile(
                 workspace.Path,
@@ -158,19 +177,23 @@ public sealed class StagedExecutionPipeline
                 baseline.Commit);
             contextManifest = compiledContext.Manifest;
 
-            agentResult = await _agentAdapter.ExecuteAsync(new AgentExecutionRequest
-            {
-                TaskId = contract.Id,
-                Objective = contract.Objective,
-                AcceptanceCriteria = contract.AcceptanceCriteria,
-                RepoPath = workspace.Path,
-                Scope = contract.Scope,
-                Budget = contract.Budget,
-                Risk = risk,
-                Model = plan.Model,
-                CodeContext = compiledContext.CodeContext,
-                ContextPrompt = compiledContext.Prompt
-            }, cancellationToken);
+            var agentOutcome = await _agentExecutionCoordinator.ExecuteAsync(
+                new AgentExecutionRequest
+                {
+                    TaskId = contract.Id,
+                    Objective = contract.Objective,
+                    AcceptanceCriteria = contract.AcceptanceCriteria,
+                    RepoPath = workspace.Path,
+                    Scope = contract.Scope,
+                    Budget = contract.Budget,
+                    Risk = risk,
+                    Model = plan.Model,
+                    CodeContext = compiledContext.CodeContext,
+                    ContextPrompt = compiledContext.Prompt
+                }, budgetScope);
+            agentResult = agentOutcome.Result;
+            agentAttempts = agentOutcome.Attempts;
+            budgetExhaustionReason = agentOutcome.BudgetExhaustionReason;
 
             var applicationResult = agentResult.Success
                 ? _fileApplicator.ApplyChanges(agentResult.StdOut, workspace.Path)
@@ -184,7 +207,9 @@ public sealed class StagedExecutionPipeline
                 workspace,
                 contract.Id,
                 agentRunId,
-                cancellationToken);
+                agentResult.FailureKind is AgentFailureKind.Cancelled or AgentFailureKind.BudgetExceeded
+                    ? CancellationToken.None
+                    : budgetScope.Token);
             stateMachine.TransitionTo(TaskState.CandidateProduced);
             stateMachine.TransitionTo(TaskState.Verifying);
 
@@ -203,8 +228,16 @@ public sealed class StagedExecutionPipeline
                 verificationContext,
                 applicationResult,
                 acceptanceCriteriaResults,
-                cancellationToken);
+                agentResult.FailureKind is AgentFailureKind.Cancelled or AgentFailureKind.BudgetExceeded
+                    ? CancellationToken.None
+                    : budgetScope.Token,
+                () => budgetScope.RemainingDuration);
             decision = _decisionEngine.Decide(verificationResults, contract);
+            decision = ApplyTerminalExecutionState(
+                decision,
+                agentResult,
+                budgetScope,
+                budgetExhaustionReason);
             stateMachine.TransitionTo(decision.TargetState);
         }
 
@@ -216,6 +249,8 @@ public sealed class StagedExecutionPipeline
             agentRunId,
             startedAt,
             agentResult,
+            agentAttempts,
+            budgetExhaustionReason,
             candidate,
             baselineVerificationResults,
             baselineCommands,
@@ -225,7 +260,7 @@ public sealed class StagedExecutionPipeline
             candidateCommands,
             decision,
             stateMachine,
-            cancellationToken);
+            budgetScope);
     }
 
     private async Task<StagedExecutionResult> PublishAsync(
@@ -236,6 +271,8 @@ public sealed class StagedExecutionPipeline
         string agentRunId,
         DateTime startedAt,
         AgentRunResult agentResult,
+        List<AgentAttemptEvidence> agentAttempts,
+        string budgetExhaustionReason,
         CandidateChangeSet candidate,
         List<VerificationResult> baselineVerificationResults,
         List<ExecutionCommandEvidence> baselineCommands,
@@ -245,7 +282,7 @@ public sealed class StagedExecutionPipeline
         List<ExecutionCommandEvidence> candidateCommands,
         DecisionResult decision,
         TaskStateMachine stateMachine,
-        CancellationToken cancellationToken)
+        ExecutionBudgetScope budgetScope)
     {
         await _workspaceManager.EnsureBaselineUnchangedAsync(
             baseline,
@@ -258,11 +295,12 @@ public sealed class StagedExecutionPipeline
             AgentType = _agentAdapter.GetType().Name,
             Provider = _agentAdapter.GetType().Namespace ?? string.Empty,
             Model = model,
-            StartedAt = startedAt,
-            FinishedAt = startedAt + agentResult.Duration,
+            StartedAt = agentAttempts.Count > 0 ? agentAttempts[0].StartedAt : startedAt,
+            FinishedAt = agentAttempts.Count > 0 ? agentAttempts[^1].FinishedAt : startedAt,
             InputTokens = agentResult.InputTokens,
             OutputTokens = agentResult.OutputTokens,
             EstimatedCost = agentResult.EstimatedCost,
+            RetryCount = Math.Max(0, agentAttempts.Count - 1),
             ExitReason = agentResult.ExitReason,
             FilesChanged = agentResult.FilesChanged.ToList()
         };
@@ -274,6 +312,13 @@ public sealed class StagedExecutionPipeline
             TaskContract = contract,
             AgentRun = agentRun,
             AgentResult = agentResult,
+            AgentAttempts = agentAttempts,
+            BudgetUsage = CreateBudgetEvidence(
+                contract.Budget,
+                budgetScope,
+                agentResult,
+                agentAttempts,
+                budgetExhaustionReason),
             Baseline = baseline,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,
@@ -299,7 +344,7 @@ public sealed class StagedExecutionPipeline
                 .ToList()
         };
 
-        var evidenceLocation = await _evidenceStore.SaveAsync(evidence, cancellationToken);
+        var evidenceLocation = await _evidenceStore.SaveAsync(evidence, CancellationToken.None);
         await _workspaceManager.EnsureBaselineUnchangedAsync(
             baseline,
             CancellationToken.None);
@@ -311,6 +356,8 @@ public sealed class StagedExecutionPipeline
             Model = model,
             AgentRun = agentRun,
             AgentResult = agentResult,
+            AgentAttempts = agentAttempts,
+            BudgetUsage = evidence.BudgetUsage,
             Baseline = baseline,
             CandidateChangeSet = candidate,
             BaselineVerificationResults = baselineVerificationResults,
@@ -329,14 +376,15 @@ public sealed class StagedExecutionPipeline
 
     private async Task<List<VerificationResult>> VerifyBaselineAsync(
         VerificationContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<TimeSpan> remainingDuration)
     {
         var results = new List<VerificationResult>();
 
         if (context.Contract.Verification.Build)
         {
             results.Add(await RunVerifierAsync(
-                new BuildVerifier(_processRunner),
+                new BuildVerifier(_processRunner, remainingDuration),
                 context,
                 cancellationToken));
         }
@@ -348,7 +396,10 @@ public sealed class StagedExecutionPipeline
             context.Contract.Verification.IntegrationTests)
         {
             results.Add(buildPassed
-                ? await RunVerifierAsync(new TestVerifier(_processRunner), context, cancellationToken)
+                ? await RunVerifierAsync(
+                    new TestVerifier(_processRunner, remainingDuration),
+                    context,
+                    cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
         }
 
@@ -369,18 +420,19 @@ public sealed class StagedExecutionPipeline
         string taskId,
         string agentRunId,
         string baselineCommit) => new()
-    {
-        TaskId = taskId,
-        AgentRunId = agentRunId,
-        BaselineCommit = baselineCommit,
-        DiffHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    };
+        {
+            TaskId = taskId,
+            AgentRunId = agentRunId,
+            BaselineCommit = baselineCommit,
+            DiffHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        };
 
     private async Task<List<VerificationResult>> VerifyAsync(
         VerificationContext context,
         FileApplicatorResult applicationResult,
         List<AcceptanceCriterionResult> acceptanceCriteriaResults,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<TimeSpan> remainingDuration)
     {
         var results = new List<VerificationResult>();
         var prerequisites = new IVerifier[]
@@ -400,7 +452,10 @@ public sealed class StagedExecutionPipeline
         if (context.Contract.Verification.Build)
         {
             results.Add(prerequisitesPassed
-                ? await RunVerifierAsync(new BuildVerifier(_processRunner), context, cancellationToken)
+                ? await RunVerifierAsync(
+                    new BuildVerifier(_processRunner, remainingDuration),
+                    context,
+                    cancellationToken)
                 : Skipped(context.AgentRunId, "Build", "Trust-boundary prerequisite failed"));
         }
 
@@ -411,7 +466,10 @@ public sealed class StagedExecutionPipeline
         if (context.Contract.Verification.UnitTests || context.Contract.Verification.IntegrationTests)
         {
             results.Add(prerequisitesPassed && buildPassed
-                ? await RunVerifierAsync(new TestVerifier(_processRunner), context, cancellationToken)
+                ? await RunVerifierAsync(
+                    new TestVerifier(_processRunner, remainingDuration),
+                    context,
+                    cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
         }
 
@@ -432,7 +490,9 @@ public sealed class StagedExecutionPipeline
 
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)
         {
-            var acceptance = await new AcceptanceCriteriaVerifier(_processRunner).VerifyAsync(
+            var acceptance = await new AcceptanceCriteriaVerifier(
+                _processRunner,
+                remainingDuration).VerifyAsync(
                 context,
                 results,
                 prerequisitesPassed && buildPassed,
@@ -470,13 +530,93 @@ public sealed class StagedExecutionPipeline
         string agentRunId,
         string verifier,
         string reason) => new()
+        {
+            AgentRunId = agentRunId,
+            Verifier = verifier,
+            Status = VerificationStatus.Skip,
+            Severity = Severity.Warning,
+            Message = reason
+        };
+
+    private static DecisionResult ApplyTerminalExecutionState(
+        DecisionResult decision,
+        AgentRunResult agentResult,
+        ExecutionBudgetScope budgetScope,
+        string budgetExhaustionReason)
     {
-        AgentRunId = agentRunId,
-        Verifier = verifier,
-        Status = VerificationStatus.Skip,
-        Severity = Severity.Warning,
-        Message = reason
-    };
+        TaskState? targetState = null;
+        string? reason = null;
+        if (budgetScope.CallerCancellationRequested ||
+            agentResult.FailureKind == AgentFailureKind.Cancelled)
+        {
+            targetState = TaskState.Cancelled;
+            reason = "Execution cancelled; no further attempts or commands were allowed";
+        }
+        else if (budgetScope.WallClockExhausted)
+        {
+            targetState = TaskState.TimedOut;
+            reason = "Shared wall-clock budget exhausted; active process tree was terminated";
+        }
+        else if (agentResult.FailureKind == AgentFailureKind.BudgetExceeded)
+        {
+            targetState = TaskState.BudgetExceeded;
+            reason = string.IsNullOrWhiteSpace(budgetExhaustionReason)
+                ? agentResult.StdErr
+                : budgetExhaustionReason;
+        }
+        else if (!agentResult.Success &&
+                 !string.Equals(
+                     agentResult.ExitReason,
+                     "BaselinePreflightFailed",
+                     StringComparison.Ordinal))
+        {
+            targetState = TaskState.AgentFailed;
+            reason = $"Agent failed without a permitted retry: {agentResult.ExitReason} - {agentResult.StdErr}";
+        }
+
+        if (targetState is null)
+            return decision;
+
+        var terminalFailure = reason ?? targetState.Value.ToString();
+        return new DecisionResult
+        {
+            Decision = TaskDecision.Rejected,
+            TargetState = targetState.Value,
+            Reason = terminalFailure,
+            Failures = [.. decision.Failures, terminalFailure]
+        };
+    }
+
+    private static ExecutionBudgetEvidence CreateBudgetEvidence(
+        ExecutionBudget budget,
+        ExecutionBudgetScope budgetScope,
+        AgentRunResult agentResult,
+        IReadOnlyCollection<AgentAttemptEvidence> attempts,
+        string budgetExhaustionReason)
+    {
+        var exhaustionReason = budgetExhaustionReason;
+        if (string.IsNullOrWhiteSpace(exhaustionReason) && budgetScope.WallClockExhausted)
+            exhaustionReason = "Shared wall-clock budget exhausted";
+        if (string.IsNullOrWhiteSpace(exhaustionReason) && budgetScope.CallerCancellationRequested)
+            exhaustionReason = "Execution cancelled by caller";
+
+        return new ExecutionBudgetEvidence
+        {
+            StartedAt = budgetScope.StartedAt,
+            FinishedAt = DateTime.UtcNow,
+            WallClockElapsed = budgetScope.Elapsed,
+            WallClockLimitSeconds = budget.MaxDurationSeconds,
+            MaximumAttempts = budgetScope.MaximumAttempts,
+            AttemptsUsed = attempts.Count,
+            InputTokens = agentResult.InputTokens,
+            OutputTokens = agentResult.OutputTokens,
+            EstimatedCost = agentResult.EstimatedCost,
+            Exhausted = !string.IsNullOrWhiteSpace(budgetExhaustionReason) ||
+                budgetScope.WallClockExhausted ||
+                agentResult.FailureKind == AgentFailureKind.BudgetExceeded,
+            ExhaustionReason = exhaustionReason
+        };
+    }
 
     private static TaskContract WithRisk(TaskContract contract, RiskLevel risk) => new()
     {

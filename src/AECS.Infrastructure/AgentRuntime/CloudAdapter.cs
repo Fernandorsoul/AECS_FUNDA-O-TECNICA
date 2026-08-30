@@ -38,6 +38,23 @@ public class CloudAdapter : IAgentAdapter
         {
             var prompt = BuildPrompt(request);
             var model = _options.Model; // Always use cloud model, not local model name
+            var maxOutputTokens = GetMaximumOutputTokens(
+                model,
+                prompt,
+                request.Budget,
+                _options.MaxTokens);
+            if (maxOutputTokens <= 0)
+            {
+                return new AgentRunResult
+                {
+                    Success = false,
+                    StdErr = "No token or cost budget remains for a cloud request",
+                    ExitCode = -1,
+                    Duration = stopwatch.Elapsed,
+                    ExitReason = "BudgetExceeded",
+                    FailureKind = AgentFailureKind.BudgetExceeded
+                };
+            }
 
             var requestBody = new CloudRequest
             {
@@ -47,7 +64,7 @@ public class CloudAdapter : IAgentAdapter
                     new ChatMessage { Role = "system", Content = "You are a C# developer. Output only FILE blocks with modified code. No explanations." },
                     new ChatMessage { Role = "user", Content = prompt }
                 ],
-                MaxTokens = _options.MaxTokens,
+                MaxTokens = maxOutputTokens,
                 Temperature = _options.Temperature
             };
 
@@ -71,7 +88,11 @@ public class CloudAdapter : IAgentAdapter
                     StdErr = $"Cloud API error {(int)response.StatusCode}: {errorBody}",
                     ExitCode = (int)response.StatusCode,
                     Duration = stopwatch.Elapsed,
-                    ExitReason = "ApiError"
+                    ExitReason = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests
+                        ? "RateLimited"
+                        : "ApiError",
+                    FailureKind = ClassifyStatusCode((int)response.StatusCode),
+                    RetryAfter = GetRetryAfter(response)
                 };
             }
 
@@ -122,7 +143,10 @@ public class CloudAdapter : IAgentAdapter
                 StdErr = "Cloud API call timed out or was cancelled",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
-                ExitReason = "Cancelled"
+                ExitReason = cancellationToken.IsCancellationRequested ? "Cancelled" : "Timeout",
+                FailureKind = cancellationToken.IsCancellationRequested
+                    ? AgentFailureKind.Cancelled
+                    : AgentFailureKind.Timeout
             };
         }
         catch (HttpRequestException ex)
@@ -134,7 +158,8 @@ public class CloudAdapter : IAgentAdapter
                 StdErr = $"Cloud API error: {ex.Message}",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
-                ExitReason = "ApiError"
+                ExitReason = "ApiError",
+                FailureKind = AgentFailureKind.Transient
             };
         }
     }
@@ -228,8 +253,36 @@ public class CloudAdapter : IAgentAdapter
 
     private static decimal EstimateCost(string model, int inputTokens, int outputTokens)
     {
-        // Approximate pricing per 1M tokens
-        var (inputPrice, outputPrice) = model.ToLowerInvariant() switch
+        var (inputPrice, outputPrice) = GetTokenPrices(model);
+        return (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000;
+    }
+
+    private static int GetMaximumOutputTokens(
+        string model,
+        string prompt,
+        ExecutionBudget budget,
+        int configuredMaximum)
+    {
+        if (budget.MaxTokens <= 0 || budget.MaxCostUsd <= 0)
+            return 0;
+
+        var (inputPrice, outputPrice) = GetTokenPrices(model);
+        var estimatedInputTokens = (int)Math.Ceiling(prompt.Length / 4d);
+        var availableOutputTokens = budget.MaxTokens - estimatedInputTokens;
+        if (availableOutputTokens <= 0)
+            return 0;
+        var inputCost = estimatedInputTokens * inputPrice / 1_000_000;
+        var affordableOutputTokens = outputPrice <= 0
+            ? budget.MaxTokens
+            : (int)Math.Floor(
+                Math.Max(0m, budget.MaxCostUsd - inputCost) * 1_000_000 / outputPrice);
+        return Math.Max(0, Math.Min(
+            Math.Min(availableOutputTokens, affordableOutputTokens),
+            configuredMaximum));
+    }
+
+    private static (decimal InputPrice, decimal OutputPrice) GetTokenPrices(string model) =>
+        model.ToLowerInvariant() switch
         {
             var m when m.Contains("gpt-4o-mini") => (0.15m, 0.60m),
             var m when m.Contains("gpt-4o") => (2.50m, 10.00m),
@@ -239,7 +292,26 @@ public class CloudAdapter : IAgentAdapter
             _ => (1.00m, 3.00m) // default estimate
         };
 
-        return (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000;
+    private static AgentFailureKind ClassifyStatusCode(int statusCode) => statusCode switch
+    {
+        429 => AgentFailureKind.RateLimited,
+        408 => AgentFailureKind.Timeout,
+        >= 500 and <= 599 => AgentFailureKind.Transient,
+        _ => AgentFailureKind.Permanent
+    };
+
+    private static TimeSpan? GetRetryAfter(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter?.Delta is { } delta)
+            return delta > TimeSpan.Zero ? delta : TimeSpan.Zero;
+        if (retryAfter?.Date is { } date)
+        {
+            var delay = date - DateTimeOffset.UtcNow;
+            return delay > TimeSpan.Zero ? delay : TimeSpan.Zero;
+        }
+
+        return null;
     }
 }
 

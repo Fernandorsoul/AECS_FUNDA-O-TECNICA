@@ -29,19 +29,49 @@ public class OllamaAdapter : IAgentAdapter
         {
             var prompt = BuildPrompt(request);
             var model = request.Model;
+            var estimatedInputTokens = (int)Math.Ceiling(prompt.Length / 4d);
+            var maximumOutputTokens = request.Budget.MaxTokens - estimatedInputTokens;
+            if (maximumOutputTokens <= 0)
+            {
+                return new AgentRunResult
+                {
+                    Success = false,
+                    StdErr = "No token budget remains for an Ollama request",
+                    ExitCode = -1,
+                    Duration = stopwatch.Elapsed,
+                    ExitReason = "BudgetExceeded",
+                    FailureKind = AgentFailureKind.BudgetExceeded
+                };
+            }
 
             var requestBody = new OllamaRequest
             {
                 Model = model,
                 Prompt = prompt,
-                Stream = false
+                Stream = false,
+                Options = new OllamaOptions { NumPredict = maximumOutputTokens }
             };
 
             var json = JsonSerializer.Serialize(requestBody, OllamaJsonContext.Default.OllamaRequest);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
             var response = await _httpClient.PostAsync($"{_baseUrl}/api/generate", content, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                return new AgentRunResult
+                {
+                    Success = false,
+                    StdErr = $"Ollama API error {(int)response.StatusCode}: {errorBody}",
+                    ExitCode = (int)response.StatusCode,
+                    Duration = stopwatch.Elapsed,
+                    ExitReason = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests
+                        ? "RateLimited"
+                        : "ApiError",
+                    FailureKind = ClassifyStatusCode((int)response.StatusCode),
+                    RetryAfter = GetRetryAfter(response)
+                };
+            }
 
             var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
             var ollamaResponse = JsonSerializer.Deserialize(responseJson, OllamaJsonContext.Default.OllamaResponse);
@@ -85,7 +115,10 @@ public class OllamaAdapter : IAgentAdapter
                 StdErr = "Execution timed out or was cancelled",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
-                ExitReason = "Cancelled"
+                ExitReason = cancellationToken.IsCancellationRequested ? "Cancelled" : "Timeout",
+                FailureKind = cancellationToken.IsCancellationRequested
+                    ? AgentFailureKind.Cancelled
+                    : AgentFailureKind.Timeout
             };
         }
         catch (HttpRequestException ex)
@@ -97,7 +130,8 @@ public class OllamaAdapter : IAgentAdapter
                 StdErr = $"Failed to connect to Ollama at {_baseUrl}: {ex.Message}",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
-                ExitReason = "ConnectionError"
+                ExitReason = "ConnectionError",
+                FailureKind = AgentFailureKind.Transient
             };
         }
     }
@@ -210,6 +244,28 @@ public class OllamaAdapter : IAgentAdapter
 
         return files;
     }
+
+    private static AgentFailureKind ClassifyStatusCode(int statusCode) => statusCode switch
+    {
+        429 => AgentFailureKind.RateLimited,
+        408 => AgentFailureKind.Timeout,
+        >= 500 and <= 599 => AgentFailureKind.Transient,
+        _ => AgentFailureKind.Permanent
+    };
+
+    private static TimeSpan? GetRetryAfter(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter?.Delta is { } delta)
+            return delta > TimeSpan.Zero ? delta : TimeSpan.Zero;
+        if (retryAfter?.Date is { } date)
+        {
+            var delay = date - DateTimeOffset.UtcNow;
+            return delay > TimeSpan.Zero ? delay : TimeSpan.Zero;
+        }
+
+        return null;
+    }
 }
 
 internal class OllamaRequest
@@ -222,6 +278,15 @@ internal class OllamaRequest
 
     [JsonPropertyName("stream")]
     public bool Stream { get; set; }
+
+    [JsonPropertyName("options")]
+    public OllamaOptions Options { get; set; } = new();
+}
+
+internal class OllamaOptions
+{
+    [JsonPropertyName("num_predict")]
+    public int NumPredict { get; set; }
 }
 
 internal class OllamaResponse

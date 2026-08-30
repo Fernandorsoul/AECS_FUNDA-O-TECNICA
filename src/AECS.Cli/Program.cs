@@ -160,6 +160,25 @@ static async Task<int> RunSingle(string[] args)
     if (execution.CandidateChangeSet.ChangedFiles.Count == 0)
         Console.WriteLine("  (none)");
 
+    Console.WriteLine("Agent attempts:");
+    foreach (var attempt in execution.AgentAttempts)
+    {
+        var retry = attempt.WillRetry
+            ? $" retry in {attempt.RetryDelay?.TotalSeconds:F1}s"
+            : string.Empty;
+        Console.WriteLine(
+            $"  #{attempt.AttemptNumber} {attempt.FailureKind} " +
+            $"tokens={attempt.InputTokens + attempt.OutputTokens} cost=${attempt.EstimatedCost:F4}{retry} " +
+            $"— {attempt.DecisionReason}");
+    }
+    if (execution.AgentAttempts.Count == 0)
+        Console.WriteLine("  (agent was not called)");
+    Console.WriteLine(
+        $"Budget: {execution.BudgetUsage.AttemptsUsed}/{execution.BudgetUsage.MaximumAttempts} attempts, " +
+        $"{execution.BudgetUsage.WallClockElapsed.TotalSeconds:F1}/{execution.BudgetUsage.WallClockLimitSeconds}s, " +
+        $"{execution.BudgetUsage.InputTokens + execution.BudgetUsage.OutputTokens} tokens, " +
+        $"${execution.BudgetUsage.EstimatedCost:F4}");
+
     Console.WriteLine("Verification:");
     foreach (var result in execution.VerificationResults)
         Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");

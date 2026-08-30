@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
@@ -12,21 +13,21 @@ public class OllamaAdapterTests
     private static AgentExecutionRequest CreateRequest(
         string model = "codellama:3b",
         string contextPrompt = "") => new()
-    {
-        TaskId = "T1",
-        Objective = "Fix null handling in CustomerMapper",
-        AcceptanceCriteria = ["No null exceptions", "Tests pass"],
-        RepoPath = "/tmp/test",
-        Scope = new ScopeDefinition
         {
-            Allowed = ["src/Customers/**", "tests/Customers/**"],
-            Forbidden = ["src/Billing/**"]
-        },
-        Budget = ExecutionBudget.Default,
-        Risk = RiskLevel.R1,
-        Model = model,
-        ContextPrompt = contextPrompt
-    };
+            TaskId = "T1",
+            Objective = "Fix null handling in CustomerMapper",
+            AcceptanceCriteria = ["No null exceptions", "Tests pass"],
+            RepoPath = "/tmp/test",
+            Scope = new ScopeDefinition
+            {
+                Allowed = ["src/Customers/**", "tests/Customers/**"],
+                Forbidden = ["src/Billing/**"]
+            },
+            Budget = ExecutionBudget.Default,
+            Risk = RiskLevel.R1,
+            Model = model,
+            ContextPrompt = contextPrompt
+        };
 
     [Fact]
     public async Task ExecuteAsync_SuccessfulResponse_ReturnsResult()
@@ -172,14 +173,16 @@ internal class MockHttpMessageHandler : HttpMessageHandler
     private readonly HttpStatusCode _statusCode;
     private readonly bool _throwOnSend;
     private readonly int _delayMs;
+    private readonly TimeSpan? _retryAfter;
 
     public MockHttpMessageHandler(string responseContent, HttpStatusCode statusCode,
-        bool throwOnSend = false, int delayMs = 0)
+        bool throwOnSend = false, int delayMs = 0, TimeSpan? retryAfter = null)
     {
         _responseContent = responseContent;
         _statusCode = statusCode;
         _throwOnSend = throwOnSend;
         _delayMs = delayMs;
+        _retryAfter = retryAfter;
     }
 
     public string? LastRequestContent { get; private set; }
@@ -196,9 +199,12 @@ internal class MockHttpMessageHandler : HttpMessageHandler
         if (_delayMs > 0)
             await Task.Delay(_delayMs, cancellationToken);
 
-        return new HttpResponseMessage(_statusCode)
+        var response = new HttpResponseMessage(_statusCode)
         {
             Content = new StringContent(_responseContent)
         };
+        if (_retryAfter.HasValue)
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(_retryAfter.Value);
+        return response;
     }
 }

@@ -10,6 +10,30 @@ public class TaskContractParserTests
 {
     private readonly TaskContractParser _parser = new();
 
+    [Theory]
+    [InlineData("retries", "-1", "budget.retries")]
+    [InlineData("wall_clock_seconds", "0", "budget.wall_clock_seconds")]
+    [InlineData("tokens", "-1", "budget.tokens")]
+    [InlineData("usd", "-0.01", "budget.usd")]
+    public void Parse_InvalidBudget_IsRejected(
+        string field,
+        string value,
+        string expectedMessage)
+    {
+        var yaml = $"""
+            task:
+              id: INVALID-BUDGET
+              objective: Reject invalid limits
+              budget:
+                {field}: {value}
+            """;
+
+        var action = () => _parser.Parse(yaml);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*{expectedMessage}*");
+    }
+
     [Fact]
     public void Parse_ValidYaml_ReturnsTaskContract()
     {

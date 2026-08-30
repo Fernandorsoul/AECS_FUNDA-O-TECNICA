@@ -21,10 +21,14 @@ public sealed class AcceptanceCriteriaVerifier
         ],
         StringComparer.OrdinalIgnoreCase);
     private readonly IProcessRunner _processRunner;
+    private readonly Func<TimeSpan>? _remainingDuration;
 
-    public AcceptanceCriteriaVerifier(IProcessRunner processRunner)
+    public AcceptanceCriteriaVerifier(
+        IProcessRunner processRunner,
+        Func<TimeSpan>? remainingDuration = null)
     {
         _processRunner = processRunner;
+        _remainingDuration = remainingDuration;
     }
 
     public async Task<AcceptanceCriteriaVerificationOutcome> VerifyAsync(
@@ -174,6 +178,15 @@ public sealed class AcceptanceCriteriaVerifier
         string resultsDirectory = string.Empty;
         try
         {
+            var timeout = GetTimeout(context.Contract.Budget);
+            if (timeout <= TimeSpan.Zero)
+            {
+                return Result(
+                    criterion,
+                    VerificationStatus.Fail,
+                    "Wall-clock budget exhausted before targeted acceptance test",
+                    [$"test-filter:{criterion.Evidence.Reference}"]);
+            }
             var execution = RepositoryExecutionProfileResolver.Resolve(
                 context.RepoPath,
                 context.Contract.Execution);
@@ -195,8 +208,7 @@ public sealed class AcceptanceCriteriaVerifier
                 FileName = "dotnet",
                 Arguments = arguments,
                 WorkingDirectory = execution.WorkingDirectory,
-                Timeout = TimeSpan.FromSeconds(
-                    Math.Max(1, context.Contract.Budget.MaxDurationSeconds))
+                Timeout = timeout
             };
             var executionResult = await _processRunner.RunAsync(request, cancellationToken);
             var commandEvidence = ExecutionCommandEvidenceFactory.Create(
@@ -320,21 +332,30 @@ public sealed class AcceptanceCriteriaVerifier
         VerificationStatus status,
         string message,
         List<string> evidenceReferences) => new()
-    {
-        CriterionId = criterion.Id,
-        Description = criterion.Description,
-        Required = criterion.Required,
-        Behavioral = criterion.Behavioral,
-        EvidenceType = criterion.Evidence.Type,
-        EvidenceReference = criterion.Evidence.Reference,
-        TestPath = criterion.Evidence.TestPath,
-        Status = status,
-        Message = message,
-        EvidenceReferences = evidenceReferences
-    };
+        {
+            CriterionId = criterion.Id,
+            Description = criterion.Description,
+            Required = criterion.Required,
+            Behavioral = criterion.Behavioral,
+            EvidenceType = criterion.Evidence.Type,
+            EvidenceReference = criterion.Evidence.Reference,
+            TestPath = criterion.Evidence.TestPath,
+            Status = status,
+            Message = message,
+            EvidenceReferences = evidenceReferences
+        };
 
     private static string Sanitize(string value) => string.Concat(value.Select(character =>
         char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '_'));
+
+    private TimeSpan GetTimeout(ExecutionBudget budget)
+    {
+        var configured = TimeSpan.FromSeconds(Math.Max(1, budget.MaxDurationSeconds));
+        if (_remainingDuration is null)
+            return configured;
+        var remaining = _remainingDuration();
+        return remaining < configured ? remaining : configured;
+    }
 
     private static void DeleteResultsDirectory(string workspacePath, string resultsDirectory)
     {

@@ -18,6 +18,8 @@ public class TaskExperimentResult
     public int FilesChanged { get; init; }
     public Dictionary<string, VerificationStatus> Verifications { get; init; } = new();
     public List<AcceptanceCriterionResult> AcceptanceCriteria { get; init; } = [];
+    public List<AgentAttemptEvidence> AgentAttempts { get; init; } = [];
+    public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public int RetryCount { get; init; }
     public Guid EvidenceId { get; init; }
     public bool OriginalRepositoryUnchanged { get; init; }
