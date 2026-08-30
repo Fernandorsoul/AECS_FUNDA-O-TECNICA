@@ -1,4 +1,3 @@
-```
 # Build artifacts
 **/bin/
 **/obj/
@@ -62,4 +61,7 @@ coverage/
 # Compiled source
 **/Generated\ Files/
 **/generated-sources/
-```
+
+# Local repositories used for demos and experiments
+real-world-demo/
+sample/
