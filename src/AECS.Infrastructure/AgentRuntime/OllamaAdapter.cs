@@ -129,8 +129,12 @@ public class OllamaAdapter : IAgentAdapter
             sb.AppendLine();
         }
 
-        // Include code context from Context Compiler
-        if (request.CodeContext.Count > 0)
+        if (!string.IsNullOrWhiteSpace(request.ContextPrompt))
+        {
+            sb.AppendLine(request.ContextPrompt);
+        }
+        // Compatibility path for callers that still provide the dictionary only.
+        else if (request.CodeContext.Count > 0)
         {
             sb.AppendLine("EXISTING CODE (for reference):");
             sb.AppendLine();

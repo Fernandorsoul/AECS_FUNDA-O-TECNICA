@@ -23,6 +23,13 @@ public class CodebaseIndex
 
 public class CodebaseIndexer
 {
+    private static readonly HashSet<string> ExcludedDirectoryNames = new(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        ".git", ".vs", ".idea", ".vscode", "bin", "obj", "node_modules",
+        "packages", "dist", "build", "coverage", "TestResults", "artifacts"
+    };
+
     private static readonly Regex ClassRegex = new(
         @"(?:public|internal|private|protected)?\s*(?:static\s+)?(?:partial\s+)?(?:class|interface|enum|struct|record)\s+(\w+)",
         RegexOptions.Compiled);
@@ -41,18 +48,31 @@ public class CodebaseIndexer
 
     public CodebaseIndex Index(string rootPath)
     {
+        var resolvedRoot = Path.GetFullPath(rootPath);
+        if (!Directory.Exists(resolvedRoot))
+            throw new DirectoryNotFoundException($"Context root not found: {resolvedRoot}");
+
         var sourceFiles = new List<string>();
         var testFiles = new List<string>();
         var symbols = new List<CodeSymbol>();
         var dependencies = new Dictionary<string, List<string>>();
 
-        var csFiles = Directory.GetFiles(rootPath, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains(Path.Combine("obj", "")) && !f.Contains(Path.Combine("bin", "")))
+        var enumerationOptions = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.Hidden |
+                FileAttributes.System |
+                FileAttributes.ReparsePoint
+        };
+        var csFiles = Directory.EnumerateFiles(resolvedRoot, "*.cs", enumerationOptions)
+            .Where(file => !HasExcludedDirectory(resolvedRoot, file))
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         foreach (var file in csFiles)
         {
-            var relativePath = Path.GetRelativePath(rootPath, file).Replace('\\', '/');
+            var relativePath = Path.GetRelativePath(resolvedRoot, file).Replace('\\', '/');
 
             if (IsTestFile(relativePath))
                 testFiles.Add(relativePath);
@@ -69,7 +89,7 @@ public class CodebaseIndexer
 
         return new CodebaseIndex
         {
-            RootPath = rootPath,
+            RootPath = resolvedRoot,
             SourceFiles = sourceFiles,
             TestFiles = testFiles,
             Symbols = symbols,
@@ -82,6 +102,11 @@ public class CodebaseIndexer
         var symbols = new List<CodeSymbol>();
         var namespaceMatch = NamespaceRegex.Match(content);
         var ns = namespaceMatch.Success ? namespaceMatch.Groups[1].Value : "";
+        var methods = MethodRegex.Matches(content)
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
 
         foreach (Match match in ClassRegex.Matches(content))
         {
@@ -96,7 +121,8 @@ public class CodebaseIndexer
                 Name = match.Groups[1].Value,
                 Kind = kind,
                 FilePath = filePath,
-                Namespace = ns
+                Namespace = ns,
+                Methods = methods
             });
         }
 
@@ -112,7 +138,20 @@ public class CodebaseIndexer
 
     private static bool IsTestFile(string path)
     {
-        return path.Contains("Test", StringComparison.OrdinalIgnoreCase)
-            && (path.EndsWith(".cs") || path.EndsWith(".csproj"));
+        var segments = path.Replace('\\', '/').Split('/');
+        return segments.Any(segment =>
+                segment.Equals("test", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+                segment.Contains("Test", StringComparison.OrdinalIgnoreCase)) ||
+            Path.GetFileNameWithoutExtension(path)
+                .EndsWith("Tests", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasExcludedDirectory(string rootPath, string filePath)
+    {
+        var relativePath = Path.GetRelativePath(rootPath, filePath).Replace('\\', '/');
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Take(Math.Max(segments.Length - 1, 0))
+            .Any(ExcludedDirectoryNames.Contains);
     }
 }

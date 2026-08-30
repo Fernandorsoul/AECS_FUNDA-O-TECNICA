@@ -40,6 +40,41 @@ public sealed class StagedExecutionPipelineTests
     }
 
     [Fact]
+    public async Task AgentReceivesCompiledContextFromDisposableWorktree_AndManifestIsPersisted()
+    {
+        const string handler = "namespace Fixture; public class ExistingHandler { public void Handle() { } }";
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string> { ["src/ExistingHandler.cs"] = handler });
+        var agent = Agent.Success(Response("src/new-file.txt"));
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+
+        var result = await new StagedExecutionPipeline(
+                agent,
+                repository.ProcessRunner,
+                store)
+            .RunAsync(repository.Path, Contract(), CancellationToken.None);
+
+        agent.LastRequest.Should().NotBeNull();
+        agent.LastRequest!.RepoPath.Should().NotBe(repository.Path);
+        Directory.Exists(agent.LastRequest.RepoPath).Should().BeFalse(
+            "the context source worktree must be disposed after execution");
+        agent.LastRequest.CodeContext.Should().ContainKey("src/ExistingHandler.cs")
+            .WhoseValue.Should().Be(handler);
+        agent.LastRequest.ContextPrompt.Should().Contain("class Fixture.ExistingHandler");
+        result.ContextManifest.Source.Should().Be("isolated-git-worktree");
+        result.ContextManifest.BaselineCommit.Should().Be(result.Baseline.Commit);
+        result.ContextManifest.Files.Should().ContainSingle(file =>
+            file.Path == "src/ExistingHandler.cs" && file.Sha256.StartsWith("sha256:"));
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence.Should().NotBeNull();
+        evidence!.ContextManifest.ManifestHash.Should()
+            .Be(result.ContextManifest.ManifestHash);
+        File.ReadAllText(System.IO.Path.Combine(repository.Path, "src", "ExistingHandler.cs"))
+            .Should().Be(handler);
+    }
+
+    [Fact]
     public async Task SuccessfulAgentWithZeroDiff_IsRejected_AndOriginalRemainsUnchanged()
     {
         await using var repository = await TemporaryGitRepository.CreateAsync();
@@ -451,12 +486,14 @@ public sealed class StagedExecutionPipelineTests
         }
 
         public bool WasCalled { get; private set; }
+        public AgentExecutionRequest? LastRequest { get; private set; }
 
         public Task<AgentRunResult> ExecuteAsync(
             AgentExecutionRequest request,
             CancellationToken cancellationToken)
         {
             WasCalled = true;
+            LastRequest = request;
             _workspaceAction?.Invoke(request.RepoPath);
             return Task.FromResult(_result);
         }

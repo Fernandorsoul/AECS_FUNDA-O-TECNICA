@@ -1,3 +1,7 @@
+using System.Text.RegularExpressions;
+using System.Security.Cryptography;
+using System.Text;
+
 namespace AECS.Application.ContextCompiler;
 
 public class ContextPackage
@@ -7,116 +11,188 @@ public class ContextPackage
     public List<string> SelectedFiles { get; init; } = [];
     public List<string> SelectedSymbols { get; init; } = [];
     public List<string> RelevantTests { get; init; } = [];
+    public Dictionary<string, List<string>> SymbolsByFile { get; init; } = new();
     public int EstimatedTokens { get; init; }
+    public int EligibleFileCount { get; init; }
     public string Strategy { get; init; } = "default";
 }
 
 public class ContextSelector
 {
-    private static readonly HashSet<string> HighValueKeywords =
-    [
-        "customer", "order", "billing", "payment", "auth", "user",
-        "service", "repository", "controller", "mapper", "validator"
-    ];
-
-    public ContextPackage Select(CodebaseIndex index, string taskId, string objective, IEnumerable<string> allowedScope)
+    private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        var selectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var selectedSymbols = new List<string>();
-        var relevantTests = new List<string>();
+        "add", "and", "are", "com", "como", "das", "dos", "existing", "for",
+        "from", "into", "null", "para", "prevent", "should", "still", "the",
+        "this", "throw", "throws", "when", "with"
+    };
 
-        var objectiveLower = objective.ToLowerInvariant();
+    public ContextPackage Select(
+        CodebaseIndex index,
+        string taskId,
+        string objective,
+        IEnumerable<string> allowedScope) =>
+        Select(index, taskId, objective, [], allowedScope, []);
 
-        // 1. Files matching allowed scope
-        foreach (var pattern in allowedScope)
-        {
-            var matchingFiles = index.SourceFiles
-                .Concat(index.TestFiles)
-                .Where(f => MatchesScope(f, pattern));
-            foreach (var f in matchingFiles)
-                selectedFiles.Add(f);
-        }
+    public ContextPackage Select(
+        CodebaseIndex index,
+        string taskId,
+        string objective,
+        IEnumerable<string> acceptanceCriteria,
+        IEnumerable<string> allowedScope,
+        IEnumerable<string> forbiddenScope)
+    {
+        var allowed = allowedScope.ToList();
+        var forbidden = forbiddenScope.ToList();
+        var taskText = string.Join(' ', new[] { objective }.Concat(acceptanceCriteria));
+        var taskTerms = Tokenize(taskText);
+        var normalizedTask = NormalizeSearchText(taskText);
 
-        // 2. Files mentioned in objective (keyword matching)
-        foreach (var file in index.SourceFiles)
-        {
-            var fileName = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
-            if (objectiveLower.Contains(fileName, StringComparison.OrdinalIgnoreCase))
-                selectedFiles.Add(file);
-        }
+        var allFiles = index.SourceFiles
+            .Concat(index.TestFiles)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => allowed.Count > 0 && PathScopeMatcher.MatchesAny(path, allowed))
+            .Where(path => forbidden.Count == 0 || !PathScopeMatcher.MatchesAny(path, forbidden))
+            .ToList();
 
-        // 3. Symbols in selected files
-        foreach (var symbol in index.Symbols)
-        {
-            if (selectedFiles.Contains(symbol.FilePath))
+        var rankedFiles = allFiles
+            .Select(path => new
             {
-                selectedSymbols.Add($"{symbol.Kind} {symbol.Namespace}.{symbol.Name}");
-            }
-        }
+                Path = path,
+                Score = Score(path, index.Symbols, taskTerms, normalizedTask, taskText, allowed)
+            })
+            .Where(candidate => candidate.Score > 0)
+            .OrderByDescending(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate => candidate.Path)
+            .ToList();
 
-        // 4. Tests associated with selected source files
-        foreach (var testFile in index.TestFiles)
+        // A narrow scope can describe a new feature without sharing words with an
+        // existing filename. Preserve a deterministic, scope-safe fallback.
+        if (rankedFiles.Count == 0)
         {
-            var testFileName = Path.GetFileNameWithoutExtension(testFile);
-            foreach (var sourceFile in selectedFiles.Where(f => !IsTestFile(f)))
-            {
-                var sourceName = Path.GetFileNameWithoutExtension(sourceFile);
-                if (testFileName.Contains(sourceName, StringComparison.OrdinalIgnoreCase))
-                {
-                    relevantTests.Add(testFile);
-                    selectedFiles.Add(testFile);
-                    break;
-                }
-            }
+            rankedFiles = allFiles
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
-        // 5. Estimate tokens (rough: ~4 chars per token)
-        var totalChars = selectedFiles
-            .Where(f => File.Exists(Path.Combine(index.RootPath, f)))
-            .Sum(f => new FileInfo(Path.Combine(index.RootPath, f)).Length);
-        var estimatedTokens = (int)(totalChars / 4);
+        var symbolsByFile = index.Symbols
+            .Where(symbol => rankedFiles.Contains(symbol.FilePath, StringComparer.OrdinalIgnoreCase))
+            .GroupBy(symbol => symbol.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(FormatSymbol)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(symbol => symbol, StringComparer.Ordinal)
+                    .ToList(),
+                StringComparer.OrdinalIgnoreCase);
+        var selectedSymbols = rankedFiles
+            .Where(symbolsByFile.ContainsKey)
+            .SelectMany(path => symbolsByFile[path])
+            .ToList();
+        var relevantTests = rankedFiles
+            .Where(IsTestFile)
+            .ToList();
 
-        var id = $"CTX-{Guid.NewGuid():N}"[..15];
+        long totalCharacters = rankedFiles
+            .Select(path => Path.Combine(index.RootPath, path))
+            .Where(File.Exists)
+            .Sum(path => new FileInfo(path).Length);
+        var estimatedTokens = (int)Math.Min(int.MaxValue, (totalCharacters + 3) / 4);
+
+        var contextIdentity = string.Join('\n', new[] { taskId, objective }.Concat(rankedFiles));
+        var contextHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(contextIdentity)))
+            .ToLowerInvariant();
 
         return new ContextPackage
         {
-            Id = id,
+            Id = $"CTX-{contextHash[..12]}",
             TaskId = taskId,
-            SelectedFiles = selectedFiles.Order().ToList(),
+            SelectedFiles = rankedFiles,
             SelectedSymbols = selectedSymbols,
             RelevantTests = relevantTests,
+            SymbolsByFile = symbolsByFile,
             EstimatedTokens = estimatedTokens,
-            Strategy = "scope+keyword+tests"
+            EligibleFileCount = allFiles.Count,
+            Strategy = "scope+task-relevance+tests"
         };
     }
 
-    private static bool MatchesScope(string filePath, string pattern)
+    private static int Score(
+        string path,
+        IReadOnlyCollection<CodeSymbol> symbols,
+        IReadOnlySet<string> taskTerms,
+        string normalizedTask,
+        string taskText,
+        IReadOnlyCollection<string> allowedPatterns)
     {
-        filePath = filePath.Replace('\\', '/');
-        pattern = pattern.Replace('\\', '/');
+        var score = 0;
+        var normalizedPath = NormalizeSearchText(path);
+        var fileName = NormalizeSearchText(Path.GetFileNameWithoutExtension(path));
+        var fileSymbols = symbols
+            .Where(symbol => string.Equals(symbol.FilePath, path, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-        if (pattern.EndsWith("/**"))
+        if (fileName.Length > 2 && normalizedTask.Contains(fileName, StringComparison.Ordinal))
+            score += 120;
+
+        foreach (var term in taskTerms)
         {
-            var prefix = pattern[..^3];
-            return filePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            if (normalizedPath.Contains(term, StringComparison.Ordinal))
+                score += 12;
+            if (fileSymbols.Any(symbol =>
+                    NormalizeSearchText(symbol.Name).Contains(term, StringComparison.Ordinal)))
+            {
+                score += 18;
+            }
         }
 
-        if (pattern.Contains('*'))
+        foreach (var role in new[] { "handler", "command", "model", "validator", "test" })
         {
-            var regexPattern = "^" + pattern
-                .Replace(".", "\\.")
-                .Replace("**", ".*")
-                .Replace("*", "[^/]*")
-                + "$";
-            return System.Text.RegularExpressions.Regex.IsMatch(filePath, regexPattern,
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (taskText.Contains(role, StringComparison.OrdinalIgnoreCase) &&
+                path.Contains(role, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 35;
+            }
         }
 
-        return string.Equals(filePath, pattern, StringComparison.OrdinalIgnoreCase);
+        if (IsTestFile(path) && taskText.Contains("test", StringComparison.OrdinalIgnoreCase))
+            score += 45;
+        if (allowedPatterns.Any(pattern =>
+                !pattern.Contains('*') && PathScopeMatcher.Matches(path, pattern)))
+        {
+            score += 25;
+        }
+
+        return score;
     }
 
-    private static bool IsTestFile(string path)
+    private static IReadOnlySet<string> Tokenize(string value)
     {
-        return path.Contains("Test", StringComparison.OrdinalIgnoreCase);
+        var expanded = Regex.Replace(value, "(?<=[a-z0-9])(?=[A-Z])", " ");
+        return Regex.Matches(expanded.ToLowerInvariant(), "[a-z0-9]+")
+            .Select(match => match.Value)
+            .Where(term => term.Length >= 3 && !StopWords.Contains(term))
+            .ToHashSet(StringComparer.Ordinal);
     }
+
+    private static string NormalizeSearchText(string value) =>
+        string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
+
+    private static string FormatSymbol(CodeSymbol symbol)
+    {
+        var qualifiedName = string.IsNullOrWhiteSpace(symbol.Namespace)
+            ? symbol.Name
+            : $"{symbol.Namespace}.{symbol.Name}";
+        var methods = symbol.Methods.Count == 0
+            ? string.Empty
+            : $" methods=[{string.Join(", ", symbol.Methods)}]";
+        return $"{symbol.Kind} {qualifiedName}{methods}";
+    }
+
+    private static bool IsTestFile(string path) =>
+        path.Replace('\\', '/').Split('/').Any(segment =>
+            segment.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+            segment.Contains("Tests", StringComparison.OrdinalIgnoreCase));
 }

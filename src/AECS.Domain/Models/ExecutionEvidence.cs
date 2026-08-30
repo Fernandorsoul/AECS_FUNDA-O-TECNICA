@@ -20,6 +20,7 @@ public class ExecutionEvidence
     public BaselineSnapshot Baseline { get; init; } = new();
     public List<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public List<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
+    public ContextManifest ContextManifest { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public List<VerificationResult> VerificationResults { get; init; } = [];
     public List<ExecutionCommandEvidence> CandidateCommands { get; init; } = [];

@@ -1,4 +1,5 @@
 using AECS.Application.Classification;
+using AECS.Application.ContextCompiler;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -17,6 +18,7 @@ public sealed class StagedExecutionResult
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public IReadOnlyList<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public IReadOnlyList<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
+    public ContextManifest ContextManifest { get; init; } = new();
     public IReadOnlyList<VerificationResult> VerificationResults { get; init; } = [];
     public IReadOnlyList<ExecutionCommandEvidence> CandidateCommands { get; init; } = [];
     public DecisionResult Decision { get; init; } = new();
@@ -32,6 +34,7 @@ public sealed class StagedExecutionPipeline
     private readonly IProcessRunner _processRunner;
     private readonly IExecutionEvidenceStore _evidenceStore;
     private readonly GitWorkspaceManager _workspaceManager;
+    private readonly RepositoryContextCompiler _contextCompiler;
     private readonly RiskClassifier _riskClassifier = new();
     private readonly ExecutionController _executionController = new();
     private readonly DecisionEngine _decisionEngine = new();
@@ -40,12 +43,14 @@ public sealed class StagedExecutionPipeline
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
         IProcessRunner processRunner,
-        IExecutionEvidenceStore evidenceStore)
+        IExecutionEvidenceStore evidenceStore,
+        RepositoryContextCompiler? contextCompiler = null)
     {
         _agentAdapter = agentAdapter;
         _processRunner = processRunner;
         _evidenceStore = evidenceStore;
         _workspaceManager = new GitWorkspaceManager(processRunner);
+        _contextCompiler = contextCompiler ?? new RepositoryContextCompiler();
     }
 
     public async Task<StagedExecutionResult> RunAsync(
@@ -124,6 +129,7 @@ public sealed class StagedExecutionPipeline
                 EmptyCandidate(contract.Id, agentRunId, baseline.Commit),
                 baselineVerificationResults,
                 baselineCommands,
+                RepositoryContextCompiler.EmptyManifest(contract.Id, baseline.Commit),
                 [],
                 [],
                 baselineDecision,
@@ -133,6 +139,7 @@ public sealed class StagedExecutionPipeline
 
         stateMachine.TransitionTo(TaskState.Running);
         AgentRunResult agentResult;
+        ContextManifest contextManifest;
         CandidateChangeSet candidate;
         List<VerificationResult> verificationResults;
         DecisionResult decision;
@@ -142,6 +149,12 @@ public sealed class StagedExecutionPipeline
             baseline,
             cancellationToken))
         {
+            var compiledContext = _contextCompiler.Compile(
+                workspace.Path,
+                contract,
+                baseline.Commit);
+            contextManifest = compiledContext.Manifest;
+
             agentResult = await _agentAdapter.ExecuteAsync(new AgentExecutionRequest
             {
                 TaskId = contract.Id,
@@ -151,7 +164,9 @@ public sealed class StagedExecutionPipeline
                 Scope = contract.Scope,
                 Budget = contract.Budget,
                 Risk = risk,
-                Model = plan.Model
+                Model = plan.Model,
+                CodeContext = compiledContext.CodeContext,
+                ContextPrompt = compiledContext.Prompt
             }, cancellationToken);
 
             var applicationResult = agentResult.Success
@@ -200,6 +215,7 @@ public sealed class StagedExecutionPipeline
             candidate,
             baselineVerificationResults,
             baselineCommands,
+            contextManifest,
             verificationResults,
             candidateCommands,
             decision,
@@ -218,6 +234,7 @@ public sealed class StagedExecutionPipeline
         CandidateChangeSet candidate,
         List<VerificationResult> baselineVerificationResults,
         List<ExecutionCommandEvidence> baselineCommands,
+        ContextManifest contextManifest,
         List<VerificationResult> verificationResults,
         List<ExecutionCommandEvidence> candidateCommands,
         DecisionResult decision,
@@ -254,6 +271,7 @@ public sealed class StagedExecutionPipeline
             Baseline = baseline,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,
+            ContextManifest = contextManifest,
             CandidateChangeSet = candidate,
             VerificationResults = verificationResults,
             CandidateCommands = candidateCommands,
@@ -290,6 +308,7 @@ public sealed class StagedExecutionPipeline
             CandidateChangeSet = candidate,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,
+            ContextManifest = contextManifest,
             VerificationResults = verificationResults,
             CandidateCommands = candidateCommands,
             Decision = decision,

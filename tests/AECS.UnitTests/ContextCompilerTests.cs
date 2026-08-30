@@ -1,4 +1,5 @@
 using AECS.Application.ContextCompiler;
+using AECS.Domain.Models;
 using FluentAssertions;
 
 namespace AECS.UnitTests;
@@ -81,13 +82,13 @@ public class ContextSelectorTests
             return;
 
         var indexer = new CodebaseIndexer();
-        var index = indexer.Index(Path.Combine(samplePath, "src", "SampleProject"));
+        var index = indexer.Index(samplePath);
 
         var package = _selector.Select(
             index,
             "TASK-001",
             "Fix null handling in CustomerMapper",
-            ["src/Customers/**"]);
+            ["src/**"]);
 
         package.SelectedFiles.Should().Contain(f => f.Contains("CustomerMapper"));
         package.SelectedFiles.Should().Contain(f => f.Contains("Customer"));
@@ -104,25 +105,13 @@ public class ContextSelectorTests
             return;
 
         var indexer = new CodebaseIndexer();
-        var srcIndex = indexer.Index(Path.Combine(samplePath, "src", "SampleProject"));
-        var testIndex = indexer.Index(Path.Combine(samplePath, "tests", "SampleProject.Tests"));
-
-        // Merge indexes
-        var mergedIndex = new CodebaseIndex
-        {
-            RootPath = samplePath,
-            SourceFiles = srcIndex.SourceFiles,
-            TestFiles = testIndex.TestFiles,
-            Symbols = srcIndex.Symbols.Concat(testIndex.Symbols).ToList(),
-            Dependencies = srcIndex.Dependencies.Concat(testIndex.Dependencies)
-                .ToDictionary(kv => kv.Key, kv => kv.Value)
-        };
+        var index = indexer.Index(samplePath);
 
         var package = _selector.Select(
-            mergedIndex,
+            index,
             "TASK-001",
             "Fix null handling in CustomerMapper",
-            ["src/Customers/**"]);
+            ["src/**", "tests/**"]);
 
         package.RelevantTests.Should().Contain(t => t.Contains("CustomerMapper"));
     }
@@ -136,14 +125,138 @@ public class ContextSelectorTests
             return;
 
         var indexer = new CodebaseIndexer();
-        var index = indexer.Index(Path.Combine(samplePath, "src", "SampleProject"));
+        var index = indexer.Index(samplePath);
 
         var package = _selector.Select(
             index,
             "TASK-001",
             "Fix null handling in CustomerMapper",
-            ["src/Customers/**"]);
+            ["src/**"]);
 
         package.EstimatedTokens.Should().BeGreaterThan(0);
+    }
+}
+
+public class RepositoryContextCompilerTests
+{
+    private readonly RepositoryContextCompiler _compiler = new();
+
+    [Fact]
+    public void Compile_RespectsScopeAndExcludesForbiddenAndArtifactFiles()
+    {
+        using var repository = new TemporaryContextRepository();
+        repository.Write("src/Allowed/OrderHandler.cs", "namespace Demo; public class OrderHandler { public void Handle() { } }");
+        repository.Write("src/Forbidden/SecretHandler.cs", "namespace Demo; public class SecretHandler { }");
+        repository.Write("tests/Allowed/OrderHandlerTests.cs", "namespace Demo.Tests; public class OrderHandlerTests { }");
+        repository.Write("bin/Generated.cs", "namespace Demo; public class Generated { }");
+        repository.Write(".git/Internal.cs", "namespace Demo; public class Internal { }");
+
+        var result = _compiler.Compile(
+            repository.Path,
+            Contract(
+                objective: "Update OrderHandler and its existing tests",
+                allowed: ["src/**", "tests/**"],
+                forbidden: ["src/Forbidden/**"]),
+            "baseline-123");
+
+        result.CodeContext.Keys.Should().BeEquivalentTo(
+            "src/Allowed/OrderHandler.cs",
+            "tests/Allowed/OrderHandlerTests.cs");
+        result.Prompt.Should().Contain("class Demo.OrderHandler");
+        result.Prompt.Should().Contain("public void Handle()");
+        result.Prompt.Should().NotContain("SecretHandler");
+        result.Manifest.Source.Should().Be("isolated-git-worktree");
+        result.Manifest.Files.Should().OnlyContain(file =>
+            file.Sha256.StartsWith("sha256:") &&
+            file.IncludedSha256.StartsWith("sha256:"));
+    }
+
+    [Fact]
+    public void Compile_EnforcesDeterministicTokenAndCharacterLimits()
+    {
+        using var repository = new TemporaryContextRepository();
+        repository.Write(
+            "src/Orders/OrderHandler.cs",
+            "namespace Demo; public class OrderHandler { /*" + new string('x', 2_000) + "*/ }");
+        repository.Write(
+            "src/Orders/OrderCommand.cs",
+            "namespace Demo; public record OrderCommand(string Value);" + new string('y', 800));
+        var contract = Contract(
+            objective: "Change OrderHandler and OrderCommand",
+            allowed: ["src/**"]);
+        var options = new ContextCompilationOptions
+        {
+            MaxTokens = 250,
+            MaxCharacters = 1_000,
+            MaxFileCharacters = 300
+        };
+
+        var first = _compiler.Compile(repository.Path, contract, "baseline-123", options);
+        var second = _compiler.Compile(repository.Path, contract, "baseline-123", options);
+
+        first.Prompt.Length.Should().BeLessThanOrEqualTo(1_000);
+        first.Manifest.EstimatedTokens.Should().BeLessThanOrEqualTo(250);
+        first.Manifest.Truncated.Should().BeTrue();
+        first.Manifest.Files.Should().Contain(file => file.Truncated);
+        first.Manifest.ManifestHash.Should().Be(second.Manifest.ManifestHash);
+        first.Manifest.Id.Should().Be(second.Manifest.Id);
+        first.CodeContext.Should().BeEquivalentTo(second.CodeContext);
+    }
+
+    [Fact]
+    public void Compile_RejectsScopeTraversalBeforeReadingFiles()
+    {
+        using var repository = new TemporaryContextRepository();
+        repository.Write("src/Allowed.cs", "namespace Demo; public class Allowed { }");
+        var contract = Contract(
+            objective: "Change Allowed",
+            allowed: ["../outside/**"]);
+
+        var action = () => _compiler.Compile(repository.Path, contract, "baseline-123");
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*cannot traverse directories*");
+    }
+
+    private static TaskContract Contract(
+        string objective,
+        List<string> allowed,
+        List<string>? forbidden = null) => new()
+    {
+        Id = "CTX-TEST",
+        Objective = objective,
+        AcceptanceCriteria = ["Existing tests still pass"],
+        Scope = new ScopeDefinition
+        {
+            Allowed = allowed,
+            Forbidden = forbidden ?? []
+        },
+        Budget = ExecutionBudget.Default
+    };
+
+    private sealed class TemporaryContextRepository : IDisposable
+    {
+        public TemporaryContextRepository()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"aecs-context-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Write(string relativePath, string content)
+        {
+            var fullPath = System.IO.Path.Combine(Path, relativePath);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, content);
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+                Directory.Delete(Path, recursive: true);
+        }
     }
 }
