@@ -23,3 +23,9 @@ Model strategy by risk level:
 - Slower inference than cloud APIs, especially for 7B+ models on CPU
 - Easy to swap models: `ollama pull codellama:3b` vs `ollama pull deepseek-coder:6.7b`
 - Future cloud fallback is possible by implementing a second adapter
+
+## Implementation note — 2026-08-30
+
+The cloud fallback described above has since been implemented. The current CLI keeps Ollama as the primary runtime and, for `run` and `experiment`, can use an OpenAI-compatible `/chat/completions` endpoint when the local execution fails or returns no useful file blocks. Jarvis still uses Ollama or mock directly.
+
+The current model routing also evolved from the initial examples: R0/R1 select `qwen2.5-coder:7b`, while R2–R4 select `qwen2.5-coder:14b`. These are implementation details and may continue to evolve without replacing the architectural decision to prefer a local runtime.

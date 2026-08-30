@@ -1,0 +1,22 @@
+# Registros de decisões arquiteturais
+
+Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas consequências. O [Documento de Fundação Técnica](../../AECS_Fundacao_Tecnica_v0.1.md) descreve a tese completa; os ADRs registram escolhas concretas de implementação.
+
+| ADR | Status | Decisão |
+| --- | --- | --- |
+| [ADR-001](ADR-001-probabilistic-discovery-deterministic-enforcement.md) | Accepted | Usar modelos para descoberta e enforcement determinístico para controles críticos |
+| [ADR-002](ADR-002-modular-monolith.md) | Accepted | Iniciar como monólito modular |
+| [ADR-003](ADR-003-postgresql-evidence-store.md) | Accepted | Usar PostgreSQL como store operacional e de evidências |
+| [ADR-004](ADR-004-docker-isolation.md) | Accepted | Isolar agentes com Docker |
+| [ADR-005](ADR-005-local-llm-via-ollama.md) | Accepted | Priorizar modelos locais via Ollama |
+| [ADR-006](ADR-006-verification-before-learning.md) | Accepted | Aprender apenas com execuções verificadas |
+
+## Convenção para novos ADRs
+
+1. Use o próximo número sequencial: `ADR-NNN-titulo-curto.md`.
+2. Registre `Status` e `Date` no início.
+3. Estruture a decisão em `Context`, `Decision` e `Consequences`.
+4. Não reescreva silenciosamente uma decisão histórica. Adicione uma nota de implementação ou crie um ADR que a substitua.
+5. Atualize esta tabela no mesmo commit.
+
+Status sugeridos: `Proposed`, `Accepted`, `Deprecated` e `Superseded by ADR-NNN`.
