@@ -299,6 +299,7 @@ public sealed class StagedExecutionPipeline
             ExternalDependency = contract.Constraints.ExternalDependency
         },
         Budget = contract.Budget,
+        Execution = contract.Execution,
         Verification = contract.Verification,
         Approval = contract.Approval,
         Status = contract.Status,

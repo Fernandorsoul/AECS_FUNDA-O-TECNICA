@@ -170,6 +170,38 @@ public sealed class StagedExecutionPipelineTests
     }
 
     [Fact]
+    public async Task NestedExecutionProfile_BuildsDeclaredProject()
+    {
+        var project = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """;
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string>
+            {
+                ["Backend/Fixture.csproj"] = project
+            });
+        var contract = Contract(
+            build: true,
+            execution: new RepositoryExecutionProfile
+            {
+                WorkingDirectory = "Backend",
+                Target = "Fixture.csproj"
+            });
+
+        var result = await Pipeline(repository, Agent.Success(Response("src/new.txt")))
+            .RunAsync(repository.Path, contract, CancellationToken.None);
+
+        result.VerificationResults.Single(item => item.Verifier == "Build")
+            .Status.Should().Be(VerificationStatus.Pass);
+        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TestFailure_RejectsCandidate()
     {
         var project = """
@@ -266,7 +298,10 @@ public sealed class StagedExecutionPipelineTests
         repository.ProcessRunner,
         new JsonExecutionEvidenceStore(repository.EvidencePath));
 
-    private static TaskContract Contract(bool build = false, bool tests = false) => new()
+    private static TaskContract Contract(
+        bool build = false,
+        bool tests = false,
+        RepositoryExecutionProfile? execution = null) => new()
     {
         Id = $"E2E-{Guid.NewGuid():N}",
         Objective = "Produce a staged candidate",
@@ -279,6 +314,7 @@ public sealed class StagedExecutionPipelineTests
             MaxDurationSeconds = 60,
             MaxFilesChanged = 10
         },
+        Execution = execution ?? new RepositoryExecutionProfile(),
         Verification = new VerificationProfile
         {
             Build = build,

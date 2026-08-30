@@ -98,6 +98,39 @@ public class TaskContractParserTests
     }
 
     [Fact]
+    public void Parse_ExecutionProfile_MapsNestedSolution()
+    {
+        var yaml = """
+            task:
+              id: TASK-NESTED
+              objective: Verify a nested solution
+              execution:
+                working_directory: Backend
+                target: AgronomoPlus.sln
+            """;
+
+        var result = _parser.Parse(yaml);
+
+        result.Execution.WorkingDirectory.Should().Be("Backend");
+        result.Execution.Target.Should().Be("AgronomoPlus.sln");
+    }
+
+    [Fact]
+    public void Parse_WithoutExecutionProfile_UsesRepositoryRootDefaults()
+    {
+        var yaml = """
+            task:
+              id: TASK-DEFAULT
+              objective: Use default execution profile
+            """;
+
+        var result = _parser.Parse(yaml);
+
+        result.Execution.WorkingDirectory.Should().Be(".");
+        result.Execution.Target.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Parse_MissingTaskKey_ThrowsYamlException()
     {
         var yaml = "not_a_task: true";

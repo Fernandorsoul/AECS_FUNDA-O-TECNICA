@@ -22,11 +22,14 @@ public class BuildVerifier : IVerifier
     {
         try
         {
+            var execution = RepositoryExecutionProfileResolver.Resolve(
+                context.RepoPath,
+                context.Contract.Execution);
             var result = await _processRunner.RunAsync(new ProcessExecutionRequest
             {
                 FileName = "dotnet",
-                Arguments = ["build"],
-                WorkingDirectory = context.RepoPath,
+                Arguments = execution.BuildArguments,
+                WorkingDirectory = execution.WorkingDirectory,
                 Timeout = TimeSpan.FromSeconds(
                     Math.Max(1, context.Contract.Budget.MaxDurationSeconds))
             }, cancellationToken);
