@@ -209,7 +209,10 @@ public class JarvisRepl
                 new ScopeVerifier(),
                 new BudgetVerifier(),
                 new EB001Verifier(),
-                new EB002Verifier()
+                new EB002Verifier(),
+                new EB003Verifier(),
+                new EB004Verifier(),
+                new EB005Verifier()
             };
 
             var results = new List<VerificationResult>();
