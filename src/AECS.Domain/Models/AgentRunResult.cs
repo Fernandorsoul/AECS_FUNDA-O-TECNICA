@@ -12,4 +12,6 @@ public class AgentRunResult
     public decimal EstimatedCost { get; init; }
     public List<string> FilesChanged { get; init; } = [];
     public string ExitReason { get; init; } = string.Empty;
+    public AgentFailureKind FailureKind { get; init; }
+    public TimeSpan? RetryAfter { get; init; }
 }

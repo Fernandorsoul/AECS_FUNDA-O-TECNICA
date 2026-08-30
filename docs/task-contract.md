@@ -135,9 +135,15 @@ Embora seja aceito como texto, `security_risk: r0` é convertido inicialmente em
 | `budget.wall_clock_seconds` | inteiro | `120` |
 | `budget.max_files_changed` | inteiro | `10` |
 
-Os limites são comparados com os metadados retornados pelo adaptador após a execução. Eles rejeitam um resultado excedente, mas ainda não cancelam preventivamente a chamada. O custo do Ollama é registrado como zero; o adaptador cloud calcula uma estimativa a partir dos tokens e de uma tabela interna de preços, não de uma fatura do provedor.
+`retries` é o número de novas tentativas permitido depois da chamada inicial. Portanto, `retries: 0` permite uma tentativa e `retries: 2` permite no máximo três. Somente falhas transitórias, HTTP 429 e timeout podem ser repetidos. Cancelamento, erro permanente, violação de política ou orçamento encerram a execução imediatamente.
 
-`retries` limita um contador aceito pelo kernel, mas a CLI atual não repete automaticamente uma chamada que falhou.
+O backoff exponencial começa em um segundo e é limitado a 30 segundos. Quando o provedor envia `Retry-After`, o maior valor entre o backoff e a espera solicitada é usado, ainda sujeito ao teto. Uma nova tentativa não começa quando a espera não cabe no wall clock restante.
+
+O wall clock começa no início do pipeline e é compartilhado por preflight, agente, build, testes e testes de aceite filtrados. Cada subprocesso recebe somente o tempo global restante; timeout ou cancelamento encerra toda a árvore de processos. As etapas de limpeza do worktree e persistência de evidência continuam fora do token cancelado para preservar isolamento e auditabilidade.
+
+Tokens e custo são acumulados entre todas as tentativas. Antes de cada chamada o adaptador recebe apenas o saldo restante; os adaptadores HTTP limitam a geração ao saldo de tokens/custo estimado. Caso a telemetria final ainda informe consumo excedente, a execução falha fechada e nenhuma nova tentativa é iniciada. O custo do Ollama é registrado como zero; o adaptador cloud usa uma estimativa baseada em tokens e numa tabela interna, não uma fatura do provedor.
+
+Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` menor ou igual a zero são rejeitados pelo parser.
 
 ### Perfil de execução
 

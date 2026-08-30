@@ -17,6 +17,8 @@ public class ExecutionEvidence
     public TaskContract TaskContract { get; init; } = new();
     public AgentRun AgentRun { get; init; } = new();
     public AgentRunResult AgentResult { get; init; } = new();
+    public List<AgentAttemptEvidence> AgentAttempts { get; init; } = [];
+    public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public BaselineSnapshot Baseline { get; init; } = new();
     public List<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public List<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];

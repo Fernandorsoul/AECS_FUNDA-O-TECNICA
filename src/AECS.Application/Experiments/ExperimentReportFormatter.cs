@@ -44,10 +44,28 @@ public static class ExperimentReportFormatter
                 ? result.Objective[..32] + "..."
                 : result.Objective;
 
-            sb.AppendLine($"{result.TaskId,-10} {objective,-35} {result.Risk,-4} {decision,-10} {result.Duration.TotalSeconds,5:F1}s  ${result.EstimatedCost:F2}  {result.FilesChanged} file(s){rejectionReason}");
+            sb.AppendLine($"{result.TaskId,-10} {objective,-35} {result.Risk,-4} {decision,-10} {result.Duration.TotalSeconds,5:F1}s  ${result.EstimatedCost:F2}  {result.FilesChanged} file(s), {result.RetryCount} retry(ies){rejectionReason}");
         }
 
         sb.AppendLine();
+
+        var attemptedTasks = report.Results
+            .Where(result => result.AgentAttempts.Count > 0)
+            .ToList();
+        if (attemptedTasks.Count > 0)
+        {
+            sb.AppendLine("AGENT ATTEMPTS");
+            foreach (var result in attemptedTasks)
+            {
+                foreach (var attempt in result.AgentAttempts)
+                {
+                    sb.AppendLine(
+                        $"{result.TaskId,-10} #{attempt.AttemptNumber,-3} {attempt.FailureKind,-14} " +
+                        $"retry={attempt.WillRetry,-5} {attempt.DecisionReason}");
+                }
+            }
+            sb.AppendLine();
+        }
 
         var acceptanceCriteria = report.Results
             .Where(result => result.AcceptanceCriteria.Count > 0)

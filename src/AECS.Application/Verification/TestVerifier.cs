@@ -7,10 +7,14 @@ namespace AECS.Application.Verification;
 public class TestVerifier : IVerifier
 {
     private readonly IProcessRunner _processRunner;
+    private readonly Func<TimeSpan>? _remainingDuration;
 
-    public TestVerifier(IProcessRunner processRunner)
+    public TestVerifier(
+        IProcessRunner processRunner,
+        Func<TimeSpan>? remainingDuration = null)
     {
         _processRunner = processRunner;
+        _remainingDuration = remainingDuration;
     }
 
     public string Name => "Tests";
@@ -22,6 +26,9 @@ public class TestVerifier : IVerifier
     {
         try
         {
+            var timeout = GetTimeout(context.Contract.Budget);
+            if (timeout <= TimeSpan.Zero)
+                return Error(context.AgentRunId, "Wall-clock budget exhausted before tests");
             var execution = RepositoryExecutionProfileResolver.Resolve(
                 context.RepoPath,
                 context.Contract.Execution);
@@ -30,8 +37,7 @@ public class TestVerifier : IVerifier
                 FileName = "dotnet",
                 Arguments = execution.TestArguments,
                 WorkingDirectory = execution.WorkingDirectory,
-                Timeout = TimeSpan.FromSeconds(
-                    Math.Max(1, context.Contract.Budget.MaxDurationSeconds))
+                Timeout = timeout
             };
             var result = await _processRunner.RunAsync(request, cancellationToken);
             context.CommandEvidence.Add(
@@ -75,4 +81,13 @@ public class TestVerifier : IVerifier
         Severity = Severity.Critical,
         Message = message
     };
+
+    private TimeSpan GetTimeout(ExecutionBudget budget)
+    {
+        var configured = TimeSpan.FromSeconds(Math.Max(1, budget.MaxDurationSeconds));
+        if (_remainingDuration is null)
+            return configured;
+        var remaining = _remainingDuration();
+        return remaining < configured ? remaining : configured;
+    }
 }

@@ -33,7 +33,7 @@ public class ExperimentRunner
                 Model = execution.Model,
                 Decision = execution.Decision.Decision,
                 DecisionReason = execution.Decision.Reason,
-                Duration = execution.AgentResult.Duration,
+                Duration = execution.BudgetUsage.WallClockElapsed,
                 InputTokens = execution.AgentResult.InputTokens,
                 OutputTokens = execution.AgentResult.OutputTokens,
                 EstimatedCost = execution.AgentResult.EstimatedCost,
@@ -42,6 +42,9 @@ public class ExperimentRunner
                     result => result.Verifier,
                     result => result.Status),
                 AcceptanceCriteria = execution.AcceptanceCriteriaResults.ToList(),
+                AgentAttempts = execution.AgentAttempts.ToList(),
+                BudgetUsage = execution.BudgetUsage,
+                RetryCount = execution.AgentRun.RetryCount,
                 EvidenceId = execution.EvidenceId,
                 OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
             });

@@ -36,6 +36,15 @@ public class TaskContractParser
         var approval = model.Approval ?? model.approval;
         var acceptance = model.Acceptance ?? model.acceptance ?? [];
         var acceptanceEvidence = model.AcceptanceEvidence ?? model.acceptance_evidence ?? [];
+        var mappedBudget = new ExecutionBudget
+        {
+            MaxTokens = budget?.Tokens ?? budget?.tokens ?? 60000,
+            MaxCostUsd = budget?.Usd ?? budget?.usd ?? 0.20m,
+            MaxRetries = budget?.Retries ?? budget?.retries ?? 1,
+            MaxDurationSeconds = budget?.WallClockSeconds ?? budget?.wall_clock_seconds ?? 120,
+            MaxFilesChanged = budget?.MaxFilesChanged ?? budget?.max_files_changed ?? 10
+        };
+        ValidateBudget(mappedBudget);
 
         return new TaskContract
         {
@@ -54,14 +63,7 @@ public class TaskContractParser
                 DatabaseMigration = constraints?.DatabaseMigration ?? constraints?.database_migration ?? false,
                 ExternalDependency = constraints?.ExternalDependency ?? constraints?.external_dependency ?? false
             },
-            Budget = new ExecutionBudget
-            {
-                MaxTokens = budget?.Tokens ?? budget?.tokens ?? 60000,
-                MaxCostUsd = budget?.Usd ?? budget?.usd ?? 0.20m,
-                MaxRetries = budget?.Retries ?? budget?.retries ?? 1,
-                MaxDurationSeconds = budget?.WallClockSeconds ?? budget?.wall_clock_seconds ?? 120,
-                MaxFilesChanged = budget?.MaxFilesChanged ?? budget?.max_files_changed ?? 10
-            },
+            Budget = mappedBudget,
             Execution = new RepositoryExecutionProfile
             {
                 WorkingDirectory = execution?.WorkingDirectory
@@ -92,6 +94,20 @@ public class TaskContractParser
             Status = TaskState.ContractReady,
             CreatedAt = DateTime.UtcNow
         };
+    }
+
+    private static void ValidateBudget(ExecutionBudget budget)
+    {
+        if (budget.MaxTokens < 0)
+            throw new InvalidOperationException("budget.tokens cannot be negative.");
+        if (budget.MaxCostUsd < 0)
+            throw new InvalidOperationException("budget.usd cannot be negative.");
+        if (budget.MaxRetries < 0)
+            throw new InvalidOperationException("budget.retries cannot be negative.");
+        if (budget.MaxDurationSeconds <= 0)
+            throw new InvalidOperationException("budget.wall_clock_seconds must be positive.");
+        if (budget.MaxFilesChanged < 0)
+            throw new InvalidOperationException("budget.max_files_changed cannot be negative.");
     }
 
     private static List<AcceptanceCriterion> MapAcceptanceCriteria(

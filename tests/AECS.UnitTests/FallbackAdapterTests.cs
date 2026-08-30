@@ -112,7 +112,8 @@ public class FallbackAdapterTests
             Success = false,
             StdErr = "Timed out",
             Duration = TimeSpan.FromSeconds(120),
-            ExitReason = "Cancelled"
+            ExitReason = "Timeout",
+            FailureKind = AgentFailureKind.Timeout
         };
 
         var cloudResult = new AgentRunResult
