@@ -9,7 +9,18 @@ public class TaskStateMachine
     {
         [TaskState.Created] = [TaskState.ContractReady, TaskState.Cancelled],
         [TaskState.ContractReady] = [TaskState.Planned, TaskState.Cancelled],
-        [TaskState.Planned] = [TaskState.Running, TaskState.Cancelled],
+        [TaskState.Planned] =
+        [
+            TaskState.BaselineVerifying,
+            TaskState.Running,
+            TaskState.Cancelled
+        ],
+        [TaskState.BaselineVerifying] =
+        [
+            TaskState.Running,
+            TaskState.Rejected,
+            TaskState.Cancelled
+        ],
         [TaskState.Running] =
         [
             TaskState.CandidateProduced,

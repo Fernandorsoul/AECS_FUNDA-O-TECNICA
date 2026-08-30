@@ -31,6 +31,7 @@ public class TaskContractParser
         var scope = model.Scope ?? model.scope;
         var constraints = model.Constraints ?? model.constraints;
         var budget = model.Budget ?? model.budget;
+        var execution = model.Execution ?? model.execution;
         var verification = model.Verification ?? model.verification;
         var approval = model.Approval ?? model.approval;
 
@@ -57,6 +58,13 @@ public class TaskContractParser
                 MaxRetries = budget?.Retries ?? budget?.retries ?? 1,
                 MaxDurationSeconds = budget?.WallClockSeconds ?? budget?.wall_clock_seconds ?? 120,
                 MaxFilesChanged = budget?.MaxFilesChanged ?? budget?.max_files_changed ?? 10
+            },
+            Execution = new RepositoryExecutionProfile
+            {
+                WorkingDirectory = execution?.WorkingDirectory
+                    ?? execution?.working_directory
+                    ?? ".",
+                Target = execution?.Target ?? execution?.target ?? string.Empty
             },
             Verification = new VerificationProfile
             {
@@ -114,6 +122,8 @@ public class TaskYamlModel
     public ConstraintsYamlModel? constraints { get; set; }
     public BudgetYamlModel? Budget { get; set; }
     public BudgetYamlModel? budget { get; set; }
+    public ExecutionYamlModel? Execution { get; set; }
+    public ExecutionYamlModel? execution { get; set; }
     public VerificationYamlModel? Verification { get; set; }
     public VerificationYamlModel? verification { get; set; }
     public ApprovalYamlModel? Approval { get; set; }
@@ -150,6 +160,14 @@ public class BudgetYamlModel
     public int? wall_clock_seconds { get; set; }
     public int? MaxFilesChanged { get; set; }
     public int? max_files_changed { get; set; }
+}
+
+public class ExecutionYamlModel
+{
+    public string? WorkingDirectory { get; set; }
+    public string? working_directory { get; set; }
+    public string? Target { get; set; }
+    public string? target { get; set; }
 }
 
 public class VerificationYamlModel

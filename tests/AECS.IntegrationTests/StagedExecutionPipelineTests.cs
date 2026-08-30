@@ -155,17 +155,151 @@ public sealed class StagedExecutionPipelineTests
     }
 
     [Fact]
-    public async Task BuildFailure_RejectsCandidate()
+    public async Task CandidateBuildFailure_IsRejectedAfterGreenBaseline()
     {
-        await using var repository = await TemporaryGitRepository.CreateAsync();
-        var contract = Contract(build: true);
+        var project = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """;
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string> { ["Fixture.csproj"] = project });
+        var contract = Contract(
+            build: true,
+            execution: new RepositoryExecutionProfile { Target = "Fixture.csproj" });
+        var agent = Agent.Success(Response("src/Broken.cs"));
 
-        var result = await Pipeline(repository, Agent.Success(Response("src/new.txt")))
+        var result = await Pipeline(repository, agent)
             .RunAsync(repository.Path, contract, CancellationToken.None);
 
         result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+        result.BaselineVerificationResults.Single(item => item.Verifier == "Build")
+            .Status.Should().Be(VerificationStatus.Pass);
         result.VerificationResults.Single(item => item.Verifier == "Build")
             .Status.Should().Be(VerificationStatus.Fail);
+        result.BaselineCommands.Should().ContainSingle();
+        result.CandidateCommands.Should().ContainSingle();
+        agent.WasCalled.Should().BeTrue();
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BaselineBuildFailure_IsRejectedBeforeAgentRuns_AndPersisted()
+    {
+        var project = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <Target Name="FailBuild" BeforeTargets="CoreCompile">
+                <Error Text="intentional baseline build failure" />
+              </Target>
+            </Project>
+            """;
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string> { ["Fixture.csproj"] = project });
+        var agent = Agent.Success(Response("src/new.txt"));
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var pipeline = new StagedExecutionPipeline(agent, repository.ProcessRunner, store);
+
+        var result = await pipeline.RunAsync(
+            repository.Path,
+            Contract(
+                build: true,
+                execution: new RepositoryExecutionProfile { Target = "Fixture.csproj" }),
+            CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+        result.Decision.Reason.Should().StartWith("Baseline preflight failed:");
+        result.BaselineVerificationResults.Single(item => item.Verifier == "Build")
+            .Status.Should().Be(VerificationStatus.Fail);
+        result.VerificationResults.Should().BeEmpty();
+        result.AgentResult.ExitReason.Should().Be("BaselinePreflightFailed");
+        result.CandidateChangeSet.HasChanges.Should().BeFalse();
+        agent.WasCalled.Should().BeFalse();
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence.Should().NotBeNull();
+        evidence!.BaselineVerificationResults.Should().ContainSingle();
+        evidence.BaselineCommands.Should().ContainSingle();
+        evidence.AgentResult.ExitReason.Should().Be("BaselinePreflightFailed");
+        evidence.StateTransitions.Should().Contain(item =>
+            item.Contains("BaselineVerifying->Rejected"));
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task NestedExecutionProfile_BuildsDeclaredProject()
+    {
+        var project = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """;
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string>
+            {
+                ["Backend/Fixture.csproj"] = project
+            });
+        var contract = Contract(
+            build: true,
+            execution: new RepositoryExecutionProfile
+            {
+                WorkingDirectory = "Backend",
+                Target = "Fixture.csproj"
+            });
+
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var result = await new StagedExecutionPipeline(
+                Agent.Success(Response("src/new.txt")),
+                repository.ProcessRunner,
+                store)
+            .RunAsync(repository.Path, contract, CancellationToken.None);
+
+        result.BaselineVerificationResults.Single(item => item.Verifier == "Build")
+            .Status.Should().Be(VerificationStatus.Pass);
+        result.VerificationResults.Single(item => item.Verifier == "Build")
+            .Status.Should().Be(VerificationStatus.Pass);
+        result.BaselineCommands.Should().ContainSingle(command =>
+            command.WorkingDirectory == "Backend" &&
+            command.Arguments.SequenceEqual(new[] { "build", "Fixture.csproj" }));
+        result.CandidateCommands.Should().ContainSingle(command =>
+            command.WorkingDirectory == "Backend" &&
+            command.Arguments.SequenceEqual(new[] { "build", "Fixture.csproj" }));
+        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence.Should().NotBeNull();
+        evidence!.BaselineCommands.Should().ContainSingle();
+        evidence.CandidateCommands.Should().ContainSingle();
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvalidExecutionProfile_IsRejectedBeforeAgentRuns()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var agent = Agent.Success(Response("src/new.txt"));
+        var contract = Contract(
+            build: true,
+            execution: new RepositoryExecutionProfile
+            {
+                WorkingDirectory = "../outside",
+                Target = "Fixture.csproj"
+            });
+
+        var result = await Pipeline(repository, agent)
+            .RunAsync(repository.Path, contract, CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+        result.BaselineVerificationResults.Single(item => item.Verifier == "Build")
+            .Status.Should().Be(VerificationStatus.Error);
+        result.BaselineCommands.Should().BeEmpty();
+        agent.WasCalled.Should().BeFalse();
         (await repository.StatusAsync()).Should().BeEmpty();
     }
 
@@ -177,23 +311,32 @@ public sealed class StagedExecutionPipelineTests
               <PropertyGroup>
                 <TargetFramework>net10.0</TargetFramework>
               </PropertyGroup>
-              <Target Name="FailTests" BeforeTargets="VSTest">
+              <Target Name="FailTests" BeforeTargets="VSTest" Condition="Exists('src/fail-tests.flag')">
                 <Error Text="intentional test failure" />
               </Target>
             </Project>
             """;
         await using var repository = await TemporaryGitRepository.CreateAsync(
             new Dictionary<string, string> { ["Fixture.csproj"] = project });
-        var contract = Contract(build: true, tests: true);
+        var contract = Contract(
+            build: true,
+            tests: true,
+            execution: new RepositoryExecutionProfile { Target = "Fixture.csproj" });
 
-        var result = await Pipeline(repository, Agent.Success(Response("src/new.txt")))
+        var agent = Agent.Success(Response("src/fail-tests.flag"));
+        var result = await Pipeline(repository, agent)
             .RunAsync(repository.Path, contract, CancellationToken.None);
 
+        result.BaselineVerificationResults.Should().OnlyContain(item =>
+            item.Status == VerificationStatus.Pass);
         result.VerificationResults.Single(item => item.Verifier == "Build")
             .Status.Should().Be(VerificationStatus.Pass);
         result.VerificationResults.Single(item => item.Verifier == "Tests")
             .Status.Should().Be(VerificationStatus.Fail);
         result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+        result.BaselineCommands.Should().HaveCount(2);
+        result.CandidateCommands.Should().HaveCount(2);
+        agent.WasCalled.Should().BeTrue();
         (await repository.StatusAsync()).Should().BeEmpty();
     }
 
@@ -266,7 +409,10 @@ public sealed class StagedExecutionPipelineTests
         repository.ProcessRunner,
         new JsonExecutionEvidenceStore(repository.EvidencePath));
 
-    private static TaskContract Contract(bool build = false, bool tests = false) => new()
+    private static TaskContract Contract(
+        bool build = false,
+        bool tests = false,
+        RepositoryExecutionProfile? execution = null) => new()
     {
         Id = $"E2E-{Guid.NewGuid():N}",
         Objective = "Produce a staged candidate",
@@ -279,6 +425,7 @@ public sealed class StagedExecutionPipelineTests
             MaxDurationSeconds = 60,
             MaxFilesChanged = 10
         },
+        Execution = execution ?? new RepositoryExecutionProfile(),
         Verification = new VerificationProfile
         {
             Build = build,

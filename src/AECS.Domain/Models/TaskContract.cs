@@ -10,6 +10,7 @@ public class TaskContract
     public ScopeDefinition Scope { get; init; } = new();
     public TaskConstraints Constraints { get; init; } = new();
     public ExecutionBudget Budget { get; init; } = ExecutionBudget.Default;
+    public RepositoryExecutionProfile Execution { get; init; } = new();
     public VerificationProfile Verification { get; init; } = new();
     public ApprovalPolicy Approval { get; init; } = new();
     public TaskState Status { get; set; } = TaskState.Created;
