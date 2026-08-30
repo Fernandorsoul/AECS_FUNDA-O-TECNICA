@@ -17,6 +17,8 @@ public class TaskExperimentResult
     public int FilesChanged { get; init; }
     public Dictionary<string, VerificationStatus> Verifications { get; init; } = new();
     public int RetryCount { get; init; }
+    public Guid EvidenceId { get; init; }
+    public bool OriginalRepositoryUnchanged { get; init; }
 }
 
 public class ExperimentReport

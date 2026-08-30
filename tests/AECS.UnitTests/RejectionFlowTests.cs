@@ -10,6 +10,12 @@ namespace AECS.UnitTests;
 
 public class RejectionFlowTests
 {
+    private static CandidateChangeSet Candidate(params string[] files) => new()
+    {
+        AddedFiles = files.ToList(),
+        Diff = "diff"
+    };
+
     [Fact]
     public void FullPipeline_ScopeViolation_Rejects()
     {
@@ -46,7 +52,8 @@ public class RejectionFlowTests
 
         // 1. ControlKernel detecta violação de scope
         var kernel = new ControlKernel();
-        var kernelDecision = kernel.ValidateExecution(contract, agentResult);
+        var candidate = Candidate("src/Billing/BillingService.cs");
+        var kernelDecision = kernel.ValidateExecution(contract, agentResult, candidate);
 
         kernelDecision.Allowed.Should().BeFalse();
         kernelDecision.TargetState.Should().Be(TaskState.ScopeViolation);
@@ -58,7 +65,8 @@ public class RejectionFlowTests
             TaskId = contract.Id,
             AgentRunId = "R1",
             Contract = contract,
-            AgentResult = agentResult
+            AgentResult = agentResult,
+            CandidateChangeSet = candidate
         };
 
         var scopeResult = scopeVerifier.VerifyAsync(verificationContext, CancellationToken.None).Result;
@@ -103,7 +111,8 @@ public class RejectionFlowTests
 
         // ControlKernel detecta budget excedido
         var kernel = new ControlKernel();
-        var kernelDecision = kernel.ValidateExecution(contract, agentResult);
+        var candidate = Candidate("src/Test.cs");
+        var kernelDecision = kernel.ValidateExecution(contract, agentResult, candidate);
 
         kernelDecision.Allowed.Should().BeFalse();
         kernelDecision.TargetState.Should().Be(TaskState.BudgetExceeded);
@@ -115,7 +124,8 @@ public class RejectionFlowTests
             TaskId = contract.Id,
             AgentRunId = "R1",
             Contract = contract,
-            AgentResult = agentResult
+            AgentResult = agentResult,
+            CandidateChangeSet = candidate
         };
 
         var budgetResult = budgetVerifier.VerifyAsync(verificationContext, CancellationToken.None).Result;
@@ -157,7 +167,8 @@ public class RejectionFlowTests
 
         // ControlKernel permite
         var kernel = new ControlKernel();
-        var kernelDecision = kernel.ValidateExecution(contract, agentResult);
+        var candidate = Candidate("src/Customers/CustomerMapper.cs");
+        var kernelDecision = kernel.ValidateExecution(contract, agentResult, candidate);
         kernelDecision.Allowed.Should().BeTrue();
 
         // Todos os verificadores passam
@@ -166,7 +177,8 @@ public class RejectionFlowTests
             TaskId = contract.Id,
             AgentRunId = "R1",
             Contract = contract,
-            AgentResult = agentResult
+            AgentResult = agentResult,
+            CandidateChangeSet = candidate
         };
 
         var scopeResult = new ScopeVerifier().VerifyAsync(context, CancellationToken.None).Result;
@@ -178,7 +190,15 @@ public class RejectionFlowTests
         // DecisionEngine aprova
         var decisionEngine = new DecisionEngine();
         var decision = decisionEngine.Decide(
-            [scopeResult, budgetResult],
+            [
+                new VerificationResult { Verifier = "AgentSuccess", Status = VerificationStatus.Pass },
+                new VerificationResult { Verifier = "Application", Status = VerificationStatus.Pass },
+                new VerificationResult { Verifier = "NonEmptyChange", Status = VerificationStatus.Pass },
+                new VerificationResult { Verifier = "Build", Status = VerificationStatus.Pass },
+                new VerificationResult { Verifier = "Tests", Status = VerificationStatus.Pass },
+                scopeResult,
+                budgetResult
+            ],
             contract);
 
         decision.Decision.Should().Be(TaskDecision.Verified);

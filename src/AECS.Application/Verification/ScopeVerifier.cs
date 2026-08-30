@@ -17,7 +17,7 @@ public class ScopeVerifier : IVerifier
     {
         var violations = _scopeEnforcer.Check(
             context.Contract.Scope,
-            context.AgentResult.FilesChanged);
+            context.CandidateChangeSet.ChangedFiles);
 
         if (violations.Count > 0)
         {

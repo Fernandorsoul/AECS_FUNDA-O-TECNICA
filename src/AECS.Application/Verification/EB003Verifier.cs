@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using AECS.Application.SemanticLinter;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -18,8 +17,7 @@ public class EB003Verifier : IVerifier
     {
         try
         {
-            // Get git diff of the workspace
-            var diff = await GetGitDiffAsync(context.RepoPath, cancellationToken);
+            var diff = context.CandidateChangeSet.Diff;
 
             if (string.IsNullOrEmpty(diff))
             {
@@ -75,31 +73,4 @@ public class EB003Verifier : IVerifier
         }
     }
 
-    private static async Task<string> GetGitDiffAsync(string repoPath, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var processInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                Arguments = "diff HEAD",
-                WorkingDirectory = repoPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = new Process { StartInfo = processInfo };
-            process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-
-            return process.ExitCode == 0 ? output : "";
-        }
-        catch
-        {
-            return "";
-        }
-    }
 }

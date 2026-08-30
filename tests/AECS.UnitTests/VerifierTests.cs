@@ -28,6 +28,11 @@ public class ScopeVerifierTests
             AgentResult = new AgentRunResult
             {
                 FilesChanged = ["src/Customers/CustomerMapper.cs", "tests/Customers/CustomerMapperTests.cs"]
+            },
+            CandidateChangeSet = new CandidateChangeSet
+            {
+                AddedFiles = ["src/Customers/CustomerMapper.cs", "tests/Customers/CustomerMapperTests.cs"],
+                Diff = "diff"
             }
         };
 
@@ -56,6 +61,11 @@ public class ScopeVerifierTests
             AgentResult = new AgentRunResult
             {
                 FilesChanged = ["src/Billing/BillingService.cs"]
+            },
+            CandidateChangeSet = new CandidateChangeSet
+            {
+                AddedFiles = ["src/Billing/BillingService.cs"],
+                Diff = "diff"
             }
         };
 
@@ -63,6 +73,34 @@ public class ScopeVerifierTests
 
         result.Status.Should().Be(VerificationStatus.Fail);
         result.Message.Should().Contain("Scope violations");
+    }
+
+    [Fact]
+    public async Task VerifyAsync_IgnoresAgentTelemetry_AndUsesCandidateChangeSet()
+    {
+        var context = new VerificationContext
+        {
+            TaskId = "T1",
+            AgentRunId = "R1",
+            Contract = new TaskContract
+            {
+                Scope = new ScopeDefinition { Allowed = ["src/Allowed/**"] }
+            },
+            AgentResult = new AgentRunResult
+            {
+                FilesChanged = ["src/Allowed/claimed.cs"]
+            },
+            CandidateChangeSet = new CandidateChangeSet
+            {
+                AddedFiles = ["src/Forbidden/actual.cs"],
+                Diff = "diff"
+            }
+        };
+
+        var result = await _verifier.VerifyAsync(context, CancellationToken.None);
+
+        result.Status.Should().Be(VerificationStatus.Fail);
+        result.Message.Should().Contain("actual.cs");
     }
 }
 
@@ -88,6 +126,11 @@ public class BudgetVerifierTests
                 EstimatedCost = 0.05m,
                 Duration = TimeSpan.FromSeconds(30),
                 FilesChanged = ["src/Test.cs"]
+            },
+            CandidateChangeSet = new CandidateChangeSet
+            {
+                AddedFiles = ["src/Test.cs"],
+                Diff = "diff"
             }
         };
 
@@ -115,6 +158,11 @@ public class BudgetVerifierTests
                 EstimatedCost = 0.05m,
                 Duration = TimeSpan.FromSeconds(30),
                 FilesChanged = ["src/Test.cs"]
+            },
+            CandidateChangeSet = new CandidateChangeSet
+            {
+                AddedFiles = ["src/Test.cs"],
+                Diff = "diff"
             }
         };
 

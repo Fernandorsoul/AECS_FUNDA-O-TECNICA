@@ -46,6 +46,9 @@ public class JarvisCommandTests
     {
         var results = new List<VerificationResult>
         {
+            new() { Verifier = "AgentSuccess", Status = VerificationStatus.Pass },
+            new() { Verifier = "Application", Status = VerificationStatus.Pass },
+            new() { Verifier = "NonEmptyChange", Status = VerificationStatus.Pass },
             new() { Verifier = "Build", Status = VerificationStatus.Pass },
             new() { Verifier = "Tests", Status = VerificationStatus.Pass },
             new() { Verifier = "Scope", Status = VerificationStatus.Pass },
@@ -68,6 +71,9 @@ public class JarvisCommandTests
     {
         var results = new List<VerificationResult>
         {
+            new() { Verifier = "AgentSuccess", Status = VerificationStatus.Pass },
+            new() { Verifier = "Application", Status = VerificationStatus.Pass },
+            new() { Verifier = "NonEmptyChange", Status = VerificationStatus.Pass },
             new() { Verifier = "Build", Status = VerificationStatus.Fail, Message = "Build failed" },
             new() { Verifier = "Tests", Status = VerificationStatus.Pass },
             new() { Verifier = "Scope", Status = VerificationStatus.Pass },

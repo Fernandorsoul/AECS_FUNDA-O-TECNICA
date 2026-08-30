@@ -14,19 +14,36 @@ public class MockAgentAdapter : IAgentAdapter
         if (PresetResult is not null)
             return Task.FromResult(PresetResult);
 
-        // Default: simulate a successful execution
+        var candidatePath = CreateCandidatePath(request.Scope.Allowed.FirstOrDefault());
+
         return Task.FromResult(new AgentRunResult
         {
             Success = true,
-            StdOut = $"Mock execution for: {request.Objective}",
+            StdOut = $"FILE: {candidatePath}\n```text\n" +
+                $"AECS mock candidate for task {request.TaskId}\n```\n",
             StdErr = string.Empty,
             ExitCode = 0,
             Duration = TimeSpan.FromSeconds(5),
             InputTokens = 500,
             OutputTokens = 300,
             EstimatedCost = 0m,
-            FilesChanged = ["src/Customers/CustomerMapper.cs"],
+            FilesChanged = [candidatePath],
             ExitReason = "Completed"
         });
+    }
+
+    private static string CreateCandidatePath(string? allowedPattern)
+    {
+        if (string.IsNullOrWhiteSpace(allowedPattern))
+            return "aecs-mock-candidate.txt";
+
+        var normalized = allowedPattern.Replace('\\', '/');
+        if (normalized.EndsWith("/**", StringComparison.Ordinal))
+            return $"{normalized[..^3].TrimEnd('/')}/aecs-mock-candidate.txt";
+
+        if (normalized.Contains('*'))
+            return normalized.Replace("**", "aecs-mock-candidate.txt").Replace("*", "aecs-mock-candidate");
+
+        return normalized;
     }
 }

@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\AECS.Application\AECS.Application.csproj" />
     <ProjectReference Include="..\..\src\AECS.Infrastructure\AECS.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\AECS.Domain\AECS.Domain.csproj" />
   </ItemGroup>

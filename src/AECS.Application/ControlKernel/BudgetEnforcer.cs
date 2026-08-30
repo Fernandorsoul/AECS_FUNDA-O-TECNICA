@@ -12,7 +12,11 @@ public class BudgetViolation
 
 public class BudgetEnforcer
 {
-    public BudgetViolation? Check(ExecutionBudget budget, AgentRunResult result, int retryCount)
+    public BudgetViolation? Check(
+        ExecutionBudget budget,
+        AgentRunResult result,
+        int retryCount,
+        int authoritativeFilesChanged)
     {
         if (result.InputTokens + result.OutputTokens > budget.MaxTokens)
         {
@@ -58,13 +62,13 @@ public class BudgetEnforcer
             };
         }
 
-        if (result.FilesChanged.Count > budget.MaxFilesChanged)
+        if (authoritativeFilesChanged > budget.MaxFilesChanged)
         {
             return new BudgetViolation
             {
                 LimitType = "MaxFilesChanged",
-                Message = $"Files changed limit exceeded: {result.FilesChanged.Count} > {budget.MaxFilesChanged}",
-                ActualValue = result.FilesChanged.Count,
+                Message = $"Files changed limit exceeded: {authoritativeFilesChanged} > {budget.MaxFilesChanged}",
+                ActualValue = authoritativeFilesChanged,
                 LimitValue = budget.MaxFilesChanged
             };
         }

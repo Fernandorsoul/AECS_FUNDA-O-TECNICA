@@ -4,11 +4,14 @@ using AECS.Application.ContextCompiler;
 using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
 using AECS.Application.Parsing;
+using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
+using AECS.Infrastructure.Processes;
+using AECS.Infrastructure.Repositories;
 
 namespace AECS.Cli.Jarvis;
 
@@ -135,222 +138,36 @@ public class JarvisRepl
         }
 
         var contract = _parser.ParseFromFile(taskFile);
-        var risk = _riskClassifier.Classify(contract);
-
-        contract = new TaskContract
-        {
-            Id = contract.Id,
-            Objective = contract.Objective,
-            AcceptanceCriteria = contract.AcceptanceCriteria,
-            Scope = contract.Scope,
-            Constraints = new TaskConstraints
-            {
-                SecurityRisk = risk,
-                DatabaseMigration = contract.Constraints.DatabaseMigration,
-                ExternalDependency = contract.Constraints.ExternalDependency
-            },
-            Budget = contract.Budget,
-            Verification = contract.Verification,
-            Approval = contract.Approval,
-            Status = contract.Status,
-            CreatedAt = contract.CreatedAt
-        };
-
-        // Context Compiler: Index and select relevant files
-        var sourcePath = Path.Combine(_repoPath, "src");
-        var testPath = Path.Combine(_repoPath, "tests");
-        CodebaseIndex? index = null;
-        
-        if (Directory.Exists(sourcePath))
-        {
-            var indexer = new CodebaseIndexer();
-            index = indexer.Index(sourcePath);
-            
-            // Merge test files if available
-            if (Directory.Exists(testPath))
-            {
-                var testIndex = indexer.Index(testPath);
-                index = new CodebaseIndex
-                {
-                    RootPath = index.RootPath,
-                    SourceFiles = index.SourceFiles,
-                    TestFiles = testIndex.TestFiles,
-                    Symbols = index.Symbols.Concat(testIndex.Symbols).ToList(),
-                    Dependencies = index.Dependencies.Concat(testIndex.Dependencies)
-                        .ToDictionary(kv => kv.Key, kv => kv.Value)
-                };
-            }
-        }
-
-        ContextPackage? contextPackage = null;
-        string? compiledPrompt = null;
-        if (index != null)
-        {
-            var selector = new ContextSelector();
-            contextPackage = selector.Select(index, contract.Id, contract.Objective, contract.Scope.Allowed);
-            
-            // Compilar contexto em prompt estruturado com código-fonte
-            var compiler = new ContextCompiler();
-            compiledPrompt = compiler.Compile(contextPackage, index.RootPath, contract.Objective);
-        }
-
-        var plan = await _executionController.PlanAsync(contract, ct);
-
-        Console.WriteLine($"Task: {contract.Objective}");
-        Console.WriteLine($"Risk: {risk}");
-        Console.WriteLine($"Model: {plan.Model}");
-        if (contextPackage != null)
-        {
-            Console.WriteLine($"Context: {contextPackage.SelectedFiles.Count} files, ~{contextPackage.EstimatedTokens} tokens");
-        }
-        Console.WriteLine();
-
         IAgentAdapter agent = _useMock
             ? new MockAgentAdapter()
             : new OllamaAdapter(new HttpClient());
 
-        // Build CodeContext from selected files (método legado, mantido para compatibilidade)
-        var codeContext = new Dictionary<string, string>();
-        if (contextPackage != null && index != null)
-        {
-            foreach (var filePath in contextPackage.SelectedFiles)
-            {
-                var fullPath = Path.Combine(index.RootPath, filePath);
-                if (File.Exists(fullPath))
-                {
-                    var content = await File.ReadAllTextAsync(fullPath, ct);
-                    codeContext[filePath] = content;
-                }
-            }
-        }
-
-        // Usar o prompt compilado se disponível, senão usar o método legado
-        var request = new AgentExecutionRequest
-        {
-            TaskId = contract.Id,
-            Objective = contract.Objective,
-            AcceptanceCriteria = contract.AcceptanceCriteria,
-            RepoPath = _repoPath,
-            Scope = contract.Scope,
-            Budget = contract.Budget,
-            Risk = risk,
-            Model = plan.Model,
-            CodeContext = codeContext,
-            Prompt = compiledPrompt ?? BuildLegacyPrompt(contract, codeContext)
-        };
-
-        var agentResult = await agent.ExecuteAsync(request, ct);
-
-        // Apply model changes to workspace
-        if (agentResult.Success && !string.IsNullOrEmpty(agentResult.StdOut))
-        {
-            var fileApplicator = new FileApplicator();
-            var applyResult = fileApplicator.ApplyChanges(agentResult.StdOut, _repoPath);
-            if (applyResult.AppliedChanges.Count > 0)
-            {
-                agentResult = new AgentRunResult
-                {
-                    Success = agentResult.Success,
-                    StdOut = agentResult.StdOut,
-                    StdErr = agentResult.StdErr,
-                    ExitCode = agentResult.ExitCode,
-                    Duration = agentResult.Duration,
-                    InputTokens = agentResult.InputTokens,
-                    OutputTokens = agentResult.OutputTokens,
-                    EstimatedCost = agentResult.EstimatedCost,
-                    FilesChanged = applyResult.AppliedChanges.Select(c => c.FilePath).ToList(),
-                    ExitReason = agentResult.ExitReason
-                };
-                Console.WriteLine($"  [AECS] Applied {applyResult.AppliedChanges.Count} file change(s) to workspace");
-            }
-        }
-
-        var kernelDecision = _kernel.ValidateExecution(contract, agentResult);
-
-        TaskDecision decision;
-        string reason;
-
-        if (!kernelDecision.Allowed)
-        {
-            decision = TaskDecision.Rejected;
-            reason = kernelDecision.Reason;
-        }
-        else
-        {
-            var verificationContext = new VerificationContext
-            {
-                TaskId = contract.Id,
-                AgentRunId = Guid.NewGuid().ToString(),
-                RepoPath = _repoPath,
-                Contract = contract,
-                AgentResult = agentResult
-            };
-
-            // Verificadores obrigatórios (gates)
-            var verifiers = new List<IVerifier>
-            {
-                new BuildVerifier(),
-                new TestVerifier(),
-                new ScopeVerifier(),
-                new BudgetVerifier()
-            };
-
-            // Verificadores semânticos informativos (EB001-EB005) - não bloqueiam
-            var semanticVerifiers = new List<IVerifier>
-            {
-                new EB001Verifier(),
-                new EB002Verifier(),
-                new EB003Verifier(),
-                new EB004Verifier(),
-                new EB005Verifier()
-            };
-
-            var results = new List<VerificationResult>();
-            
-            // Executa verificadores obrigatórios
-            foreach (var v in verifiers)
-                results.Add(await v.VerifyAsync(verificationContext, ct));
-            
-            // Executa verificadores semânticos apenas para logging/informação
-            foreach (var v in semanticVerifiers)
-            {
-                var semanticResult = await v.VerifyAsync(verificationContext, ct);
-                // Adiciona aos resultados mas não afeta decisão (já tratado no DecisionEngine)
-                results.Add(semanticResult);
-                
-                // Log informativo se houver violações
-                if (semanticResult.Status == VerificationStatus.Fail)
-                {
-                    Console.WriteLine($"  [INFO] {v.Name}: {semanticResult.Message}");
-                }
-            }
-
-            var d = _decisionEngine.Decide(results, contract);
-            decision = d.Decision;
-            reason = d.Reason;
-        }
+        var execution = await CreatePipeline(agent).RunAsync(_repoPath, contract, ct);
 
         var result = new TaskExperimentResult
         {
-            TaskId = contract.Id,
-            Objective = contract.Objective,
-            Risk = risk,
-            Model = plan.Model,
-            Decision = decision,
-            DecisionReason = reason,
-            Duration = agentResult.Duration,
-            InputTokens = agentResult.InputTokens,
-            OutputTokens = agentResult.OutputTokens,
-            EstimatedCost = agentResult.EstimatedCost,
-            FilesChanged = agentResult.FilesChanged.Count
+            TaskId = execution.Contract.Id,
+            Objective = execution.Contract.Objective,
+            Risk = execution.Risk,
+            Model = execution.Model,
+            Decision = execution.Decision.Decision,
+            DecisionReason = execution.Decision.Reason,
+            Duration = execution.AgentResult.Duration,
+            InputTokens = execution.AgentResult.InputTokens,
+            OutputTokens = execution.AgentResult.OutputTokens,
+            EstimatedCost = execution.AgentResult.EstimatedCost,
+            FilesChanged = execution.CandidateChangeSet.ChangedFiles.Count,
+            EvidenceId = execution.EvidenceId,
+            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
         };
 
         _history.Add(result);
         _lastResult = result;
 
-        Console.WriteLine($"Decision: {decision}");
-        Console.WriteLine($"Duration: {agentResult.Duration.TotalSeconds:F1}s");
-        Console.WriteLine($"Cost: ${agentResult.EstimatedCost:F2}");
+        Console.WriteLine($"Decision: {execution.Decision.Decision}");
+        Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
+        Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
+        Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
     }
 
     private async Task RunExperiment(string tasksDir, CancellationToken ct)
@@ -376,7 +193,7 @@ public class JarvisRepl
             ? new MockAgentAdapter()
             : new OllamaAdapter(new HttpClient());
 
-        var runner = new ExperimentRunner(agent);
+        var runner = new ExperimentRunner(CreatePipeline(agent));
         var report = await runner.RunAsync(_repoPath, taskFiles, ct);
 
         Console.WriteLine(ExperimentReportFormatter.Format(report));
@@ -384,6 +201,14 @@ public class JarvisRepl
         _history.AddRange(report.Results);
         if (report.Results.Count > 0)
             _lastResult = report.Results.Last();
+    }
+
+    private static StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
+    {
+        var processRunner = new SystemProcessRunner();
+        var evidenceStore = new JsonExecutionEvidenceStore(
+            JsonExecutionEvidenceStore.GetDefaultRootPath());
+        return new StagedExecutionPipeline(agent, processRunner, evidenceStore);
     }
 
     private void ShowStatus()

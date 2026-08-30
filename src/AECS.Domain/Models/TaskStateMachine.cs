@@ -12,11 +12,17 @@ public class TaskStateMachine
         [TaskState.Planned] = [TaskState.Running, TaskState.Cancelled],
         [TaskState.Running] =
         [
-            TaskState.Verifying,
+            TaskState.CandidateProduced,
             TaskState.BudgetExceeded,
             TaskState.ScopeViolation,
             TaskState.TimedOut,
             TaskState.AgentFailed,
+            TaskState.Cancelled
+        ],
+        [TaskState.CandidateProduced] =
+        [
+            TaskState.Verifying,
+            TaskState.Rejected,
             TaskState.Cancelled
         ],
         [TaskState.Verifying] =

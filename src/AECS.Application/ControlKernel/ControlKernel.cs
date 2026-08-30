@@ -22,10 +22,15 @@ public class ControlKernel
     public KernelDecision ValidateExecution(
         TaskContract contract,
         AgentRunResult agentResult,
+        CandidateChangeSet candidateChangeSet,
         int retryCount = 0)
     {
         // Use circuit breaker for comprehensive check
-        var breakerResult = _circuitBreaker.Check(contract, agentResult, retryCount);
+        var breakerResult = _circuitBreaker.Check(
+            contract,
+            agentResult,
+            candidateChangeSet,
+            retryCount);
 
         if (breakerResult.Tripped)
         {

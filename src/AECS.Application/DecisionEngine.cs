@@ -20,14 +20,30 @@ public class DecisionEngine
         var requiredVerifiers = GetRequiredVerifiers(contract);
         var failures = new List<string>();
 
-        // Regra 1: qualquer verificador obrigatório com Fail → REJECTED
-        foreach (var result in results)
+        foreach (var verifier in requiredVerifiers)
         {
-            if (requiredVerifiers.Contains(result.Verifier) &&
-                result.Status is VerificationStatus.Fail or VerificationStatus.Error)
+            var matches = results
+                .Where(result => string.Equals(
+                    result.Verifier,
+                    verifier,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matches.Count == 0)
             {
-                failures.Add($"{result.Verifier}: {result.Message}");
+                failures.Add($"{verifier}: required verifier result is missing");
+                continue;
             }
+
+            if (matches.Count > 1)
+            {
+                failures.Add($"{verifier}: duplicate verifier results are ambiguous");
+                continue;
+            }
+
+            var result = matches[0];
+            if (result.Status != VerificationStatus.Pass)
+                failures.Add($"{result.Verifier}: {result.Status} - {result.Message}");
         }
 
         if (failures.Count > 0)
@@ -36,46 +52,51 @@ public class DecisionEngine
             {
                 Decision = TaskDecision.Rejected,
                 TargetState = TaskState.Rejected,
-                Reason = $"Required verifiers failed: {string.Join("; ", failures)}",
+                Reason = $"Required verifiers did not pass: {string.Join("; ", failures)}",
                 Failures = failures
             };
         }
 
-        // Regra 2: todos passam + approval=human → HUMAN_REVIEW_REQUIRED
         if (contract.Approval.Production == ApprovalLevel.Human)
         {
             return new DecisionResult
             {
                 Decision = TaskDecision.HumanReviewRequired,
                 TargetState = TaskState.HumanReviewRequired,
-                Reason = "All verifiers passed but human approval required"
+                Reason = "All required verifiers passed but human approval is required"
             };
         }
 
-        // Regra 3: todos passam + approval=none → VERIFIED
         return new DecisionResult
         {
             Decision = TaskDecision.Verified,
             TargetState = TaskState.Verified,
-            Reason = "All required verifiers passed"
+            Reason = "All required verifiers are present and passed"
         };
     }
 
-    private static HashSet<string> GetRequiredVerifiers(TaskContract contract)
+    public static IReadOnlySet<string> GetRequiredVerifiers(TaskContract contract)
     {
-        var required = new HashSet<string>();
+        var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "AgentSuccess",
+            "Application",
+            "NonEmptyChange",
+            "Scope",
+            "Budget"
+        };
 
         if (contract.Verification.Build)
             required.Add("Build");
 
-        if (contract.Verification.UnitTests)
+        if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
             required.Add("Tests");
 
-        if (contract.Verification.Scope)
-            required.Add("Scope");
+        if (contract.Verification.Architecture)
+            required.Add("EB001-Architecture");
 
-        if (contract.Verification.Budget)
-            required.Add("Budget");
+        if (contract.Verification.SecurityScan)
+            required.Add("SecurityScan");
 
         // EB001-EB005 são verificadores semânticos informativos, não gates
         // Eles podem ter falsos positivos e não devem bloquear automaticamente

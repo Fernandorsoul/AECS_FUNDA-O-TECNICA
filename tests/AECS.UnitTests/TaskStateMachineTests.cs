@@ -56,12 +56,13 @@ public class TaskStateMachineTests
         machine.TransitionTo(TaskState.ContractReady);
         machine.TransitionTo(TaskState.Planned);
         machine.TransitionTo(TaskState.Running);
+        machine.TransitionTo(TaskState.CandidateProduced);
         machine.TransitionTo(TaskState.Verifying);
         machine.TransitionTo(TaskState.Verified);
 
         machine.CurrentState.Should().Be(TaskState.Verified);
         machine.IsTerminal.Should().BeTrue();
-        machine.History.Should().HaveCount(5);
+        machine.History.Should().HaveCount(6);
     }
 
     [Fact]
@@ -127,6 +128,7 @@ public class TaskStateMachineTests
         machine.TransitionTo(TaskState.ContractReady);
         machine.TransitionTo(TaskState.Planned);
         machine.TransitionTo(TaskState.Running);
+        machine.TransitionTo(TaskState.CandidateProduced);
         machine.TransitionTo(TaskState.Verifying);
 
         machine.TransitionTo(TaskState.Rejected);
@@ -142,6 +144,7 @@ public class TaskStateMachineTests
         machine.TransitionTo(TaskState.ContractReady);
         machine.TransitionTo(TaskState.Planned);
         machine.TransitionTo(TaskState.Running);
+        machine.TransitionTo(TaskState.CandidateProduced);
         machine.TransitionTo(TaskState.Verifying);
 
         machine.TransitionTo(TaskState.HumanReviewRequired);
@@ -178,6 +181,7 @@ public class TaskStateMachineTests
                     machine.TransitionTo(TaskState.ContractReady);
                     machine.TransitionTo(TaskState.Planned);
                     machine.TransitionTo(TaskState.Running);
+                    machine.TransitionTo(TaskState.CandidateProduced);
                     machine.TransitionTo(TaskState.Verifying);
                     machine.TransitionTo(TaskState.Verified);
                     break;
@@ -185,6 +189,7 @@ public class TaskStateMachineTests
                     machine.TransitionTo(TaskState.ContractReady);
                     machine.TransitionTo(TaskState.Planned);
                     machine.TransitionTo(TaskState.Running);
+                    machine.TransitionTo(TaskState.CandidateProduced);
                     machine.TransitionTo(TaskState.Verifying);
                     machine.TransitionTo(TaskState.Rejected);
                     break;
@@ -192,6 +197,7 @@ public class TaskStateMachineTests
                     machine.TransitionTo(TaskState.ContractReady);
                     machine.TransitionTo(TaskState.Planned);
                     machine.TransitionTo(TaskState.Running);
+                    machine.TransitionTo(TaskState.CandidateProduced);
                     machine.TransitionTo(TaskState.Verifying);
                     machine.TransitionTo(TaskState.HumanReviewRequired);
                     break;

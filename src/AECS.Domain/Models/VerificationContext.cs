@@ -7,4 +7,5 @@ public class VerificationContext
     public string RepoPath { get; init; } = string.Empty;
     public TaskContract Contract { get; init; } = new();
     public AgentRunResult AgentResult { get; init; } = new();
+    public CandidateChangeSet CandidateChangeSet { get; init; } = new();
 }

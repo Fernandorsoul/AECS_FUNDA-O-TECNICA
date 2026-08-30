@@ -18,7 +18,8 @@ public class BudgetVerifier : IVerifier
         var violation = _budgetEnforcer.Check(
             context.Contract.Budget,
             context.AgentResult,
-            retryCount: 0);
+            retryCount: 0,
+            context.CandidateChangeSet.ChangedFiles.Count);
 
         if (violation is not null)
         {

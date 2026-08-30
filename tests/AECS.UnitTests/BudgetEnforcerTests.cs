@@ -26,7 +26,7 @@ public class BudgetEnforcerTests
         var budget = ExecutionBudget.Default;
         var result = CreateResult();
 
-        var violation = _enforcer.Check(budget, result, 0);
+        var violation = _enforcer.Check(budget, result, 0, result.FilesChanged.Count);
 
         violation.Should().BeNull();
     }
@@ -41,7 +41,7 @@ public class BudgetEnforcerTests
         };
         var result = CreateResult(inputTokens: 80, outputTokens: 30);
 
-        var violation = _enforcer.Check(budget, result, 0);
+        var violation = _enforcer.Check(budget, result, 0, result.FilesChanged.Count);
 
         violation.Should().NotBeNull();
         violation!.LimitType.Should().Be("MaxTokens");
@@ -58,7 +58,7 @@ public class BudgetEnforcerTests
         };
         var result = CreateResult(cost: 0.15m);
 
-        var violation = _enforcer.Check(budget, result, 0);
+        var violation = _enforcer.Check(budget, result, 0, result.FilesChanged.Count);
 
         violation.Should().NotBeNull();
         violation!.LimitType.Should().Be("MaxCostUsd");
@@ -74,7 +74,7 @@ public class BudgetEnforcerTests
         };
         var result = CreateResult();
 
-        var violation = _enforcer.Check(budget, result, retryCount: 3);
+        var violation = _enforcer.Check(budget, result, 3, result.FilesChanged.Count);
 
         violation.Should().NotBeNull();
         violation!.LimitType.Should().Be("MaxRetries");
@@ -90,7 +90,7 @@ public class BudgetEnforcerTests
         };
         var result = CreateResult(durationSeconds: 120);
 
-        var violation = _enforcer.Check(budget, result, 0);
+        var violation = _enforcer.Check(budget, result, 0, result.FilesChanged.Count);
 
         violation.Should().NotBeNull();
         violation!.LimitType.Should().Be("MaxDurationSeconds");
@@ -106,7 +106,7 @@ public class BudgetEnforcerTests
         };
         var result = CreateResult(filesChanged: 5);
 
-        var violation = _enforcer.Check(budget, result, 0);
+        var violation = _enforcer.Check(budget, result, 0, result.FilesChanged.Count);
 
         violation.Should().NotBeNull();
         violation!.LimitType.Should().Be("MaxFilesChanged");

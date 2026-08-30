@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -7,49 +6,67 @@ namespace AECS.Application.Verification;
 
 public class TestVerifier : IVerifier
 {
+    private readonly IProcessRunner _processRunner;
+
+    public TestVerifier(IProcessRunner processRunner)
+    {
+        _processRunner = processRunner;
+    }
+
     public string Name => "Tests";
     public VerificationCategory Category => VerificationCategory.HighConfidence;
 
     public async Task<VerificationResult> VerifyAsync(
-        VerificationContext context, CancellationToken cancellationToken)
+        VerificationContext context,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var processInfo = new ProcessStartInfo
+            var result = await _processRunner.RunAsync(new ProcessExecutionRequest
             {
                 FileName = "dotnet",
-                Arguments = "test --no-build",
+                Arguments = ["test", "--no-build"],
                 WorkingDirectory = context.RepoPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+                Timeout = TimeSpan.FromSeconds(
+                    Math.Max(1, context.Contract.Budget.MaxDurationSeconds))
+            }, cancellationToken);
 
-            using var process = new Process { StartInfo = processInfo };
-            process.Start();
-            var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
+            if (result.TimedOut || result.Cancelled)
+            {
+                return Error(
+                    context.AgentRunId,
+                    result.TimedOut
+                        ? "Tests timed out; process tree terminated"
+                        : "Tests cancelled; process tree terminated");
+            }
+
+            var output = string.Join(Environment.NewLine, new[]
+            {
+                result.StandardOutput,
+                result.StandardError
+            }.Where(value => !string.IsNullOrWhiteSpace(value))).Trim();
 
             return new VerificationResult
             {
                 AgentRunId = context.AgentRunId,
                 Verifier = Name,
-                Status = process.ExitCode == 0 ? VerificationStatus.Pass : VerificationStatus.Fail,
-                Severity = process.ExitCode == 0 ? Severity.Info : Severity.Error,
-                Message = process.ExitCode == 0 ? "All tests passed" : $"Tests failed: {stderr}"
+                Status = result.ExitCode == 0 ? VerificationStatus.Pass : VerificationStatus.Fail,
+                Severity = result.ExitCode == 0 ? Severity.Info : Severity.Error,
+                Message = result.ExitCode == 0 ? "All tests passed" : $"Tests failed: {output}"
             };
         }
         catch (Exception ex)
         {
-            return new VerificationResult
-            {
-                AgentRunId = context.AgentRunId,
-                Verifier = Name,
-                Status = VerificationStatus.Error,
-                Severity = Severity.Critical,
-                Message = $"Test verifier error: {ex.Message}"
-            };
+            return Error(context.AgentRunId, $"Test verifier error: {ex.Message}");
         }
     }
+
+    private VerificationResult Error(string agentRunId, string message) => new()
+    {
+        AgentRunId = agentRunId,
+        Verifier = Name,
+        Status = VerificationStatus.Error,
+        Severity = Severity.Critical,
+        Message = message
+    };
 }

@@ -41,10 +41,17 @@ public class CircuitBreakerTests
         FilesChanged = files?.ToList() ?? ["src/Test.cs"]
     };
 
+    private static CandidateChangeSet Candidate(AgentRunResult result) => new()
+    {
+        AddedFiles = result.FilesChanged.ToList(),
+        Diff = "diff"
+    };
+
     [Fact]
     public void Check_WithinLimits_NotTripped()
     {
-        var result = _breaker.Check(CreateContract(), CreateResult(), 0);
+        var agentResult = CreateResult();
+        var result = _breaker.Check(CreateContract(), agentResult, Candidate(agentResult), 0);
 
         result.Tripped.Should().BeFalse();
     }
@@ -55,7 +62,7 @@ public class CircuitBreakerTests
         var contract = CreateContract(maxTokens: 100);
         var result = CreateResult(tokens: 500);
 
-        var breakerResult = _breaker.Check(contract, result, 0);
+        var breakerResult = _breaker.Check(contract, result, Candidate(result), 0);
 
         breakerResult.Tripped.Should().BeTrue();
         breakerResult.LimitType.Should().Be("MaxTokens");
@@ -69,7 +76,7 @@ public class CircuitBreakerTests
         var contract = CreateContract(allowed: ["src/Customers/**"]);
         var result = CreateResult(files: ["src/Billing/Billing.cs"]);
 
-        var breakerResult = _breaker.Check(contract, result, 0);
+        var breakerResult = _breaker.Check(contract, result, Candidate(result), 0);
 
         breakerResult.Tripped.Should().BeTrue();
         breakerResult.LimitType.Should().Be("ScopeViolation");
@@ -83,7 +90,7 @@ public class CircuitBreakerTests
         var contract = CreateContract(maxDuration: 60);
         var result = CreateResult(durationSec: 120);
 
-        var breakerResult = _breaker.Check(contract, result, 0);
+        var breakerResult = _breaker.Check(contract, result, Candidate(result), 0);
 
         breakerResult.Tripped.Should().BeTrue();
         breakerResult.LimitType.Should().Be("MaxDurationSeconds");

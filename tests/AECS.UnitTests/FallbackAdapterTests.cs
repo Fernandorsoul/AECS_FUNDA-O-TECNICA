@@ -40,7 +40,7 @@ public class FallbackAdapterTests
     }
 
     [Fact]
-    public async Task LocalFails_NoFiles_FallsBackToCloud()
+    public async Task LocalSucceeds_WithoutFileTelemetry_DoesNotFallback()
     {
         var localResult = new AgentRunResult
         {
@@ -67,11 +67,11 @@ public class FallbackAdapterTests
 
         var result = await fallback.ExecuteAsync(CreateRequest(), CancellationToken.None);
 
-        result.FilesChanged.Should().Contain("src/Fixed.cs");
-        result.ExitReason.Should().Be("CompletedViaFallback");
-        result.Duration.Should().Be(TimeSpan.FromSeconds(13)); // 10 + 3
-        result.InputTokens.Should().Be(500);
-        result.EstimatedCost.Should().Be(0.01m);
+        result.FilesChanged.Should().BeEmpty();
+        result.ExitReason.Should().Be("Completed");
+        result.Duration.Should().Be(TimeSpan.FromSeconds(10));
+        result.InputTokens.Should().Be(0);
+        result.EstimatedCost.Should().Be(0m);
     }
 
     [Fact]

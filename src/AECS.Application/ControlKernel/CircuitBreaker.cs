@@ -20,10 +20,15 @@ public class CircuitBreaker
     public CircuitBreakerResult Check(
         TaskContract contract,
         AgentRunResult agentResult,
+        CandidateChangeSet candidateChangeSet,
         int retryCount)
     {
         // Check budget
-        var budgetViolation = _budgetEnforcer.Check(contract.Budget, agentResult, retryCount);
+        var budgetViolation = _budgetEnforcer.Check(
+            contract.Budget,
+            agentResult,
+            retryCount,
+            candidateChangeSet.ChangedFiles.Count);
         if (budgetViolation is not null)
         {
             return new CircuitBreakerResult
@@ -42,7 +47,7 @@ public class CircuitBreaker
         }
 
         // Check scope
-        var scopeViolations = _scopeEnforcer.Check(contract.Scope, agentResult.FilesChanged);
+        var scopeViolations = _scopeEnforcer.Check(contract.Scope, candidateChangeSet.ChangedFiles);
         if (scopeViolations.Count > 0)
         {
             var firstViolation = scopeViolations[0];

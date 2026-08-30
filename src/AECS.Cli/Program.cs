@@ -3,12 +3,15 @@ using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
 using AECS.Application.Parsing;
+using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Cli.Jarvis;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
+using AECS.Infrastructure.Processes;
+using AECS.Infrastructure.Repositories;
 
 // Load .env file if present
 LoadEnvFile();
@@ -67,7 +70,7 @@ static async Task<int> RunExperiment(string[] args)
 
     IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
 
-    var runner = new ExperimentRunner(agent);
+    var runner = new ExperimentRunner(CreatePipeline(agent));
     var report = await runner.RunAsync(repoPath, taskFiles, CancellationToken.None);
 
     Console.WriteLine(ExperimentReportFormatter.Format(report));
@@ -108,7 +111,6 @@ static async Task<int> RunSingle(string[] args)
         return 1;
     }
 
-    // 1. Load TaskContract
     TaskContract contract;
     try
     {
@@ -121,181 +123,53 @@ static async Task<int> RunSingle(string[] args)
         return 1;
     }
 
-    // 2. Classify risk
-    var riskClassifier = new RiskClassifier();
-    var risk = riskClassifier.Classify(contract);
-
-    contract = new TaskContract
-    {
-        Id = contract.Id,
-        Objective = contract.Objective,
-        AcceptanceCriteria = contract.AcceptanceCriteria,
-        Scope = contract.Scope,
-        Constraints = new TaskConstraints
-        {
-            SecurityRisk = risk,
-            DatabaseMigration = contract.Constraints.DatabaseMigration,
-            ExternalDependency = contract.Constraints.ExternalDependency
-        },
-        Budget = contract.Budget,
-        Verification = contract.Verification,
-        Approval = contract.Approval,
-        Status = contract.Status,
-        CreatedAt = contract.CreatedAt
-    };
-
-    // 3. Generate ExecutionPlan
-    var executionController = new ExecutionController();
-    var plan = await executionController.PlanAsync(contract, CancellationToken.None);
-
-    // Print header
-    Console.WriteLine("AECS RUN");
-    Console.WriteLine();
-    Console.WriteLine($"Task:");
-    Console.WriteLine(contract.Objective);
-    Console.WriteLine();
-    Console.WriteLine($"Risk:");
-    Console.WriteLine(risk.ToString());
-    Console.WriteLine();
-    Console.WriteLine("Allowed Scope:");
-    foreach (var path in contract.Scope.Allowed)
-        Console.WriteLine(path);
-    Console.WriteLine();
-    Console.WriteLine("Budget:");
-    Console.WriteLine($"${contract.Budget.MaxCostUsd:F2}");
-    Console.WriteLine($"{contract.Budget.MaxDurationSeconds} seconds");
-    Console.WriteLine($"{contract.Budget.MaxRetries} retry");
-    Console.WriteLine();
-
-    // 4. Execute agent
-    Console.WriteLine("Execution:");
-
     IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
 
-    var agentRequest = new AgentExecutionRequest
+    StagedExecutionResult execution;
+    try
     {
-        TaskId = contract.Id,
-        Objective = contract.Objective,
-        AcceptanceCriteria = contract.AcceptanceCriteria,
-        RepoPath = repoPath,
-        Scope = contract.Scope,
-        Budget = contract.Budget,
-        Risk = risk,
-        Model = plan.Model
-    };
-
-    var agentResult = await agent.ExecuteAsync(agentRequest, CancellationToken.None);
-
-    // 4.5 Apply model changes to workspace
-    if (agentResult.Success && !string.IsNullOrEmpty(agentResult.StdOut))
+        execution = await CreatePipeline(agent).RunAsync(
+            repoPath,
+            contract,
+            CancellationToken.None);
+    }
+    catch (Exception ex)
     {
-        var fileApplicator = new FileApplicator();
-        var applyResult = fileApplicator.ApplyChanges(agentResult.StdOut, repoPath);
-        if (applyResult.AppliedChanges.Count > 0)
-        {
-            agentResult = new AgentRunResult
-            {
-                Success = agentResult.Success,
-                StdOut = agentResult.StdOut,
-                StdErr = agentResult.StdErr,
-                ExitCode = agentResult.ExitCode,
-                Duration = agentResult.Duration,
-                InputTokens = agentResult.InputTokens,
-                OutputTokens = agentResult.OutputTokens,
-                EstimatedCost = agentResult.EstimatedCost,
-                FilesChanged = applyResult.AppliedChanges.Select(c => c.FilePath).ToList(),
-                ExitReason = agentResult.ExitReason
-            };
-            Console.WriteLine($"  [AECS] Applied {applyResult.AppliedChanges.Count} file change(s) to workspace");
-        }
+        Console.WriteLine($"ERROR: staged execution failed closed: {ex.Message}");
+        return 1;
     }
 
-    Console.WriteLine(agentResult.Success ? "SUCCESS" : "FAILED");
-    Console.WriteLine();
+    Console.WriteLine("AECS STAGED RUN");
+    Console.WriteLine($"Task: {execution.Contract.Objective}");
+    Console.WriteLine($"Risk: {execution.Risk}");
+    Console.WriteLine($"Baseline: {execution.Baseline.Commit} ({execution.Baseline.Branch})");
+    Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
+    Console.WriteLine($"Diff hash: {execution.CandidateChangeSet.DiffHash}");
+    Console.WriteLine("Changed files:");
+    foreach (var file in execution.CandidateChangeSet.ChangedFiles)
+        Console.WriteLine($"  {file}");
+    if (execution.CandidateChangeSet.ChangedFiles.Count == 0)
+        Console.WriteLine("  (none)");
 
-    // 5. Files changed
-    Console.WriteLine("Files changed:");
-    if (agentResult.FilesChanged.Count > 0)
-    {
-        foreach (var file in agentResult.FilesChanged)
-            Console.WriteLine(file);
-    }
-    else
-    {
-        Console.WriteLine("(none)");
-    }
-    Console.WriteLine();
-
-    // 6. Control Kernel validation
-    var kernel = new ControlKernel();
-    var kernelDecision = kernel.ValidateExecution(contract, agentResult);
-
-    if (!kernelDecision.Allowed)
-    {
-        Console.WriteLine("Verification:");
-        Console.WriteLine($"  {kernelDecision.TargetState}: {kernelDecision.Reason}");
-        Console.WriteLine();
-        Console.WriteLine("Decision:");
-        Console.WriteLine();
-        Console.WriteLine("REJECTED");
-        Console.WriteLine();
-        Console.WriteLine($"Duration: {agentResult.Duration.TotalSeconds:F1}s");
-        Console.WriteLine($"Estimated AI cost: ${agentResult.EstimatedCost:F2}");
-        return 0;
-    }
-
-    // 7. Run verifiers
     Console.WriteLine("Verification:");
+    foreach (var result in execution.VerificationResults)
+        Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
 
-    var verificationContext = new VerificationContext
-    {
-        TaskId = contract.Id,
-        AgentRunId = Guid.NewGuid().ToString(),
-        RepoPath = repoPath,
-        Contract = contract,
-        AgentResult = agentResult
-    };
-
-    var verifiers = new List<IVerifier>
-    {
-        new BuildVerifier(),
-        new TestVerifier(),
-        new ScopeVerifier(),
-        new BudgetVerifier(),
-        new EB001Verifier(),
-        new EB002Verifier(),
-        new EB003Verifier(),
-        new EB004Verifier(),
-        new EB005Verifier()
-    };
-
-    var verificationResults = new List<VerificationResult>();
-    foreach (var verifier in verifiers)
-    {
-        var result = await verifier.VerifyAsync(verificationContext, CancellationToken.None);
-        verificationResults.Add(result);
-
-        var status = result.Status == VerificationStatus.Pass ? "PASS" : "FAIL";
-        var name = result.Verifier.PadRight(12);
-        Console.WriteLine($"{name} {status}");
-    }
-
-    Console.WriteLine();
-
-    // 8. Decision
-    var decisionEngine = new DecisionEngine();
-    var decision = decisionEngine.Decide(verificationResults, contract);
-
-    Console.WriteLine("Decision:");
-    Console.WriteLine();
-    Console.WriteLine(decision.Decision.ToString().ToUpperInvariant());
-    Console.WriteLine();
-
-    Console.WriteLine($"Duration: {agentResult.Duration.TotalSeconds:F1}s");
-    Console.WriteLine($"Estimated AI cost: ${agentResult.EstimatedCost:F2}");
-    Console.WriteLine($"Evidence ID: {Guid.NewGuid():N}");
+    Console.WriteLine($"Decision: {execution.Decision.Decision.ToString().ToUpperInvariant()}");
+    Console.WriteLine($"Reason: {execution.Decision.Reason}");
+    Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
+    Console.WriteLine($"Evidence ID: {execution.EvidenceId:N}");
+    Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
 
     return 0;
+}
+
+static StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
+{
+    var processRunner = new SystemProcessRunner();
+    var evidenceStore = new JsonExecutionEvidenceStore(
+        JsonExecutionEvidenceStore.GetDefaultRootPath());
+    return new StagedExecutionPipeline(agent, processRunner, evidenceStore);
 }
 
 static async Task<int> RunJarvis(string[] args)

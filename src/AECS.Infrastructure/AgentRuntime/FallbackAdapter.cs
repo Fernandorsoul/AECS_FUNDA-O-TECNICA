@@ -59,9 +59,8 @@ public class FallbackAdapter : IAgentAdapter
 
     private static bool DefaultShouldFallback(AgentRunResult result)
     {
-        // Fallback if:
-        // 1. Execution failed (connection error, timeout)
-        // 2. No files were produced (model didn't understand the task)
-        return !result.Success || result.FilesChanged.Count == 0;
+        // FilesChanged is agent telemetry. Only the filesystem-derived
+        // CandidateChangeSet can determine whether useful changes exist.
+        return !result.Success;
     }
 }

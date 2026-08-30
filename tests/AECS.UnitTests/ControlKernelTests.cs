@@ -33,10 +33,17 @@ public class ControlKernelTests
         FilesChanged = files?.ToList() ?? ["src/Test.cs"]
     };
 
+    private static CandidateChangeSet Candidate(AgentRunResult result) => new()
+    {
+        AddedFiles = result.FilesChanged.ToList(),
+        Diff = "diff"
+    };
+
     [Fact]
     public void ValidateExecution_AllPassed_ReturnsVerifying()
     {
-        var decision = _kernel.ValidateExecution(CreateContract(), CreateResult());
+        var result = CreateResult();
+        var decision = _kernel.ValidateExecution(CreateContract(), result, Candidate(result));
 
         decision.Allowed.Should().BeTrue();
         decision.TargetState.Should().Be(TaskState.Verifying);
@@ -46,7 +53,8 @@ public class ControlKernelTests
     public void ValidateExecution_HumanApproval_ReturnsHumanReview()
     {
         var contract = CreateContract(approval: ApprovalLevel.Human);
-        var decision = _kernel.ValidateExecution(contract, CreateResult());
+        var result = CreateResult();
+        var decision = _kernel.ValidateExecution(contract, result, Candidate(result));
 
         decision.Allowed.Should().BeTrue();
         decision.TargetState.Should().Be(TaskState.HumanReviewRequired);
@@ -65,7 +73,7 @@ public class ControlKernelTests
             FilesChanged = ["src/Test.cs"]
         };
 
-        var decision = _kernel.ValidateExecution(contract, result);
+        var decision = _kernel.ValidateExecution(contract, result, Candidate(result));
 
         decision.Allowed.Should().BeFalse();
         decision.TargetState.Should().Be(TaskState.BudgetExceeded);
@@ -77,7 +85,7 @@ public class ControlKernelTests
         var contract = CreateContract(allowed: ["src/Customers/**"]);
         var result = CreateResult(files: ["src/Billing/Billing.cs"]);
 
-        var decision = _kernel.ValidateExecution(contract, result);
+        var decision = _kernel.ValidateExecution(contract, result, Candidate(result));
 
         decision.Allowed.Should().BeFalse();
         decision.TargetState.Should().Be(TaskState.ScopeViolation);
@@ -98,7 +106,7 @@ public class ControlKernelTests
             FilesChanged = ["src/Test.cs"]
         };
 
-        var decision = _kernel.ValidateExecution(contract, result);
+        var decision = _kernel.ValidateExecution(contract, result, Candidate(result));
 
         decision.Allowed.Should().BeFalse();
         decision.TargetState.Should().Be(TaskState.TimedOut);
