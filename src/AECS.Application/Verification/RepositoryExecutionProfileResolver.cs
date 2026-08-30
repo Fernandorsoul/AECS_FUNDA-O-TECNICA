@@ -47,27 +47,26 @@ public static partial class RepositoryExecutionProfileResolver
                 $"Execution working directory not found: '{profile.WorkingDirectory}'.");
         }
 
-        string? targetArgument = null;
-        if (!string.IsNullOrWhiteSpace(profile.Target))
+        if (string.IsNullOrWhiteSpace(profile.Target))
+            throw new InvalidOperationException("An explicit execution target is required.");
+
+        var target = ResolveRelativePath(
+            workingDirectory,
+            profile.Target,
+            allowRoot: false,
+            "target");
+        if (!File.Exists(target))
+            throw new FileNotFoundException($"Execution target not found: '{profile.Target}'.");
+
+        var extension = Path.GetExtension(target);
+        if (!AllowedTargetExtensions.Contains(extension))
         {
-            var target = ResolveRelativePath(
-                workingDirectory,
-                profile.Target,
-                allowRoot: false,
-                "target");
-            if (!File.Exists(target))
-                throw new FileNotFoundException($"Execution target not found: '{profile.Target}'.");
-
-            var extension = Path.GetExtension(target);
-            if (!AllowedTargetExtensions.Contains(extension))
-            {
-                throw new InvalidOperationException(
-                    $"Execution target must be a supported solution or project file: '{profile.Target}'.");
-            }
-
-            targetArgument = Path.GetRelativePath(workingDirectory, target)
-                .Replace('\\', '/');
+            throw new InvalidOperationException(
+                $"Execution target must be a supported solution or project file: '{profile.Target}'.");
         }
+
+        var targetArgument = Path.GetRelativePath(workingDirectory, target)
+            .Replace('\\', '/');
 
         return new ResolvedRepositoryExecutionProfile
         {

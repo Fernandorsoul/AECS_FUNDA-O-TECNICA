@@ -143,6 +143,11 @@ static async Task<int> RunSingle(string[] args)
     Console.WriteLine($"Task: {execution.Contract.Objective}");
     Console.WriteLine($"Risk: {execution.Risk}");
     Console.WriteLine($"Baseline: {execution.Baseline.Commit} ({execution.Baseline.Branch})");
+    Console.WriteLine("Baseline verification:");
+    foreach (var result in execution.BaselineVerificationResults)
+        Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
+    if (execution.BaselineVerificationResults.Count == 0)
+        Console.WriteLine("  (not required)");
     Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
     Console.WriteLine($"Diff hash: {execution.CandidateChangeSet.DiffHash}");
     Console.WriteLine("Changed files:");

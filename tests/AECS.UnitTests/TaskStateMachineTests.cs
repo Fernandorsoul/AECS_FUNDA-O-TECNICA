@@ -55,6 +55,7 @@ public class TaskStateMachineTests
 
         machine.TransitionTo(TaskState.ContractReady);
         machine.TransitionTo(TaskState.Planned);
+        machine.TransitionTo(TaskState.BaselineVerifying);
         machine.TransitionTo(TaskState.Running);
         machine.TransitionTo(TaskState.CandidateProduced);
         machine.TransitionTo(TaskState.Verifying);
@@ -62,7 +63,21 @@ public class TaskStateMachineTests
 
         machine.CurrentState.Should().Be(TaskState.Verified);
         machine.IsTerminal.Should().BeTrue();
-        machine.History.Should().HaveCount(6);
+        machine.History.Should().HaveCount(7);
+    }
+
+    [Fact]
+    public void BaselineVerifying_CanRejectBeforeRunning()
+    {
+        var machine = new TaskStateMachine();
+        machine.TransitionTo(TaskState.ContractReady);
+        machine.TransitionTo(TaskState.Planned);
+        machine.TransitionTo(TaskState.BaselineVerifying);
+
+        machine.TransitionTo(TaskState.Rejected);
+
+        machine.CurrentState.Should().Be(TaskState.Rejected);
+        machine.IsTerminal.Should().BeTrue();
     }
 
     [Fact]

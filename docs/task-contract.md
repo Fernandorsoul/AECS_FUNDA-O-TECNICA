@@ -29,6 +29,9 @@ task:
     retries: 1
     wall_clock_seconds: 120
     max_files_changed: 5
+  execution:
+    working_directory: .
+    target: SampleProject.slnx
   verification:
     build: required
     unit_tests: required
@@ -103,6 +106,17 @@ Embora seja aceito como texto, `security_risk: r0` é convertido inicialmente em
 Os limites são comparados com os metadados retornados pelo adaptador após a execução. Eles rejeitam um resultado excedente, mas ainda não cancelam preventivamente a chamada. O custo do Ollama é registrado como zero; o adaptador cloud calcula uma estimativa a partir dos tokens e de uma tabela interna de preços, não de uma fatura do provedor.
 
 `retries` limita um contador aceito pelo kernel, mas a CLI atual não repete automaticamente uma chamada que falhou.
+
+### Perfil de execução
+
+| Campo | Tipo | Padrão | Semântica |
+| --- | --- | --- | --- |
+| `execution.working_directory` | caminho relativo | `.` | Diretório, dentro do worktree isolado, onde build e testes são executados |
+| `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado pelos comandos `dotnet build` e `dotnet test` |
+
+Quando build ou testes são obrigatórios, `execution.target` também é obrigatório. O AECS falha fechado antes de chamar o agente se o perfil estiver ausente ou inválido, se o diretório/target não existir ou se algum caminho tentar atravessar a fronteira do worktree.
+
+O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de um baseline verde o AECS cria um segundo worktree limpo para o agente. Os mesmos diretório e target são reutilizados no candidato, e comandos, argumentos, duração, saída e exit code ficam registrados na evidência.
 
 ### Verificação
 

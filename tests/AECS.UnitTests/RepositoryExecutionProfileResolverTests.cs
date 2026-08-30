@@ -66,15 +66,14 @@ public sealed class RepositoryExecutionProfileResolverTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_DefaultProfile_UsesWorkspaceRootWithoutTarget()
+    public void Resolve_DefaultProfile_FailsClosedWithoutExplicitTarget()
     {
-        var result = RepositoryExecutionProfileResolver.Resolve(
+        var action = () => RepositoryExecutionProfileResolver.Resolve(
             _root,
             new RepositoryExecutionProfile());
 
-        result.WorkingDirectory.Should().Be(Path.GetFullPath(_root));
-        result.TargetArgument.Should().BeNull();
-        result.BuildArguments.Should().Equal("build");
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*explicit execution target*");
     }
 
     public void Dispose()

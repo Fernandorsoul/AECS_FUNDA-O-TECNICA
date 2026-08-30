@@ -25,14 +25,17 @@ public class TestVerifier : IVerifier
             var execution = RepositoryExecutionProfileResolver.Resolve(
                 context.RepoPath,
                 context.Contract.Execution);
-            var result = await _processRunner.RunAsync(new ProcessExecutionRequest
+            var request = new ProcessExecutionRequest
             {
                 FileName = "dotnet",
                 Arguments = execution.TestArguments,
                 WorkingDirectory = execution.WorkingDirectory,
                 Timeout = TimeSpan.FromSeconds(
                     Math.Max(1, context.Contract.Budget.MaxDurationSeconds))
-            }, cancellationToken);
+            };
+            var result = await _processRunner.RunAsync(request, cancellationToken);
+            context.CommandEvidence.Add(
+                ExecutionCommandEvidenceFactory.Create(context, request, result));
 
             if (result.TimedOut || result.Cancelled)
             {

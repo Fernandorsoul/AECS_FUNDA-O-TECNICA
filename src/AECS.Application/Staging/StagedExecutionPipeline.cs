@@ -15,7 +15,10 @@ public sealed class StagedExecutionResult
     public AgentRunResult AgentResult { get; init; } = new();
     public BaselineSnapshot Baseline { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
+    public IReadOnlyList<VerificationResult> BaselineVerificationResults { get; init; } = [];
+    public IReadOnlyList<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
     public IReadOnlyList<VerificationResult> VerificationResults { get; init; } = [];
+    public IReadOnlyList<ExecutionCommandEvidence> CandidateCommands { get; init; } = [];
     public DecisionResult Decision { get; init; } = new();
     public TaskState FinalState { get; init; }
     public Guid EvidenceId { get; init; }
@@ -58,26 +61,87 @@ public sealed class StagedExecutionPipeline
         var plan = await _executionController.PlanAsync(contract, cancellationToken);
         stateMachine.TransitionTo(TaskState.Planned);
 
-        // The clean baseline is captured before an agent receives a repository path.
         var baseline = await _workspaceManager.CaptureBaselineAsync(
             repositoryPath,
             cancellationToken);
         _evidenceStore.EnsureRepositoryIsolation(baseline.RepositoryPath);
-        var workspace = await _workspaceManager.CreateWorkspaceAsync(
-            baseline,
-            cancellationToken);
 
         var agentRunId = Guid.NewGuid().ToString("N");
         var startedAt = DateTime.UtcNow;
+        stateMachine.TransitionTo(TaskState.BaselineVerifying);
+
+        var baselineCommands = new List<ExecutionCommandEvidence>();
+        List<VerificationResult> baselineVerificationResults;
+        await using (var preflightWorkspace = await _workspaceManager.CreateWorkspaceAsync(
+            baseline,
+            cancellationToken))
+        {
+            baselineVerificationResults = await VerifyBaselineAsync(
+                new VerificationContext
+                {
+                    TaskId = contract.Id,
+                    AgentRunId = agentRunId,
+                    RepoPath = preflightWorkspace.Path,
+                    Contract = contract,
+                    CommandEvidence = baselineCommands
+                },
+                cancellationToken);
+        }
+
+        await _workspaceManager.EnsureBaselineUnchangedAsync(
+            baseline,
+            CancellationToken.None);
+
+        var baselineFailures = baselineVerificationResults
+            .Where(result => result.Status != VerificationStatus.Pass)
+            .Select(result => $"{result.Verifier}: {result.Status} - {result.Message}")
+            .ToList();
+        if (baselineFailures.Count > 0)
+        {
+            var baselineDecision = new DecisionResult
+            {
+                Decision = TaskDecision.Rejected,
+                TargetState = TaskState.Rejected,
+                Reason = $"Baseline preflight failed: {string.Join("; ", baselineFailures)}",
+                Failures = baselineFailures
+            };
+            stateMachine.TransitionTo(TaskState.Rejected);
+
+            return await PublishAsync(
+                contract,
+                risk,
+                plan.Model,
+                baseline,
+                agentRunId,
+                startedAt,
+                new AgentRunResult
+                {
+                    Success = false,
+                    StdErr = baselineDecision.Reason,
+                    ExitCode = -1,
+                    ExitReason = "BaselinePreflightFailed"
+                },
+                EmptyCandidate(contract.Id, agentRunId, baseline.Commit),
+                baselineVerificationResults,
+                baselineCommands,
+                [],
+                [],
+                baselineDecision,
+                stateMachine,
+                cancellationToken);
+        }
+
+        stateMachine.TransitionTo(TaskState.Running);
         AgentRunResult agentResult;
-        FileApplicatorResult applicationResult;
         CandidateChangeSet candidate;
         List<VerificationResult> verificationResults;
         DecisionResult decision;
+        var candidateCommands = new List<ExecutionCommandEvidence>();
 
-        try
+        await using (var workspace = await _workspaceManager.CreateWorkspaceAsync(
+            baseline,
+            cancellationToken))
         {
-            stateMachine.TransitionTo(TaskState.Running);
             agentResult = await _agentAdapter.ExecuteAsync(new AgentExecutionRequest
             {
                 TaskId = contract.Id,
@@ -90,7 +154,7 @@ public sealed class StagedExecutionPipeline
                 Model = plan.Model
             }, cancellationToken);
 
-            applicationResult = agentResult.Success
+            var applicationResult = agentResult.Success
                 ? _fileApplicator.ApplyChanges(agentResult.StdOut, workspace.Path)
                 : new FileApplicatorResult
                 {
@@ -113,7 +177,8 @@ public sealed class StagedExecutionPipeline
                 RepoPath = workspace.Path,
                 Contract = contract,
                 AgentResult = agentResult,
-                CandidateChangeSet = candidate
+                CandidateChangeSet = candidate,
+                CommandEvidence = candidateCommands
             };
 
             verificationResults = await VerifyAsync(
@@ -123,12 +188,42 @@ public sealed class StagedExecutionPipeline
             decision = _decisionEngine.Decide(verificationResults, contract);
             stateMachine.TransitionTo(decision.TargetState);
         }
-        finally
-        {
-            await workspace.DisposeAsync();
-        }
 
-        // A decision is not publishable until the source checkout is proven intact.
+        return await PublishAsync(
+            contract,
+            risk,
+            plan.Model,
+            baseline,
+            agentRunId,
+            startedAt,
+            agentResult,
+            candidate,
+            baselineVerificationResults,
+            baselineCommands,
+            verificationResults,
+            candidateCommands,
+            decision,
+            stateMachine,
+            cancellationToken);
+    }
+
+    private async Task<StagedExecutionResult> PublishAsync(
+        TaskContract contract,
+        RiskLevel risk,
+        string model,
+        BaselineSnapshot baseline,
+        string agentRunId,
+        DateTime startedAt,
+        AgentRunResult agentResult,
+        CandidateChangeSet candidate,
+        List<VerificationResult> baselineVerificationResults,
+        List<ExecutionCommandEvidence> baselineCommands,
+        List<VerificationResult> verificationResults,
+        List<ExecutionCommandEvidence> candidateCommands,
+        DecisionResult decision,
+        TaskStateMachine stateMachine,
+        CancellationToken cancellationToken)
+    {
         await _workspaceManager.EnsureBaselineUnchangedAsync(
             baseline,
             CancellationToken.None);
@@ -139,31 +234,37 @@ public sealed class StagedExecutionPipeline
             TaskId = contract.Id,
             AgentType = _agentAdapter.GetType().Name,
             Provider = _agentAdapter.GetType().Namespace ?? string.Empty,
-            Model = plan.Model,
+            Model = model,
             StartedAt = startedAt,
             FinishedAt = startedAt + agentResult.Duration,
             InputTokens = agentResult.InputTokens,
             OutputTokens = agentResult.OutputTokens,
             EstimatedCost = agentResult.EstimatedCost,
             ExitReason = agentResult.ExitReason,
-            // Telemetry only. Policy and decisions use CandidateChangeSet.
             FilesChanged = agentResult.FilesChanged.ToList()
         };
 
+        var baselineFailed = baselineVerificationResults.Any(
+            result => result.Status != VerificationStatus.Pass);
         var evidence = new ExecutionEvidence
         {
             TaskContract = contract,
             AgentRun = agentRun,
             AgentResult = agentResult,
             Baseline = baseline,
+            BaselineVerificationResults = baselineVerificationResults,
+            BaselineCommands = baselineCommands,
             CandidateChangeSet = candidate,
             VerificationResults = verificationResults,
+            CandidateCommands = candidateCommands,
             FinalDecision = new FinalDecisionRecord
             {
                 Decision = decision.Decision,
                 State = decision.TargetState,
                 Reason = decision.Reason,
-                RequiredVerifiers = DecisionEngine.GetRequiredVerifiers(contract)
+                RequiredVerifiers = (baselineFailed
+                        ? GetRequiredBaselineVerifiers(contract)
+                        : DecisionEngine.GetRequiredVerifiers(contract))
                     .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                     .ToList(),
                 DecidedAt = DateTime.UtcNow
@@ -182,12 +283,15 @@ public sealed class StagedExecutionPipeline
         {
             Contract = contract,
             Risk = risk,
-            Model = plan.Model,
+            Model = model,
             AgentRun = agentRun,
             AgentResult = agentResult,
             Baseline = baseline,
             CandidateChangeSet = candidate,
+            BaselineVerificationResults = baselineVerificationResults,
+            BaselineCommands = baselineCommands,
             VerificationResults = verificationResults,
+            CandidateCommands = candidateCommands,
             Decision = decision,
             FinalState = stateMachine.CurrentState,
             EvidenceId = evidence.Id,
@@ -195,6 +299,55 @@ public sealed class StagedExecutionPipeline
             OriginalRepositoryUnchanged = true
         };
     }
+
+    private async Task<List<VerificationResult>> VerifyBaselineAsync(
+        VerificationContext context,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<VerificationResult>();
+
+        if (context.Contract.Verification.Build)
+        {
+            results.Add(await RunVerifierAsync(
+                new BuildVerifier(_processRunner),
+                context,
+                cancellationToken));
+        }
+
+        var buildPassed = results
+            .Where(result => result.Verifier == "Build")
+            .All(result => result.Status == VerificationStatus.Pass);
+        if (context.Contract.Verification.UnitTests ||
+            context.Contract.Verification.IntegrationTests)
+        {
+            results.Add(buildPassed
+                ? await RunVerifierAsync(new TestVerifier(_processRunner), context, cancellationToken)
+                : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
+        }
+
+        return results;
+    }
+
+    private static IReadOnlySet<string> GetRequiredBaselineVerifiers(TaskContract contract)
+    {
+        var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (contract.Verification.Build)
+            required.Add("Build");
+        if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
+            required.Add("Tests");
+        return required;
+    }
+
+    private static CandidateChangeSet EmptyCandidate(
+        string taskId,
+        string agentRunId,
+        string baselineCommit) => new()
+    {
+        TaskId = taskId,
+        AgentRunId = agentRunId,
+        BaselineCommit = baselineCommit,
+        DiffHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    };
 
     private async Task<List<VerificationResult>> VerifyAsync(
         VerificationContext context,

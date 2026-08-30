@@ -15,5 +15,6 @@ public enum TaskState
     TimedOut = 10,
     AgentFailed = 11,
     Cancelled = 12,
-    CandidateProduced = 13
+    CandidateProduced = 13,
+    BaselineVerifying = 14
 }
