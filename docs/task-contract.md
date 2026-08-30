@@ -105,7 +105,7 @@ Padrões suportados pelo verificador atual:
 
 Use caminhos relativos à raiz informada em `--repo`. Se um arquivo corresponder simultaneamente a `allowed` e `forbidden`, a proibição prevalece.
 
-> O escopo é validado depois que blocos de arquivo já foram aplicados. Ele decide aceitar ou rejeitar a execução, mas ainda não funciona como barreira preventiva de escrita.
+Os blocos são aplicados antes do gate de escopo, mas apenas no worktree descartável do candidato. Os caminhos passam antes por uma barreira preventiva contra destino absoluto, traversal, `.git`, symlink/junction e duplicidade. Depois, o verificador usa a lista derivada pelo Git — não a lista alegada pelo agente — e uma violação de escopo bloqueia a decisão. Nenhuma dessas mudanças chega automaticamente ao checkout original.
 
 ### Restrições e risco
 
@@ -156,16 +156,22 @@ Quando build ou testes são obrigatórios, `execution.target` também é obrigat
 
 O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de um baseline verde o AECS cria um segundo worktree limpo para o agente. Os mesmos diretório e target são reutilizados no candidato, e comandos, argumentos, duração, saída e exit code ficam registrados na evidência.
 
+### Contexto compilado
+
+Não existe um campo separado de contexto no YAML atual. Depois do preflight, o AECS compila contexto C# diretamente do worktree do candidato usando objetivo, critérios de aceite e os padrões de `scope.allowed`/`scope.forbidden`.
+
+Os limites padrão são 12 mil tokens estimados, 48 mil caracteres totais e 16 mil caracteres por arquivo; um `budget.tokens` positivo menor reduz o teto. O manifesto persistido informa arquivos incluídos e omitidos, símbolos, hashes do conteúdo original e incluído, truncamento, tamanho e baseline. Arquivos fora de `allowed` nunca entram no pacote, e `allowed` vazio resulta em contexto de código vazio.
+
 ### Verificação
 
 | Campo | Padrão | Efeito de `required` |
 | --- | --- | --- |
 | `verification.build` | `required` | Build participa da decisão |
 | `verification.unit_tests` | `required` | Testes participam da decisão |
-| `verification.integration_tests` | `optional` | Reservado no perfil; ainda não tem verificador separado no pipeline |
-| `verification.scope` | `required` | Escopo participa da decisão |
-| `verification.security_scan` | `optional` | Reservado no perfil; ainda não conectado a um scanner |
-| `verification.architecture` | `optional` | Reservado no perfil; regras EB rodam separadamente |
+| `verification.integration_tests` | `optional` | Quando required, ativa o mesmo gate/comando `Tests` usado por unit tests |
+| `verification.scope` | `required` | Campo aceito, mas `Scope` é sempre um gate estrutural obrigatório na trust boundary atual |
+| `verification.security_scan` | `optional` | Quando required, exige `SecurityScan`; como não há implementação, a decisão falha fechada por resultado ausente |
+| `verification.architecture` | `optional` | Quando required, exige `EB001-Architecture` em `Pass` |
 | `verification.critical_semantic_failures` | `required` | Falhas semânticas de severidade crítica bloqueiam a decisão |
 | `verification.required_semantic_verifiers` | lista vazia | Nomes de verificadores EB que devem produzir exatamente um resultado `Pass` |
 
@@ -173,7 +179,9 @@ Somente o texto `required`, sem diferenciar maiúsculas de minúsculas, ativa es
 
 A verificação de orçamento permanece habilitada pelo padrão do modelo. Embora alguns exemplos tragam `verification.budget`, o parser atual ignora esse campo e mantém `Budget = true`.
 
-Os verificadores EB001–EB005 executam quando o resultado passa pelo kernel. Por padrão, uma falha EB com severidade crítica bloqueia a decisão. Outros verificadores semânticos só viram gates quando declarados em `required_semantic_verifiers` ou ativados por um campo específico, como `architecture`.
+`AgentSuccess`, `Application`, `NonEmptyChange`, `Scope` e `Budget` são sempre obrigatórios, mesmo que um campo opcional tente enfraquecê-los. Build e testes só executam depois desses pré-requisitos; uma falha estrutural deixa os comandos posteriores em `Skip`, que não é aceito como sucesso.
+
+Os verificadores EB001–EB005 executam depois dos pré-requisitos e de um eventual build aprovado. Por padrão, uma falha EB com severidade crítica bloqueia a decisão. Outros verificadores semânticos só viram gates quando declarados em `required_semantic_verifiers` ou ativados por um campo específico, como `architecture`. Exceção de verificador, resultado ausente ou duplicado também falha fechado.
 
 ### Aprovação
 
@@ -187,8 +195,8 @@ Com `human`, uma execução que passou nas verificações obrigatórias termina 
 
 | Decisão | Condição |
 | --- | --- |
-| `Verified` | kernel e verificadores obrigatórios passaram, sem aprovação humana |
-| `Rejected` | limite/escopo foi violado ou um verificador obrigatório falhou |
+| `Verified` | agente, aplicação, diff Git e todos os gates obrigatórios passaram, sem aprovação humana |
+| `Rejected` | baseline, agente, limite, escopo, evidência de aceite ou outro gate obrigatório não passou |
 | `HumanReviewRequired` | verificações passaram e a política exige uma pessoa |
 
 O estado `Verified` exige sucesso do agente, aplicação válida, diff real, escopo e orçamento válidos, gates configurados em `Pass` e evidência executável para cada critério de aceite obrigatório. Isso prova a matriz declarada pelo contrato; não prova requisitos que não tenham sido escritos no contrato.
@@ -202,7 +210,7 @@ O estado `Verified` exige sucesso do agente, aplicação válida, diff real, esc
 - declare explicitamente diretórios sensíveis em `forbidden`;
 - reserve margem de orçamento, mas mantenha `max_files_changed` baixo;
 - exija revisão humana para autenticação, infraestrutura, deploy, banco e produção;
-- execute primeiro com `--mock` para validar parsing e políticas;
+- use `--mock` apenas para exercitar composição e políticas; o candidato textual sintético não comprova o requisito de negócio;
 - execute modelos reais somente sobre uma working tree limpa.
 
-Veja contratos executáveis em [`tasks/`](../tasks/).
+Veja modelos de contrato em [`tasks/`](../tasks/) e contratos executados de forma reproduzível no [fixture AgronomoPlus](../tests/fixtures/real-world-demo/README.md).

@@ -1,143 +1,182 @@
-# Arquitetura atual do AECS
+# Arquitetura executável do AECS
 
-Este documento descreve o código executável no repositório. A visão de longo prazo, mais ampla, permanece no [Documento de Fundação Técnica](../AECS_Fundacao_Tecnica_v0.1.md).
+Este documento descreve o comportamento conectado à CLI no estado atual do repositório. A visão de longo prazo permanece no [Documento de Fundação Técnica](../AECS_Fundacao_Tecnica_v0.1.md), e as decisões estáveis ficam nos [ADRs](adr/README.md).
 
 ## Princípio central
 
 O AECS separa duas categorias de responsabilidade:
 
-- **descoberta probabilística:** geração de código, inferência de risco, seleção de contexto e sugestão de padrões;
-- **enforcement determinístico:** limites de escopo, orçamento, circuit breaker, build, testes e políticas confirmadas.
+- **descoberta probabilística:** geração de código, classificação inicial, seleção de contexto e proposta de mudança;
+- **enforcement determinístico:** isolamento Git, caminhos seguros, orçamento, escopo, build, testes, critérios de aceite, decisão e promoção.
 
-Essa separação está registrada no [ADR-001](adr/ADR-001-probabilistic-discovery-deterministic-enforcement.md).
+Uma resposta do modelo nunca é autoridade sobre quais arquivos realmente mudaram nem permissão para escrever no checkout original. Essa decisão está formalizada no [ADR-007](adr/ADR-007-staged-trust-boundary-and-controlled-promotion.md).
 
-## Fluxo executável
+## Fluxo staged
 
-Uma tarefa percorre o seguinte pipeline:
-
-1. `TaskContractParser` converte o YAML em um `TaskContract`.
-2. `RiskClassifier` recalcula o risco a partir do objetivo, dos critérios, das restrições e do tamanho do escopo.
-3. `ExecutionController` escolhe o modelo local e cria um `ExecutionPlan`.
-4. `GitWorkspaceManager` captura uma baseline limpa e cria um worktree Git descartável.
-5. Um `IAgentAdapter` executa o pedido por mock, Ollama ou fallback cloud.
-6. `FileApplicator` interpreta blocos `FILE:` e grava o conteúdo somente no worktree.
-7. `ControlKernel` aplica circuit breaker, escopo e orçamento.
-8. Os verificadores executam build, testes, escopo, orçamento e regras EB001–EB005 no candidato isolado.
-9. `DecisionEngine` produz `Verified`, `Rejected` ou `HumanReviewRequired`, e a evidência JSON é persistida fora do repositório.
-10. Opcionalmente, `CandidatePromotionService` revalida evidência, baseline, hash e aprovação antes de aplicar atomicamente o diff no checkout original.
-
-No modo `experiment`, o pipeline também tenta compilar um pacote de contexto e agrega métricas de todas as tarefas.
-
-## Mapa de componentes
-
-| Projeto | Responsabilidade atual | Principais elementos |
-| --- | --- | --- |
-| `AECS.Domain` | Modelo independente de infraestrutura | `TaskContract`, `AgentRunResult`, `ExecutionBudget`, estados, decisões e interfaces |
-| `AECS.Application` | Casos de uso e regras de controle | parser, classificador de risco, Control Kernel, verificadores, Context Compiler e experimentos |
-| `AECS.Infrastructure` | Integrações externas | adaptadores Ollama/cloud/mock, EF Core/PostgreSQL e sandbox Docker |
-| `AECS.Cli` | Composição e experiência de terminal | `run`, `experiment`, `jarvis`, `promote` e `export-patch` |
-| `AECS.UnitTests` | Cobertura das regras e dos adaptadores | testes xUnit das camadas Domain, Application e Infrastructure |
-| `AECS.IntegrationTests` | Testes integrados com Git e projetos reais | staging, baseline, promoção, concorrência, rollback e fixture AgronomoPlus |
-
-A solução segue um monólito modular: as fronteiras são projetos .NET separados, mas a implantação ainda é uma única CLI. Veja o [ADR-002](adr/ADR-002-modular-monolith.md).
-
-## Risco e roteamento
-
-O classificador usa regras determinísticas e palavras-chave:
-
-| Nível | Exemplos atuais | Modelo local selecionado |
-| --- | --- | --- |
-| R0 | documentação, comentários, formatação e rename | `qwen2.5-coder:7b` |
-| R1 | mudanças simples e escopo pequeno | `qwen2.5-coder:7b` |
-| R2 | services, repositories, APIs, validação ou escopo amplo | `qwen2.5-coder:14b` |
-| R3 | autenticação, pagamento, segredos ou dependência externa | `qwen2.5-coder:14b` |
-| R4 | infraestrutura, deploy, CI/CD, produção ou schema de banco | `qwen2.5-coder:14b` |
-
-O valor informado no YAML é uma entrada para a classificação, não a decisão final. Palavras-chave de maior risco prevalecem.
-
-## Runtime de agentes
-
-Todos os runtimes implementam `IAgentAdapter`:
-
-- `MockAgentAdapter`: produz um resultado sintético para testes do pipeline;
-- `OllamaAdapter`: chama `http://localhost:11434/api/generate`;
-- `CloudAdapter`: chama `<base-url>/chat/completions` com autenticação Bearer;
-- `FallbackAdapter`: usa o adaptador local primeiro e chama cloud se o resultado falhar ou não contiver arquivos úteis.
-
-O fallback cloud é montado apenas nos entry points de tarefa única e experimento. O Jarvis cria diretamente um adaptador Ollama ou mock.
-
-O agente deve responder neste protocolo:
-
-````text
-FILE: src/Path/To/File.cs
-```csharp
-// conteúdo completo do arquivo
+```mermaid
+flowchart TD
+    A[TaskContract] --> B[RiskClassifier e ExecutionController]
+    B --> C[Captura de commit, branch e status]
+    C --> D[Worktree descartável de preflight]
+    D --> E{Build/testes da baseline}
+    E -->|falha| X[Decisão Rejected]
+    E -->|passa| F[Worktree descartável do candidato]
+    F --> G[Contexto limitado e manifesto]
+    G --> H[Agente com retries e orçamento compartilhado]
+    H --> I[FileApplicator com validação de caminhos]
+    I --> J[Git deriva CandidateChangeSet e SHA-256]
+    J --> K{Gates determinísticos}
+    K -->|falha| X
+    K -->|passa| L[Verified ou HumanReviewRequired]
+    X --> M[Evidência JSON fora do repositório]
+    L --> M
+    M -->|ação explícita posterior| N[Exportar patch ou promover]
 ```
-````
 
-`FileApplicator` reconhece esses blocos, cria diretórios quando necessário e escreve o arquivo completo.
+O pipeline executa as seguintes etapas:
 
-## Control Kernel e verificações
+1. `TaskContractParser` converte o YAML, e `RiskClassifier` pode elevar o risco declarado.
+2. `ExecutionBudgetScope` inicia um wall clock compartilhado por preflight, agente, retries e verificações.
+3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada.
+4. Um worktree detached temporário executa build e testes da baseline conforme o perfil do contrato. Falha nessa fase impede a chamada do agente.
+5. Depois de confirmar que o checkout original não mudou, um segundo worktree detached é criado no mesmo commit.
+6. `RepositoryContextCompiler` seleciona contexto dentro do escopo, aplica limites e entrega ao agente conteúdo e prompt acompanhados por um manifesto.
+7. `AgentExecutionCoordinator` chama o runtime e repete apenas falhas transitórias, rate limit e timeout enquanto ainda houver tentativas, tokens, custo e tempo.
+8. `FileApplicator` interpreta blocos `FILE:`, valida todos os destinos e somente então escreve no worktree isolado.
+9. Git adiciona o estado do worktree e deriva o `CandidateChangeSet`: arquivos adicionados, modificados ou removidos, diff binário e SHA-256. Alegações de arquivos feitas pelo agente não substituem essa leitura.
+10. Os verificadores avaliam os pré-requisitos da trust boundary e, quando habilitados, build, testes, regras semânticas e critérios de aceite.
+11. `DecisionEngine` exige exatamente um `Pass` para cada gate obrigatório. Resultado ausente, duplicado, `Skip`, `Fail` ou `Error` rejeita a execução.
+12. O worktree é removido, o checkout original é conferido novamente e `JsonExecutionEvidenceStore` persiste o resultado fora do repositório.
 
-O Control Kernel rejeita o resultado quando os metadados retornados excedem limites de custo, tokens, duração, tentativas ou arquivos, ou quando há mudanças relatadas fora do escopo. Essa validação ocorre depois da chamada do agente; os limites ainda não cancelam preventivamente uma inferência em andamento.
+## Invariantes da trust boundary
 
-O kernel aceita um contador de tentativas, mas os entry points atuais sempre fazem uma única chamada e usam o contador zero. Ainda não existe um loop automático de retry.
+| Entrada ou estado | Autoridade aceita | Enforcement |
+| --- | --- | --- |
+| Caminhos na resposta do agente | `FileApplicator` | rejeita caminho absoluto, traversal, `.git`, symlink/junction e destino duplicado; a validação é all-or-nothing antes da escrita |
+| Arquivos alterados | Git no worktree | `CandidateChangeSet.ChangedFiles` vem de `git diff --cached --name-status`, não de `AgentRunResult.FilesChanged` |
+| Conteúdo do candidato | diff Git persistido | o SHA-256 liga a evidência ao patch exato |
+| Estado do original | commit, branch e status capturados | é revalidado após preflight, antes de publicar e antes de qualquer promoção |
+| Resultado de comandos | processo real | argumentos, working directory, duração, saída, exit code, timeout e cancelamento são preservados |
+| Critério de aceite | verificador ou teste declarado | texto sem evidência executável não é suficiente para um critério obrigatório |
+| Permissão para promover | evidência + confirmação externa | o agente não pode tornar seu próprio candidato elegível nem aprová-lo |
 
-Depois do kernel, os verificadores produzem evidências adicionais:
+Os arquivos são escritos antes da verificação de escopo, mas somente no worktree descartável. Uma violação produz evidência e decisão `Rejected`; ela nunca é copiada automaticamente para o checkout original.
 
-| Verificador | Implementação atual |
+## Worktrees e baseline
+
+O repositório informado à CLI precisa:
+
+- pertencer a um repositório Git com `HEAD` válido;
+- permitir que Git identifique a referência atual (`HEAD` também é aceito em checkout detached);
+- não possuir alterações tracked, staged ou untracked;
+- continuar no mesmo commit, branch e status durante toda a execução.
+
+Preflight e candidato usam worktrees separados em `%TEMP%`/`$TMPDIR`, ambos detached no commit da baseline. A limpeza usa token não cancelável para que timeout ou cancelamento não deixem worktrees do agente ativos. O AECS detecta mudanças concorrentes no checkout original e falha fechado; ele não bloqueia processos externos durante uma execução staged.
+
+## Perfil de build e testes
+
+`execution.working_directory` define um diretório relativo à raiz do worktree e `execution.target` aponta para uma solução ou projeto `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj`. Caminhos absolutos, traversal, `.git` e links de filesystem são recusados.
+
+Quando build ou testes estão habilitados, o target explícito é obrigatório. O mesmo perfil executa:
+
+- `dotnet build <target>` na baseline e no candidato;
+- `dotnet test <target> --no-build` depois de um build aprovado;
+- `dotnet test <target> --no-build --filter <reference>` para evidência de aceite do tipo `test`.
+
+O process runner consome `stdout` e `stderr` de forma assíncrona, encerra a árvore de processos em timeout/cancelamento e registra cada comando. Build ou testes da baseline que não produzam `Pass` encerram o fluxo antes do agente.
+
+## Contexto compilado
+
+Toda execução que ultrapassa o preflight chama `RepositoryContextCompiler` no worktree do candidato. A implementação atual:
+
+- indexa arquivos C# e símbolos simples, ignorando `.git`, outputs, dependências vendorizadas, diretórios ocultos e reparse points;
+- restringe os arquivos aos padrões de `scope.allowed` e exclui `scope.forbidden`;
+- ranqueia por objetivo, critérios de aceite, caminhos, símbolos e testes relacionados;
+- omite arquivos sensíveis como `.env*`, `secrets.json`, chaves e certificados;
+- limita por padrão a 12 mil tokens estimados, 48 mil caracteres totais e 16 mil por arquivo, sempre respeitando um orçamento de tokens menor;
+- registra hash do conteúdo original, hash do trecho incluído, símbolos, truncamento, arquivos omitidos e hash do manifesto.
+
+A estimativa usa quatro caracteres por token e não substitui a telemetria do provedor. Um escopo `allowed` vazio produz contexto de código vazio; o cabeçalho e o manifesto ainda são determinísticos. Em falha de preflight, a evidência contém um manifesto `not-compiled`.
+
+## Gates e comportamento fail-closed
+
+Os gates sempre obrigatórios são:
+
+| Gate | Condição de `Pass` |
 | --- | --- |
-| Build | executa `dotnet build --no-restore` no repositório-alvo |
-| Tests | executa `dotnet test --no-build` no repositório-alvo |
-| Scope | compara os caminhos relatados com `allowed` e `forbidden` |
-| Budget | confere os limites do contrato |
-| EB001 | procura violações arquiteturais configuradas |
-| EB002 | procura violações de padrões existentes |
-| EB003 | sinaliza possíveis breaking changes |
-| EB004 | sinaliza mudanças relacionadas ausentes |
-| EB005 | sinaliza conflitos com decisões históricas |
+| `AgentSuccess` | a tentativa final do agente terminou com sucesso |
+| `Application` | a resposta foi aplicada sem erro de parsing ou caminho |
+| `NonEmptyChange` | Git encontrou diff real e ao menos um arquivo alterado |
+| `Scope` | todos os caminhos Git respeitam `allowed` e `forbidden` |
+| `Budget` | tokens, custo, retries e quantidade de arquivos permanecem nos limites |
 
-No estado atual, `DecisionEngine` considera obrigatórios apenas Build, Tests, Scope e Budget conforme o perfil do contrato. Quando o kernel permite continuar, EB001–EB005 são coletados como evidência, mas ainda não alteram a decisão final.
+Gates condicionais:
 
-Os verificadores de build e testes redirecionam a saída dos subprocessos, mas não consomem o `stdout` atual. Uma saída suficientemente volumosa pode preencher o buffer e interromper o progresso até que essa implementação seja corrigida.
+- `Build`, quando `verification.build` é `required`;
+- `Tests`, quando unit ou integration tests são `required`; ambos usam hoje o mesmo verificador `dotnet test`;
+- `AcceptanceCriteria`, quando existe ao menos um critério declarado;
+- `EB001-Architecture`, quando `verification.architecture` é `required`;
+- nomes listados em `required_semantic_verifiers`;
+- qualquer resultado EB crítico que não seja `Pass`, quando `critical_semantic_failures` é `required`.
+
+`security_scan: required` adiciona `SecurityScan` à matriz, mas ainda não existe implementação desse verificador; por isso o resultado é rejeitado por gate ausente. Os verificadores EB001–EB005 só executam depois dos pré-requisitos e do build. Exceções de qualquer verificador viram `Error`, não sucesso.
+
+Critérios de aceite obrigatórios precisam apontar para um resultado de verificador ou teste filtrado. Para testes, exit code zero sem nenhum caso TRX executado falha. Critérios comportamentais também exigem que o arquivo de teste declarado apareça no diff, salvo evidência equivalente explicitamente autorizada.
+
+Cancelamento, wall clock esgotado, orçamento excedido ou falha permanente do agente produzem decisão `Rejected` e estados terminais específicos (`Cancelled`, `TimedOut`, `BudgetExceeded` ou `AgentFailed`).
 
 ## Decisões
 
-- `Verified`: todos os verificadores obrigatórios passaram e não há aprovação humana configurada;
-- `Rejected`: o kernel bloqueou a execução ou algum verificador obrigatório falhou;
-- `HumanReviewRequired`: os verificadores obrigatórios passaram, mas `approval.production` é `human`.
+- `Verified`: todos os gates obrigatórios estão presentes uma única vez e em `Pass`, sem política de aprovação humana;
+- `HumanReviewRequired`: os mesmos gates passaram, mas `approval.production` é `human`;
+- `Rejected`: qualquer pré-requisito, gate ou política fail-closed não passou.
 
-A decisão é uma avaliação do pipeline disponível, não uma garantia formal de correção do software.
+`Verified` prova somente o contrato e a matriz de evidências declarados. Não é uma prova formal de correção nem cobre requisitos ausentes do contrato.
 
-O sucesso do `AgentRunResult` ainda não participa diretamente da decisão. Se o adaptador falhar sem modificar arquivos e o repositório-alvo já passar em build e testes, o pipeline pode chegar a `Verified`. Esse comportamento é uma lacuna conhecida; consumidores não devem interpretar `Verified` como prova de que o objetivo foi atendido até existir uma verificação explícita de mudança útil e critérios de aceite.
+## Evidência JSON
 
-## Context Compiler
+A CLI usa `JsonExecutionEvidenceStore`. O diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windows e o equivalente retornado por `LocalApplicationData` nas demais plataformas; `AECS_EVIDENCE_PATH` pode sobrescrevê-lo. O store recusa um diretório de evidência localizado dentro do repositório-alvo.
 
-`CodebaseIndexer` e `ContextSelector` constroem pacotes compactos com arquivos e símbolos relevantes.
+Cada documento preserva:
 
-As integrações ainda não são uniformes:
+- contrato, risco efetivo, execução do agente e cada tentativa;
+- consumo agregado de tokens, custo, tempo e motivo de exaustão;
+- baseline, comandos e verificações de preflight;
+- manifesto de contexto;
+- `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
+- matriz de critérios de aceite, decisão final e transições de estado;
+- exportações e promoções posteriores.
 
-- experimentos procuram código inicialmente em `<repo>/Backend` e limitam o conteúdo a aproximadamente 20 mil caracteres;
-- o comando `context` do Jarvis indexa `<repo>/src`;
-- o fluxo individual da CLI ainda não injeta um pacote de contexto na solicitação do agente.
+A criação inicial não sobrescreve uma evidência existente. Acréscimos de promoção usam locks em processo e em arquivo, escrita temporária e substituição atômica. O backend PostgreSQL existe como fundação, mas não compõe o fluxo da CLI.
 
-## Persistência e evidências
+## Promoção controlada
 
-`AecsDbContext` e `EvidenceStore` fornecem a base de persistência em PostgreSQL, coerente com o [ADR-003](adr/ADR-003-postgresql-evidence-store.md). O `docker-compose.yml` da raiz sobe uma instância local do banco.
+Promoção não faz parte do pipeline probabilístico. `CandidatePromotionService` só aceita `Verified`, ou `HumanReviewRequired` com aprovação humana referenciada. Ele revalida identidade da evidência, commit-base, repositório, branch, status e hashes; executa `git apply --check --index`, aplica com `git apply --index` e compara novamente o diff staged ao hash verificado.
 
-A execução staged usa `JsonExecutionEvidenceStore` e grava cada resultado fora do repositório-alvo. O identificador exibido por `run` referencia esse documento, que contém contrato, baseline, candidato, comandos, verificações, decisão e tentativas posteriores de exportação ou promoção. O store PostgreSQL permanece como infraestrutura futura e ainda não compõe a CLI.
+Locks por repositório coordenam promoções concorrentes. Falha pós-aplicação ou impossibilidade de persistir a auditoria aciona rollback para a baseline. A mudança permanece staged e nenhum commit é criado. A exportação de patch é uma operação distinta e não modifica o repositório. Detalhes estão em [Promoção controlada](controlled-promotion.md).
 
-## Fronteiras de confiança
+## Mapa de componentes
 
-O agente escreve somente em um worktree descartável e a execução atesta que o checkout original permaneceu inalterado. A fronteira de escrita no repositório-alvo fica no caso de uso de promoção, que exige uma baseline limpa e idêntica, hash confirmado, candidato elegível e aprovação explícita. O patch passa por preflight, aplicação atômica e verificação posterior do hash; falha de auditoria após a aplicação aciona rollback.
+| Projeto | Responsabilidade conectada |
+| --- | --- |
+| `AECS.Domain` | contratos, candidatos, evidências, decisões e interfaces sem dependência de infraestrutura |
+| `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão e promoção |
+| `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, evidência JSON e fundações PostgreSQL/Docker |
+| `AECS.Cli` | `run`, `experiment`, `jarvis`, `promote` e `export-patch` |
+| `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
+| `AECS.IntegrationTests` | Git real, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 
-O sandbox Docker ainda não envolve o caminho padrão da CLI e chaves de API devem permanecer exclusivamente em `.env` ou no ambiente. A promoção continua sendo uma operação de escrita deliberada: prefira branch dedicada e revise o diff staged antes do commit. Veja [Promoção controlada](controlled-promotion.md).
+A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-monolith.md). `ControlKernel`, PostgreSQL e Docker mantêm componentes de fundação, mas o fluxo staged hoje conecta diretamente os enforcers/verificadores, o store JSON e processos no host.
 
-## Pontos de extensão
+## Limitações atuais
 
-- implemente `IAgentAdapter` para adicionar outro runtime;
-- implemente `IVerifier` para produzir uma nova evidência;
-- evolua `RiskClassifier` e `ExecutionController` para novas políticas de roteamento;
-- implemente outro `IExecutionEvidenceStore` para trocar a persistência JSON;
-- transforme uma regra semântica confirmada em enforcement determinístico;
-- estenda as políticas de promoção sem mover a decisão de elegibilidade para o runtime probabilístico.
+- o agente e os verificadores executam no host; o sandbox Docker ainda não envolve a CLI padrão;
+- a evidência JSON não possui assinatura criptográfica nem armazenamento imutável externo;
+- o compilador de contexto indexa apenas C# e usa tokenização aproximada;
+- unit e integration tests compartilham um único comando/verificador;
+- `SecurityScan` não foi implementado;
+- a estimativa de custo do adapter não equivale à fatura final do provedor;
+- a promoção é deliberadamente manual ou autorizada por referência de política e não cria commit;
+- a interface da CLI ainda pode mudar sem compatibilidade retroativa.
+
+Essas limitações não reabrem a trust boundary: uma capacidade ausente que é declarada obrigatória deve falhar fechado, nunca ser presumida como aprovada.

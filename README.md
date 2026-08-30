@@ -16,16 +16,18 @@ Modelos podem descobrir padrões, selecionar contexto e propor alterações. Bui
 
 ```mermaid
 flowchart LR
-    A[TaskContract YAML] --> B[Classificação de risco]
-    B --> C[Plano e seleção de modelo]
-    C --> D[Agente local ou fallback cloud]
-    D --> E[Aplicação das mudanças]
-    E --> F[Control Kernel]
-    F --> G[Build, testes, escopo, orçamento e lint semântico]
-    G --> H{Decisão}
-    H --> I[Verified]
-    H --> J[Rejected]
-    H --> K[Human review]
+    A[TaskContract YAML] --> B[Baseline Git limpa]
+    B --> C[Worktree de preflight]
+    C --> D{Build e testes da baseline}
+    D -->|falha| R[Rejected + evidência]
+    D -->|passa| E[Worktree do candidato]
+    E --> F[Contexto limitado + agente]
+    F --> G[CandidateChangeSet derivado pelo Git]
+    G --> H{Gates determinísticos}
+    H -->|falha| R
+    H -->|passa| I[Verified ou HumanReviewRequired]
+    I --> J[Evidência JSON fora do repositório]
+    J -->|confirmação explícita| K[Promoção atômica opcional]
 ```
 
 O protótipo já inclui:
@@ -35,9 +37,12 @@ O protótipo já inclui:
 - seleção de modelos locais por risco;
 - execução via Ollama e fallback para APIs compatíveis com OpenAI;
 - limites de tokens, custo, duração, tentativas e arquivos alterados;
-- verificadores de build, testes, escopo e orçamento;
-- verificadores semânticos EB001–EB005;
-- compilação seletiva de contexto para experimentos;
+- preflight da baseline e verificadores bloqueantes de agente, aplicação, mudança real, build, testes, escopo e orçamento;
+- critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
+- verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
+- compilação seletiva e limitada de contexto em toda execução staged;
+- `CandidateChangeSet` e evidência JSON derivados do estado real do Git;
+- promoção controlada ou exportação do patch como operações separadas;
 - execução em lote com métricas como taxa de verificação e CPVC;
 - REPL interativo, chamado Jarvis.
 
@@ -63,8 +68,10 @@ dotnet build AECS.slnx
 dotnet test AECS.slnx
 ```
 
-O CI executa separadamente a suíte E2E reproduzível do AgronomoPlus, que usa um fixture
-versionado `net9.0`, cria repositórios Git temporários e publica relatório e evidências em JSON:
+O CI executa separadamente a suíte E2E reproduzível do AgronomoPlus. Ela usa um fixture
+versionado `net9.0`, cria repositórios Git temporários e cobre candidato válido, violação
+adversarial de escopo e promoção do diff verificado. O relatório e as evidências JSON são
+publicados como artifact:
 
 ```powershell
 $env:AECS_E2E_REPORT_PATH = Join-Path $env:TEMP "aecs-real-world-e2e/report.json"
@@ -99,7 +106,7 @@ Uma execução individual recebe o repositório-alvo e um contrato YAML:
 ```powershell
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- run `
   --repo C:\caminho\para\repositorio `
-  --task-file tasks/task-001-fix-null.yaml `
+  --task-file C:\caminho\para\contrato.yaml `
   --mock
 ```
 
@@ -190,8 +197,17 @@ task:
   id: TASK-001
   objective: Fix NullReferenceException in CustomerMapper when input is null
   acceptance:
-    - Null input does not throw
+    - Null input returns an empty result
     - Existing tests still pass
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      reference: FullyQualifiedName~CustomerMapperTests.NullCustomer
+      test_path: tests/Customers/CustomerMapperTests.cs
+      behavioral: true
+    - id: AC-002
+      type: verifier
+      reference: Tests
   scope:
     allowed:
       - src/Customers/**
@@ -208,6 +224,9 @@ task:
     retries: 1
     wall_clock_seconds: 120
     max_files_changed: 5
+  execution:
+    working_directory: .
+    target: CustomerSystem.slnx
   verification:
     build: required
     unit_tests: required
@@ -216,7 +235,7 @@ task:
     production: none
 ```
 
-A referência de campos, padrões de escopo, valores padrão e regras de decisão está em [TaskContract](docs/task-contract.md). Exemplos adicionais ficam em [`tasks/`](tasks/).
+A referência de campos, padrões de escopo, valores padrão e regras de decisão está em [TaskContract](docs/task-contract.md). Os YAMLs em [`tasks/`](tasks/) são modelos de contrato; o exemplo realmente executado em CI fica no [fixture AgronomoPlus](tests/fixtures/real-world-demo/README.md).
 
 ## Comandos da CLI
 
@@ -272,7 +291,8 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
 - a persistência de evidências em PostgreSQL ainda não está conectada à CLI;
 - o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
-- os verificadores EB001–EB005 são executados, porém ainda não bloqueiam a decisão final;
+- `security_scan: required` falha fechado porque ainda não existe implementação do verificador `SecurityScan`;
+- o indexador de contexto atual é específico para arquivos C# e usa estimativa aproximada de quatro caracteres por token;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.
 
 Essas limitações são deliberadamente explícitas: hoje o AECS é uma base de pesquisa executável, não um gate de produção pronto para uso autônomo.
