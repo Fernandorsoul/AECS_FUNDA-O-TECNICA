@@ -352,10 +352,3 @@ public class JarvisRepl
         return sb.ToString();
     }
 }
-            Console.WriteLine($"  {f}");
-        Console.WriteLine();
-        Console.WriteLine("Symbols:");
-        foreach (var s in package.SelectedSymbols)
-            Console.WriteLine($"  {s}");
-    }
-}
