@@ -1,5 +1,6 @@
 using AECS.Application.Parsing;
 using AECS.Domain.Enums;
+using AECS.Domain.Models;
 using FluentAssertions;
 using YamlDotNet.Core;
 
@@ -47,6 +48,9 @@ public class TaskContractParserTests
         result.Id.Should().Be("TASK-001");
         result.Objective.Should().Be("Fix null handling");
         result.AcceptanceCriteria.Should().HaveCount(2);
+        result.AcceptanceRequirements.Should().HaveCount(2);
+        result.AcceptanceRequirements.Should().OnlyContain(criterion =>
+            criterion.Evidence.Type == AcceptanceEvidenceType.None);
         result.Scope.Allowed.Should().Contain("src/Customers/**");
         result.Scope.Forbidden.Should().Contain("src/Billing/**");
         result.Budget.MaxTokens.Should().Be(60000);
@@ -57,6 +61,70 @@ public class TaskContractParserTests
         result.Verification.UnitTests.Should().BeTrue();
         result.Approval.Production.Should().Be(ApprovalLevel.None);
         result.Status.Should().Be(TaskState.ContractReady);
+    }
+
+    [Fact]
+    public void Parse_AcceptanceEvidence_MapsTestsVerifiersAndSemanticPolicy()
+    {
+        var yaml = """
+            task:
+              id: TASK-ACCEPTANCE
+              objective: Prevent null names
+              acceptance:
+                - Null name is rejected
+                - Existing regression suite passes
+              acceptance_evidence:
+                - id: AC-001
+                  type: test
+                  reference: FullyQualifiedName~Create_NullName
+                  test_path: tests/CreateHandlerTests.cs
+                  behavioral: true
+                - criterion: Existing regression suite passes
+                  type: verifier
+                  reference: Tests
+              verification:
+                critical_semantic_failures: required
+                required_semantic_verifiers:
+                  - EB003-BreakingChange
+            """;
+
+        var result = _parser.Parse(yaml);
+
+        result.AcceptanceRequirements.Should().HaveCount(2);
+        result.AcceptanceRequirements[0].Id.Should().Be("AC-001");
+        result.AcceptanceRequirements[0].Behavioral.Should().BeTrue();
+        result.AcceptanceRequirements[0].Evidence.Type.Should().Be(AcceptanceEvidenceType.Test);
+        result.AcceptanceRequirements[0].Evidence.Reference.Should()
+            .Be("FullyQualifiedName~Create_NullName");
+        result.AcceptanceRequirements[0].Evidence.TestPath.Should()
+            .Be("tests/CreateHandlerTests.cs");
+        result.AcceptanceRequirements[1].Evidence.Type.Should()
+            .Be(AcceptanceEvidenceType.Verifier);
+        result.AcceptanceRequirements[1].Evidence.Reference.Should().Be("Tests");
+        result.Verification.BlockCriticalSemanticFailures.Should().BeTrue();
+        result.Verification.RequiredSemanticVerifiers.Should()
+            .ContainSingle("EB003-BreakingChange");
+    }
+
+    [Fact]
+    public void Parse_UnboundAcceptanceEvidence_RejectsAmbiguousContract()
+    {
+        var yaml = """
+            task:
+              id: TASK-INVALID
+              objective: Invalid mapping
+              acceptance:
+                - Known criterion
+              acceptance_evidence:
+                - id: AC-999
+                  type: verifier
+                  reference: Tests
+            """;
+
+        var action = () => _parser.Parse(yaml);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*does not match*criterion*");
     }
 
     [Fact]

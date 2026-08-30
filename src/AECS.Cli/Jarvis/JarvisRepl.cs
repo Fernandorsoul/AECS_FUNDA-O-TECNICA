@@ -157,6 +157,10 @@ public class JarvisRepl
             OutputTokens = execution.AgentResult.OutputTokens,
             EstimatedCost = execution.AgentResult.EstimatedCost,
             FilesChanged = execution.CandidateChangeSet.ChangedFiles.Count,
+            Verifications = execution.VerificationResults.ToDictionary(
+                verification => verification.Verifier,
+                verification => verification.Status),
+            AcceptanceCriteria = execution.AcceptanceCriteriaResults.ToList(),
             EvidenceId = execution.EvidenceId,
             OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
         };
@@ -271,6 +275,18 @@ public class JarvisRepl
         Console.WriteLine($"Tokens: {record.InputTokens} in / {record.OutputTokens} out");
         Console.WriteLine($"Cost: ${record.EstimatedCost:F2}");
         Console.WriteLine($"Files changed: {record.FilesChanged}");
+        if (record.AcceptanceCriteria.Count > 0)
+        {
+            Console.WriteLine("Acceptance evidence:");
+            foreach (var criterion in record.AcceptanceCriteria)
+            {
+                var reference = string.IsNullOrWhiteSpace(criterion.EvidenceReference)
+                    ? "missing"
+                    : $"{criterion.EvidenceType}:{criterion.EvidenceReference}";
+                Console.WriteLine(
+                    $"  {criterion.CriterionId} {criterion.Status} {reference} — {criterion.Description}");
+            }
+        }
     }
 
     private void ClassifyRisk(string objective)

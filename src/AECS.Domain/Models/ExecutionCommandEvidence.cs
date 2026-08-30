@@ -2,6 +2,7 @@ namespace AECS.Domain.Models;
 
 public sealed class ExecutionCommandEvidence
 {
+    public Guid Id { get; init; } = Guid.NewGuid();
     public string FileName { get; init; } = string.Empty;
     public List<string> Arguments { get; init; } = [];
     public string WorkingDirectory { get; init; } = string.Empty;

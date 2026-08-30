@@ -41,6 +41,7 @@ public class ExperimentRunner
                 Verifications = execution.VerificationResults.ToDictionary(
                     result => result.Verifier,
                     result => result.Status),
+                AcceptanceCriteria = execution.AcceptanceCriteriaResults.ToList(),
                 EvidenceId = execution.EvidenceId,
                 OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
             });

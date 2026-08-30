@@ -7,6 +7,7 @@ public class TaskContract
     public string Id { get; init; } = string.Empty;
     public string Objective { get; init; } = string.Empty;
     public List<string> AcceptanceCriteria { get; init; } = [];
+    public List<AcceptanceCriterion> AcceptanceRequirements { get; init; } = [];
     public ScopeDefinition Scope { get; init; } = new();
     public TaskConstraints Constraints { get; init; } = new();
     public ExecutionBudget Budget { get; init; } = ExecutionBudget.Default;

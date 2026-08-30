@@ -164,6 +164,18 @@ static async Task<int> RunSingle(string[] args)
     foreach (var result in execution.VerificationResults)
         Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
 
+    Console.WriteLine("Acceptance evidence:");
+    foreach (var criterion in execution.AcceptanceCriteriaResults)
+    {
+        var reference = string.IsNullOrWhiteSpace(criterion.EvidenceReference)
+            ? "missing"
+            : $"{criterion.EvidenceType}:{criterion.EvidenceReference}";
+        Console.WriteLine(
+            $"  {criterion.CriterionId.PadRight(8)} {criterion.Status,-5} {reference} — {criterion.Description}");
+    }
+    if (execution.AcceptanceCriteriaResults.Count == 0)
+        Console.WriteLine("  (none declared)");
+
     Console.WriteLine($"Decision: {execution.Decision.Decision.ToString().ToUpperInvariant()}");
     Console.WriteLine($"Reason: {execution.Decision.Reason}");
     Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
