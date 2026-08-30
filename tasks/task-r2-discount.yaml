@@ -1,0 +1,33 @@
+task:
+  id: R2-001
+  objective: Add a CalculateDiscount method to CustomerService that applies a percentage discount to a price, with validation that discount is between 0 and 100
+  acceptance:
+    - CalculateDiscount accepts price (decimal) and discountPercent (decimal)
+    - Returns discounted price
+    - Throws ArgumentOutOfRangeException if discount is not between 0 and 100
+    - Existing tests still pass
+    - New unit tests for CalculateDiscount are added
+  scope:
+    allowed:
+      - src/Customers/**
+      - tests/Customers/**
+    forbidden:
+      - src/Billing/**
+      - src/Orders/**
+  constraints:
+    security_risk: medium
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 100000
+    usd: 0.50
+    retries: 2
+    wall_clock_seconds: 300
+    max_files_changed: 5
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    budget: required
+  approval:
+    production: none

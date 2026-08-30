@@ -1,0 +1,29 @@
+task:
+  id: R2-002
+  objective: Add a static method IsValidPhone to CustomerService that returns true if phone has 10 or 11 digits
+  acceptance:
+    - IsValidPhone returns true for "11999998888"
+    - IsValidPhone returns false for "123"
+    - Existing tests pass
+  scope:
+    allowed:
+      - src/Customers/**
+      - tests/Customers/**
+    forbidden: []
+  constraints:
+    security_risk: medium
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 100000
+    usd: 0.50
+    retries: 2
+    wall_clock_seconds: 300
+    max_files_changed: 3
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    budget: required
+  approval:
+    production: none
