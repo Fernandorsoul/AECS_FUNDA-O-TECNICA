@@ -161,7 +161,11 @@ public class CloudAdapter : IAgentAdapter
             sb.AppendLine();
         }
 
-        if (request.CodeContext.Count > 0)
+        if (!string.IsNullOrWhiteSpace(request.ContextPrompt))
+        {
+            sb.AppendLine(request.ContextPrompt);
+        }
+        else if (request.CodeContext.Count > 0)
         {
             sb.AppendLine("EXISTING CODE:");
             foreach (var (path, fileContent) in request.CodeContext)

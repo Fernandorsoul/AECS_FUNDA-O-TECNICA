@@ -148,6 +148,10 @@ static async Task<int> RunSingle(string[] args)
         Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
     if (execution.BaselineVerificationResults.Count == 0)
         Console.WriteLine("  (not required)");
+    Console.WriteLine($"Context: {execution.ContextManifest.Id}");
+    Console.WriteLine($"Context files: {execution.ContextManifest.Files.Count} " +
+        $"({execution.ContextManifest.EstimatedTokens} estimated tokens)");
+    Console.WriteLine($"Context hash: {execution.ContextManifest.ManifestHash}");
     Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
     Console.WriteLine($"Diff hash: {execution.CandidateChangeSet.DiffHash}");
     Console.WriteLine("Changed files:");

@@ -9,7 +9,9 @@ namespace AECS.UnitTests;
 
 public class OllamaAdapterTests
 {
-    private static AgentExecutionRequest CreateRequest(string model = "codellama:3b") => new()
+    private static AgentExecutionRequest CreateRequest(
+        string model = "codellama:3b",
+        string contextPrompt = "") => new()
     {
         TaskId = "T1",
         Objective = "Fix null handling in CustomerMapper",
@@ -22,7 +24,8 @@ public class OllamaAdapterTests
         },
         Budget = ExecutionBudget.Default,
         Risk = RiskLevel.R1,
-        Model = model
+        Model = model,
+        ContextPrompt = contextPrompt
     };
 
     [Fact]
@@ -50,6 +53,31 @@ public class OllamaAdapterTests
         result.EstimatedCost.Should().Be(0m);
         result.FilesChanged.Should().Contain("src/Customers/CustomerMapper.cs");
         result.ExitReason.Should().Be("Completed");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_IncludesCompiledRepositoryContextInProviderPrompt()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            response = "FILE: src/New.cs\n```csharp\nclass New { }\n```",
+            prompt_eval_count = 20,
+            eval_count = 10,
+            total_duration = 1L
+        });
+        var handler = new MockHttpMessageHandler(json, HttpStatusCode.OK);
+        var adapter = new OllamaAdapter(new HttpClient(handler), "http://localhost:11434");
+        const string context = "## REPOSITORY CONTEXT\n### src/Existing.cs\n" +
+            "Symbols:\n- class Demo.Existing\n```csharp\nclass Existing { }\n```";
+
+        await adapter.ExecuteAsync(
+            CreateRequest(contextPrompt: context),
+            CancellationToken.None);
+
+        handler.LastRequestContent.Should().Contain("REPOSITORY CONTEXT");
+        handler.LastRequestContent.Should().Contain("src/Existing.cs");
+        handler.LastRequestContent.Should().Contain("class Demo.Existing");
+        handler.LastRequestContent.Should().Contain("class Existing");
     }
 
     [Fact]
@@ -154,11 +182,16 @@ internal class MockHttpMessageHandler : HttpMessageHandler
         _delayMs = delayMs;
     }
 
+    public string? LastRequestContent { get; private set; }
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         if (_throwOnSend)
             throw new HttpRequestException("Connection refused");
+
+        if (request.Content is not null)
+            LastRequestContent = await request.Content.ReadAsStringAsync(cancellationToken);
 
         if (_delayMs > 0)
             await Task.Delay(_delayMs, cancellationToken);
