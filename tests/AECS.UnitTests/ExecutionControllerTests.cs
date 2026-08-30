@@ -54,7 +54,7 @@ public class ExecutionControllerTests
 
         var plan = await _controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("qwen2.5-coder:7b");
+        plan.Model.Should().Be("qwen2.5-coder:14b");
         plan.Risk.Should().Be(RiskLevel.R2);
     }
 
@@ -70,7 +70,7 @@ public class ExecutionControllerTests
 
         var plan = await _controller.PlanAsync(contract, CancellationToken.None);
 
-        plan.Model.Should().Be("qwen2.5-coder:7b");
+        plan.Model.Should().Be("qwen2.5-coder:14b");
         plan.Risk.Should().Be(RiskLevel.R3);
     }
 
