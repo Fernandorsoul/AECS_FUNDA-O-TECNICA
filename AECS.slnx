@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AECS.Application/AECS.Application.csproj" />
+    <Project Path="src/AECS.Cli/AECS.Cli.csproj" />
+    <Project Path="src/AECS.Domain/AECS.Domain.csproj" />
+    <Project Path="src/AECS.Infrastructure/AECS.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj" />
+    <Project Path="tests/AECS.UnitTests/AECS.UnitTests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,168 @@
+# Referência do TaskContract
+
+O `TaskContract` é a unidade de trabalho do AECS. Ele define o resultado esperado, quais arquivos podem mudar, quanto a execução pode consumir, quais verificações são obrigatórias e se a entrega exige aprovação humana.
+
+## Exemplo completo
+
+```yaml
+task:
+  id: TASK-001
+  objective: Fix NullReferenceException in CustomerMapper when input is null
+  acceptance:
+    - No NullReferenceException when Customer is null
+    - Existing tests still pass
+    - Null input returns an empty result
+  scope:
+    allowed:
+      - src/Customers/**
+      - tests/Customers/**
+    forbidden:
+      - src/Billing/**
+      - src/Orders/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 60000
+    usd: 0.20
+    retries: 1
+    wall_clock_seconds: 120
+    max_files_changed: 5
+  execution:
+    working_directory: .
+    target: SampleProject.slnx
+  verification:
+    build: required
+    unit_tests: required
+    integration_tests: optional
+    scope: required
+    security_scan: optional
+    architecture: optional
+  approval:
+    production: none
+```
+
+O parser aceita a raiz `task` ou `Task` e propriedades em snake_case ou PascalCase. Campos desconhecidos são ignorados; por isso, valide alterações de schema com testes para evitar erros de digitação silenciosos.
+
+## Campos
+
+### Identidade e objetivo
+
+| Campo | Tipo | Padrão | Semântica |
+| --- | --- | --- | --- |
+| `id` | string | vazio | Identificador usado em relatórios e histórico |
+| `objective` | string | vazio | Instrução principal enviada ao agente e usada na classificação de risco |
+| `acceptance` | lista de strings | vazia | Resultados observáveis que devem orientar geração e verificação |
+
+O parser ainda não rejeita `id` ou `objective` vazios. Trate ambos como obrigatórios ao escrever novos contratos.
+
+### Escopo
+
+| Campo | Tipo | Padrão | Semântica |
+| --- | --- | --- | --- |
+| `scope.allowed` | lista de caminhos | vazia | Se preenchida, todo arquivo relatado deve corresponder a ao menos um padrão |
+| `scope.forbidden` | lista de caminhos | vazia | Padrões proibidos, avaliados antes dos permitidos |
+
+Padrões suportados pelo verificador atual:
+
+- caminho exato: `src/Customers/Customer.cs`;
+- prefixo recursivo terminado em `/**`: `src/Customers/**`;
+- `*` dentro de um segmento: `src/*.cs`;
+- separadores `/` e `\` são normalizados.
+
+Use caminhos relativos à raiz informada em `--repo`. Se um arquivo corresponder simultaneamente a `allowed` e `forbidden`, a proibição prevalece.
+
+> O escopo é validado depois que blocos de arquivo já foram aplicados. Ele decide aceitar ou rejeitar a execução, mas ainda não funciona como barreira preventiva de escrita.
+
+### Restrições e risco
+
+| Campo | Valores reconhecidos | Padrão |
+| --- | --- | --- |
+| `constraints.security_risk` | `low`, `r0`, `r1`, `medium`, `r2`, `high`, `r3` | `low` |
+| `constraints.database_migration` | boolean | `false` |
+| `constraints.external_dependency` | boolean | `false` |
+
+O risco declarado é apenas uma entrada. `RiskClassifier` reclassifica o contrato e pode elevá-lo conforme o texto ou o escopo:
+
+- R0: documentação, comentários, formatação ou rename;
+- R1: mudança simples que não aciona regras superiores;
+- R2: regra de negócio, service, repository, controller, API, validação, contrato ou mais de três padrões permitidos;
+- R3: autenticação, autorização, pagamentos, segredos, criptografia, migração declarada ou dependência externa;
+- R4: infraestrutura, Docker, Kubernetes, deploy, CI/CD, produção, rede ou schema/migration no objetivo.
+
+Embora seja aceito como texto, `security_risk: r0` é convertido inicialmente em R1; R0 é inferido a partir do objetivo. O parser também ainda não converte `security_risk: r4` diretamente em R4. Para tarefas críticas, descreva claramente a natureza de infraestrutura no objetivo e mantenha `approval.production: human`.
+
+### Orçamento
+
+| Campo | Tipo | Padrão |
+| --- | --- | --- |
+| `budget.tokens` | inteiro | `60000` |
+| `budget.usd` | decimal | `0.20` |
+| `budget.retries` | inteiro | `1` |
+| `budget.wall_clock_seconds` | inteiro | `120` |
+| `budget.max_files_changed` | inteiro | `10` |
+
+Os limites são comparados com os metadados retornados pelo adaptador após a execução. Eles rejeitam um resultado excedente, mas ainda não cancelam preventivamente a chamada. O custo do Ollama é registrado como zero; o adaptador cloud calcula uma estimativa a partir dos tokens e de uma tabela interna de preços, não de uma fatura do provedor.
+
+`retries` limita um contador aceito pelo kernel, mas a CLI atual não repete automaticamente uma chamada que falhou.
+
+### Perfil de execução
+
+| Campo | Tipo | Padrão | Semântica |
+| --- | --- | --- | --- |
+| `execution.working_directory` | caminho relativo | `.` | Diretório, dentro do worktree isolado, onde build e testes são executados |
+| `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado pelos comandos `dotnet build` e `dotnet test` |
+
+Quando build ou testes são obrigatórios, `execution.target` também é obrigatório. O AECS falha fechado antes de chamar o agente se o perfil estiver ausente ou inválido, se o diretório/target não existir ou se algum caminho tentar atravessar a fronteira do worktree.
+
+O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de um baseline verde o AECS cria um segundo worktree limpo para o agente. Os mesmos diretório e target são reutilizados no candidato, e comandos, argumentos, duração, saída e exit code ficam registrados na evidência.
+
+### Verificação
+
+| Campo | Padrão | Efeito de `required` |
+| --- | --- | --- |
+| `verification.build` | `required` | Build participa da decisão |
+| `verification.unit_tests` | `required` | Testes participam da decisão |
+| `verification.integration_tests` | `optional` | Reservado no perfil; ainda não tem verificador separado no pipeline |
+| `verification.scope` | `required` | Escopo participa da decisão |
+| `verification.security_scan` | `optional` | Reservado no perfil; ainda não conectado a um scanner |
+| `verification.architecture` | `optional` | Reservado no perfil; regras EB rodam separadamente |
+
+Somente o texto `required`, sem diferenciar maiúsculas de minúsculas, ativa esses campos. Qualquer outro valor é tratado como opcional.
+
+A verificação de orçamento permanece habilitada pelo padrão do modelo. Embora alguns exemplos tragam `verification.budget`, o parser atual ignora esse campo e mantém `Budget = true`.
+
+Os verificadores EB001–EB005 executam quando o resultado passa pelo kernel, mas a decisão atual não os inclui no conjunto de verificadores obrigatórios.
+
+### Aprovação
+
+| Campo | Valores | Padrão |
+| --- | --- | --- |
+| `approval.production` | `none` ou `human` | `none` |
+
+Com `human`, uma execução que passou nas verificações obrigatórias termina como `HumanReviewRequired`. O protótipo não implementa ainda a ação posterior de aprovar ou promover a mudança.
+
+## Decisões possíveis
+
+| Decisão | Condição |
+| --- | --- |
+| `Verified` | kernel e verificadores obrigatórios passaram, sem aprovação humana |
+| `Rejected` | limite/escopo foi violado ou um verificador obrigatório falhou |
+| `HumanReviewRequired` | verificações passaram e a política exige uma pessoa |
+
+O estado `Verified` atual não confirma diretamente que o adaptador terminou com sucesso nem que cada critério de aceite foi satisfeito. Ele significa apenas que os gates obrigatórios implementados passaram. Contratos devem incluir testes capazes de falhar quando o objetivo não foi entregue.
+
+## Recomendações para escrever contratos
+
+- use um `id` curto, único e estável;
+- escreva um objetivo específico e sem combinar mudanças independentes;
+- formule critérios de aceite observáveis e testáveis;
+- permita o menor conjunto possível de caminhos;
+- declare explicitamente diretórios sensíveis em `forbidden`;
+- reserve margem de orçamento, mas mantenha `max_files_changed` baixo;
+- exija revisão humana para autenticação, infraestrutura, deploy, banco e produção;
+- execute primeiro com `--mock` para validar parsing e políticas;
+- execute modelos reais somente sobre uma working tree limpa.
+
+Veja contratos executáveis em [`tasks/`](../tasks/).

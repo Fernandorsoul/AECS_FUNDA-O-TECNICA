@@ -1,0 +1,278 @@
+# AECS — Prompt de Continuação: Milestone 2 (Agent Runtime)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+O projeto já possui uma base funcional. **NÃO reescreva o que já funciona.**
+
+Antes de alterar qualquer código, leia este documento integralmente e inspecione o repositório atual.
+
+---
+
+## 1. ESTADO ATUAL DO PROJETO
+
+### O que já existe e está funcionando:
+
+**Solution .NET 10** com 6 projetos:
+- `AECS.Domain` — modelos, enums, interfaces, state machine, exceções
+- `AECS.Application` — orquestração (parser YAML, risk classifier)
+- `AECS.Infrastructure` — PostgreSQL, EF Core, EvidenceStore
+- `AECS.Cli` — console app (ponto de entrada)
+- `AECS.UnitTests` — 28 testes passando
+- `AECS.IntegrationTests` — estrutura pronta
+
+**Domain Models implementados:**
+- `TaskContract` — contrato estruturado de tarefa
+- `AgentRun` — registro de execução de agente
+- `VerificationResult` — resultado de verificação
+- `EvidenceEvent` — evento de evidência (append-only)
+- `PolicyDecision` — decisão de política
+- `ExecutionBudget` — budget com limites configuráveis
+- `ScopeDefinition` — escopo allowed/forbidden
+- `TaskConstraints` — constraints de segurança
+- `VerificationProfile` — perfil de verificação
+- `ApprovalPolicy` — política de aprovação
+- `AgentExecutionRequest` — request para execução
+- `AgentRunResult` — resultado da execução
+- `ExecutionPlan` — plano de execução
+- `VerificationContext` — contexto para verificação
+
+**Task State Machine:**
+- 13 estados: Created, ContractReady, Planned, Running, Verifying, Verified, Rejected, HumanReviewRequired, BudgetExceeded, ScopeViolation, TimedOut, AgentFailed, Cancelled
+- Transições validadas deterministicamente
+- 14 testes cobrindo happy path, terminal states e transições inválidas
+
+**Interfaces definidas:**
+- `IAgentAdapter` — execução de agente
+- `IVerifier` — verificação de resultado
+- `IExecutionController` — planejamento de execução
+- `IEvidenceStore` — persistência de evidências
+
+**YAML Parser** (`TaskContractParser`):
+- Deserializa YAML com YamlDotNet
+- Suporta chaves `snake_case` e `PascalCase`
+- Mapeia para `TaskContract` com defaults
+- 5 testes passando
+
+**Risk Classifier** (`RiskClassifier`):
+- R0: documentação, comentários
+- R1: mudanças simples
+- R2: lógica de negócio, validação
+- R3: auth, pagamento, migration, infraestrutura
+- 9 testes passando
+
+**Persistência:**
+- `AecsDbContext` com EF Core (PostgreSQL)
+- `EvidenceStore` implementação
+- Docker Compose com PostgreSQL 16
+
+**ADRs:**
+- ADR-001: Probabilistic Discovery, Deterministic Enforcement
+- ADR-002: Modular Monolith
+- ADR-003: PostgreSQL
+- ADR-004: Docker Isolation
+- ADR-005: Local LLM via Ollama
+- ADR-006: Verification Before Learning
+
+**Task YAML files** em `tasks/`:
+- `task-001-fix-null.yaml` — VERIFIED esperado
+- `task-002-add-validation.yaml` — VERIFIED esperado
+- `task-003-scope-violation.yaml` — REJECTED (scope) esperado
+- `task-004-break-tests.yaml` — REJECTED (tests) esperado
+- `task-005-budget-exceed.yaml` — REJECTED (budget) esperado
+
+---
+
+## 2. DECISÕES TÉCNICAS JÁ TOMADAS
+
+Estas decisões estão documentadas em ADRs e devem ser respeitadas:
+
+| Decisão | ADR | Detalhe |
+|---------|-----|---------|
+| Probabilistic Discovery, Deterministic Enforcement | ADR-001 | LLM sugere, código enforce |
+| Modular Monolith | ADR-002 | 4 projetos principais |
+| PostgreSQL + EF Core | ADR-003 | Banco operacional e evidências |
+| Docker Isolation | ADR-004 | Sandbox para execução |
+| Local LLM via Ollama | ADR-005 | API REST em localhost:11434 |
+| Verification Before Learning | ADR-006 | Sem ML prematuro |
+
+**Decisão importante sobre LLM:** O projeto usa **Ollama local** (não cloud APIs). O adapter deve chamar `http://localhost:11434/api/chat` ou `http://localhost:11434/api/generate`. Modelos recomendados: `codellama:3b` ou `deepseek-coder:1.3b` para tarefas simples.
+
+---
+
+## 3. O QUE IMPLEMENTAR AGORA (MILESTONE 2)
+
+Seu objetivo é implementar o **Agent Runtime**, que permite executar um coding agent de forma controlada.
+
+### 3.1 OllamaAdapter
+
+Implemente `IAgentAdapter` em `AECS.Infrastructure`:
+
+```csharp
+public class OllamaAdapter : IAgentAdapter
+{
+    // POST http://localhost:11434/api/chat
+    // Envia: task objective + acceptance criteria + codebase context
+    // Recebe: código modificado
+    // Retorna: AgentRunResult com stdout, stderr, tokens, duração, arquivos modificados
+}
+```
+
+Requisitos:
+- Use `HttpClient` (sem SDK de fornecedor)
+- O prompt deve instruir o modelo a modificar apenas os arquivos necessários
+- Capture: response text, token counts (prompt_tokens, completion_tokens), duration
+- Parseie a resposta para extrair arquivos modificados
+- Trate erros de conexão (Ollama não rodando)
+- O domínio NÃO pode depender de detalhes do Ollama
+
+### 3.2 Docker Sandbox
+
+Implemente isolamento de execução em `AECS.Infrastructure`:
+
+```csharp
+public class DockerSandbox
+{
+    // Cria container com .NET SDK
+    // Monta workspace como volume
+    // Executa com timeout
+    // Captura stdout/stderr
+    // Descarta container após execução
+}
+```
+
+Requisitos:
+- Copie o repo para diretório temporário antes de montar no container
+- Use `mcr.microsoft.com/dotnet/sdk:10.0` como imagem base
+- Timeout configurável via `CancellationToken`
+- Sem acesso à rede (exceto Ollama se necessário)
+- Resource limits básicos (memória, CPU)
+- Container descartável (criado por execução, destruído após)
+
+### 3.3 ExecutionController
+
+Implemente `IExecutionController` em `AECS.Application`:
+
+```csharp
+public class ExecutionController : IExecutionController
+{
+    // Dado um TaskContract, produz um ExecutionPlan
+    // Seleciona modelo baseado no RiskLevel
+    // Define budget baseado no contrato
+    // Retorna ExecutionPlan
+}
+```
+
+Mapeamento de modelo por risco:
+- R0/R1 → `deepseek-coder:1.3b` ou `codellama:3b`
+- R2/R3 → `codellama:7b` (mais lento, melhor qualidade)
+
+### 3.4 Testes obrigatórios
+
+Crie testes para:
+- `OllamaAdapter` — mock do HttpClient, testa parsing de resposta
+- `DockerSandbox` — testa criação/destruição de container (integration test)
+- `ExecutionController` — testa seleção de modelo por risco
+
+---
+
+## 4. O QUE NÃO IMPLEMENTAR AINDA
+
+NÃO implemente neste momento:
+
+- Verification DAG (BuildVerifier, TestVerifier, etc.) — Milestone 3
+- Control Kernel (budget/scope enforcement) — Milestone 3
+- Circuit Breaker — Milestone 3
+- Decision Engine — Milestone 3
+- SampleProject C# — Milestone 4
+- CLI `aecs run` completo — Milestone 4
+- OpenTelemetry — pós-MVP
+- Interface gráfica
+- Multi-agent
+- Reinforcement learning
+
+---
+
+## 5. ESTRUTURA DE ARQUIVOS ESPERADA
+
+Após este milestone, a estrutura deve ser:
+
+```
+src/
+  AECS.Domain/          (existente — não alterar)
+  AECS.Application/     (existente — adicionar ExecutionController)
+  AECS.Infrastructure/  (existente — adicionar OllamaAdapter, DockerSandbox)
+  AECS.Cli/             (existente — não alterar ainda)
+tests/
+  AECS.UnitTests/       (existente — adicionar testes)
+  AECS.IntegrationTests/ (existente — adicionar testes Docker)
+```
+
+Não crie projetos novos. Não renomeie projetos existentes.
+
+---
+
+## 6. REGRAS DE DESENVOLVIMENTO
+
+1. Faça mudanças pequenas.
+2. Não implemente funcionalidades futuras "porque serão úteis depois".
+3. Evite abstrações especulativas.
+4. Toda nova dependência deve ter justificativa.
+5. Prefira código explícito.
+6. Mantenha o domínio independente de fornecedores.
+7. Documente decisões irreversíveis com ADR.
+8. Se encontrar ambiguidade, escolha a solução mais simples.
+9. Não reescreva partes funcionando sem justificativa.
+10. Não introduza IA onde uma regra determinística resolve o problema.
+
+---
+
+## 7. DEFINITION OF DONE — MILESTONE 2
+
+O milestone está concluído quando:
+
+1. `OllamaAdapter` implementado e testado (mock + integration com Ollama rodando)
+2. `DockerSandbox` implementado e testado (container cria, executa, destrói)
+3. `ExecutionController` implementado e testado (seleciona modelo por risco)
+4. Todos os testes existentes continuam passando (28 testes)
+5. Novos testes adicionados e passando
+6. Solution compila sem erros
+7. `docker-compose.yml` atualizado se necessário
+
+---
+
+## 8. COMO VERIFICAR
+
+Após implementação, valide:
+
+```bash
+# Todos os testes passam
+dotnet test
+
+# Solution compila
+dotnet build AECS.slnx
+
+# OllamaAdapter funciona (com Ollama rodando)
+# DockerSandbox funciona (com Docker rodando)
+# ExecutionController seleciona modelo correto
+```
+
+---
+
+## 9. REFERÊNCIAS
+
+- `AECS_Fundacao_Tecnica_v0.1.md` — documento de fundação (fonte de verdade)
+- `docs/adr/` — decisões arquiteturais
+- `tasks/` — 5 cenários de teste YAML
+- `.mimocode/plans/` — plano de implementação detalhado
+
+---
+
+## 10. IMPORTANTE
+
+Não tente impressionar com quantidade de código.
+
+O objetivo é produzir o menor sistema capaz de executar um coding agent de forma controlada, isolada e observável.
+
+Se algo não for necessário para executar o próximo passo, deixe para depois.
+
+Primeiro prove o runtime. Depois verificamos o resultado.

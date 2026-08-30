@@ -1,0 +1,33 @@
+task:
+  id: REAL-004
+  objective: Fix OrderCalculator bugs: ApplyDiscount should reject discount > 100 (off-by-one error), CalculateTax should reject negative tax rate, CalculateTotal should handle empty items list.
+  acceptance:
+    - ApplyDiscount(100, 101) throws ArgumentOutOfRangeException
+    - ApplyDiscount(100, 100) returns 0
+    - CalculateTax(100, -0.05) throws ArgumentOutOfRangeException
+    - CalculateTotal with empty items returns 0
+    - All OrderCalculatorTests pass
+  scope:
+    allowed:
+      - src/RealProject/Orders/**
+      - tests/RealProject.Tests/Orders/**
+    forbidden:
+      - src/RealProject/Customers/**
+      - src/RealProject/Billing/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 80000
+    usd: 0.30
+    retries: 2
+    wall_clock_seconds: 180
+    max_files_changed: 3
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    budget: required
+  approval:
+    production: none

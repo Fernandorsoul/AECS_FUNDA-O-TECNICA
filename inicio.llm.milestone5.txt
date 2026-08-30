@@ -1,0 +1,144 @@
+# AECS — Prompt de Continuação: Milestone 5 (End-to-End)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+O projeto já possui todo o kernel funcional. **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL (73 testes passando)
+
+**Projetos:** AECS.Domain, AECS.Application, AECS.Infrastructure, AECS.Cli, AECS.UnitTests, AECS.IntegrationTests
+
+**Implementado:**
+- Domain Models (TaskContract, AgentRun, VerificationResult, EvidenceEvent, PolicyDecision, etc.)
+- Task State Machine (13 estados, 14 testes)
+- YAML Parser (TaskContractParser, 5 testes)
+- Risk Classifier (R0-R3, 9 testes)
+- OllamaAdapter (IAgentAdapter via Ollama REST, 5 testes)
+- DockerSandbox (isolamento via Docker)
+- ExecutionController (modelo por risco, 6 testes)
+- BudgetEnforcer (5 limites, 6 testes)
+- ScopeEnforcer (glob matching, 8 testes)
+- CircuitBreaker (budget + scope + timeout, 4 testes)
+- ControlKernel (orquestrador, 5 testes)
+- BuildVerifier, TestVerifier, ScopeVerifier, BudgetVerifier (4 verificadores)
+- DecisionEngine (3 regras, 7 testes)
+- EvidenceStore (PostgreSQL)
+- 6 ADRs, 5 task YAML files
+
+---
+
+## 2. O QUE IMPLEMENTAR AGORA (MILESTONE 5)
+
+### 5.1 CLI `aecs run`
+
+Implemente o comando principal em `AECS.Cli/Program.cs`:
+
+```bash
+aecs run --repo ./SampleProject --task-file tasks/task-001-fix-null.yaml
+```
+
+O fluxo completo é:
+1. Carrega TaskContract do YAML
+2. Classifica risco
+3. Gera ExecutionPlan
+4. Executa agente (OllamaAdapter ou mock)
+5. ControlKernel valida resultado
+6. Se passou: executa verificadores
+7. DecisionEngine decide
+8. Registra EvidenceEvent
+9. Imprime resultado formatado
+
+### 5.2 SampleProject
+
+Crie `sample/SampleProject/` como um projeto C# pequeno com:
+
+```
+SampleProject/
+  SampleProject.sln
+  src/
+    SampleProject/
+      Customers/
+        Customer.cs
+        CustomerMapper.cs
+        CustomerService.cs
+      Orders/
+        Order.cs
+        OrderService.cs
+      Billing/
+        BillingService.cs
+  tests/
+    SampleProject.Tests/
+      Customers/
+        CustomerMapperTests.cs
+        CustomerServiceTests.cs
+```
+
+O CustomerMapper deve ter um bug de NullReferenceException para o TASK-001 poder corrigir.
+
+### 5.3 Output formatado
+
+O output deve ser equivalente à Definition of Done:
+
+```
+AECS RUN
+
+Task:
+Fix null handling in CustomerMapper
+
+Risk:
+R1
+
+Allowed Scope:
+src/Customers/**
+tests/Customers/**
+
+Budget:
+$0.20
+120 seconds
+1 retry
+
+Execution:
+SUCCESS
+
+Files changed:
+CustomerMapper.cs
+CustomerMapperTests.cs
+
+Verification:
+
+Build ........ PASS
+Tests ........ PASS
+Scope ........ PASS
+Budget ....... PASS
+
+Decision:
+
+VERIFIED
+
+Duration:
+...
+
+Estimated AI cost:
+$0.00
+
+Evidence ID:
+...
+```
+
+### 5.4 Modo mock para testes sem Ollama
+
+Implemente um `MockAgentAdapter` que retorna resultado fixo para testar o fluxo sem Ollama rodando.
+
+---
+
+## 3. DEFINITION OF DONE
+
+1. `aecs run --repo ./SampleProject --task-file tasks/task-001.yaml` funciona
+2. Output formatado no terminal
+3. SampleProject com CustomerMapper com bug proposital
+4. MockAgentAdapter para testes offline
+5. Todos os 73 testes existentes continuam passando
+6. Novos testes adicionados e passando
+7. Solution compila sem erros

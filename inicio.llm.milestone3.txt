@@ -1,0 +1,206 @@
+# AECS — Prompt de Continuação: Milestone 3 (Control Kernel)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+O projeto já possui base funcional + Agent Runtime. **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL DO PROJETO
+
+### O que já existe e está funcionando (39 testes passando):
+
+**Solution .NET 10** com 6 projetos:
+- `AECS.Domain` — modelos, enums, interfaces, state machine, exceções
+- `AECS.Application` — orquestração (parser YAML, risk classifier, execution controller)
+- `AECS.Infrastructure` — PostgreSQL, EF Core, EvidenceStore, OllamaAdapter, DockerSandbox
+- `AECS.Cli` — console app (ponto de entrada)
+- `AECS.UnitTests` — 39 testes passando
+- `AECS.IntegrationTests` — estrutura pronta
+
+**Domain Models:** TaskContract, AgentRun, VerificationResult, EvidenceEvent, PolicyDecision, ExecutionBudget, ScopeDefinition, TaskConstraints, VerificationProfile, ApprovalPolicy, AgentExecutionRequest, AgentRunResult, ExecutionPlan, VerificationContext
+
+**Task State Machine:** 13 estados, transições validadas, 14 testes
+
+**Interfaces:** IAgentAdapter, IVerifier, IExecutionController, IEvidenceStore
+
+**YAML Parser:** TaskContractParser com YamlDotNet, suporta snake_case, 5 testes
+
+**Risk Classifier:** R0-R3 com keywords e constraints, 9 testes
+
+**OllamaAdapter:** IAgentAdapter via Ollama REST API, prompt builder, file extraction, 5 testes
+
+**DockerSandbox:** isolamento via Docker, workspace copy, timeout, resource limits
+
+**ExecutionController:** seleção de modelo por risco (R0→1.3b, R1→3b, R2/R3→7b), 6 testes
+
+**Persistência:** AecsDbContext (PostgreSQL + EF Core), EvidenceStore
+
+**ADRs:** 6 ADRs criados (ADR-001 a ADR-006)
+
+**Task YAML files:** 5 cenários em `tasks/`
+
+---
+
+## 2. DECISÕES TÉCNICAS JÁ TOMADAS
+
+| Decisão | ADR | Detalhe |
+|---------|-----|---------|
+| Probabilistic Discovery, Deterministic Enforcement | ADR-001 | LLM sugere, código enforce |
+| Modular Monolith | ADR-002 | 4 projetos principais |
+| PostgreSQL + EF Core | ADR-003 | Banco operacional e evidências |
+| Docker Isolation | ADR-004 | Sandbox para execução |
+| Local LLM via Ollama | ADR-005 | API REST em localhost:11434 |
+| Verification Before Learning | ADR-006 | Sem ML prematuro |
+
+---
+
+## 3. O QUE IMPLEMENTAR AGORA (MILESTONE 3)
+
+Seu objetivo é implementar o **Control Kernel**, que enforce limites durante a execução.
+
+### 3.1 Budget Enforcement
+
+Implemente em `AECS.Application` ou `AECS.ControlKernel` (se criar o projeto):
+
+```csharp
+public class BudgetEnforcer
+{
+    // Verifica se a execução respeitou os limites do ExecutionBudget:
+    // - MaxTokens (input + output)
+    // - MaxCostUsd
+    // - MaxRetries
+    // - MaxDurationSeconds
+    // - MaxFilesChanged
+    // Retorna BudgetViolation ou null se tudo ok
+}
+```
+
+Requisitos:
+- Verificação determinística (sem LLM)
+- Retorna violação específica (qual limite foi excedido)
+- Usado pelo ControlKernel antes de aceitar resultado
+
+### 3.2 Scope Enforcement
+
+Implemente em `AECS.Application`:
+
+```csharp
+public class ScopeEnforcer
+{
+    // Verifica se os arquivos modificados respeitam o ScopeDefinition
+    // - Todos os arquivos devem matchear pelo menos um Allowed pattern
+    // - Nenhum arquivo pode matchear um Forbidden pattern
+    // Usa glob matching (ex: "src/Customers/**" matcheia "src/Customers/CustomerMapper.cs")
+}
+```
+
+Requisitos:
+- Glob matching determinístico (sem LLM)
+- Suporta padrões como `src/Customers/**`, `tests/**/*.cs`
+- Retorna lista de violações (quais arquivos violaram qual regra)
+
+### 3.3 Circuit Breaker
+
+Implemente em `AECS.Application`:
+
+```csharp
+public class CircuitBreaker
+{
+    // Monitora execução e interrompe se limites forem excedidos
+    // - Verifica periodicamente (ou após cada iteração)
+    // - Interrompe: budget excedido, scope violado, timeout
+    // - Registra razão da interrupção
+    // - Cria EvidenceEvent
+}
+```
+
+Requisitos:
+- Interrompe execução quando limite é atingido
+- Registra razão da interrupção
+- Cria EvidenceEvent do tipo apropriado
+- Não depende de LLM para decidir
+
+### 3.4 Control Kernel (orquestrador)
+
+Implemente o orquestrador que usa os componentes acima:
+
+```csharp
+public class ControlKernel
+{
+    // Orquestra enforcement durante execução:
+    // 1. Antes da execução: valida budget e scope
+    // 2. Durante: monitora com circuit breaker
+    // 3. Depois: verifica resultado contra budget e scope
+    // Retorna KernelDecision (Allow, Reject, HumanReview)
+}
+```
+
+### 3.5 Testes obrigatórios
+
+Crie testes para:
+- `BudgetEnforcer` — cada tipo de violação (tokens, cost, retries, duration, files)
+- `ScopeEnforcer` — allowed match, forbidden violation, glob patterns
+- `CircuitBreaker` — interrupção por budget, por scope, por timeout
+- `ControlKernel` — integração dos enforcement components
+
+---
+
+## 4. O QUE NÃO IMPLEMENTAR AINDA
+
+- Verification DAG (BuildVerifier, TestVerifier, etc.) — Milestone 4
+- Decision Engine — Milestone 4
+- SampleProject C# — Milestone 4
+- CLI `aecs run` completo — Milestone 4
+- OpenTelemetry — pós-MVP
+- Interface gráfica
+- Multi-agent
+
+---
+
+## 5. ESTRUTURA DE ARQUIVOS ESPERADA
+
+```
+src/
+  AECS.Domain/          (existente — não alterar)
+  AECS.Application/     (existente — adicionar BudgetEnforcer, ScopeEnforcer, CircuitBreaker, ControlKernel)
+  AECS.Infrastructure/  (existente — não alterar)
+  AECS.Cli/             (existente — não alterar ainda)
+tests/
+  AECS.UnitTests/       (existente — adicionar testes)
+```
+
+Não crie projetos novos. Não renomeie projetos existentes.
+
+---
+
+## 6. REGRAS DE DESENVOLVIMENTO
+
+1. Faça mudanças pequenas.
+2. Não implemente funcionalidades futuras.
+3. Evite abstrações especulativas.
+4. Prefira código explícito.
+5. Mantenha o domínio independente de fornecedores.
+6. Não reescreva partes funcionando.
+7. Não introduza IA onde uma regra determinística resolve o problema.
+
+---
+
+## 7. DEFINITION OF DONE — MILESTONE 3
+
+1. `BudgetEnforcer` implementado e testado (5+ testes)
+2. `ScopeEnforcer` implementado e testado (5+ testes)
+3. `CircuitBreaker` implementado e testado (3+ testes)
+4. `ControlKernel` implementado e testado (3+ testes)
+5. Todos os 39 testes existentes continuam passando
+6. Novos testes adicionados e passando
+7. Solution compila sem erros
+
+---
+
+## 8. COMO VERIFICAR
+
+```bash
+dotnet test
+dotnet build AECS.slnx
+```

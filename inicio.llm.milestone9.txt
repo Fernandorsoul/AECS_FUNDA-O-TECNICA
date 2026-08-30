@@ -1,0 +1,115 @@
+# AECS — Prompt de Continuação: Milestone 9 (Jarvis CLI Interativo)
+
+Você é o principal engenheiro responsável por continuar o desenvolvimento do **AECS — Agentic Engineering Control System**.
+
+Milestones 0-8 estão completos (90 testes). **NÃO reescreva o que já funciona.**
+
+---
+
+## 1. ESTADO ATUAL (90 testes, Milestones 0-8 completos)
+
+**Implementado:**
+- Domain Models, State Machine, YAML Parser, Risk Classifier
+- OllamaAdapter, MockAgentAdapter, DockerSandbox, ExecutionController
+- BudgetEnforcer, ScopeEnforcer, CircuitBreaker, ControlKernel
+- BuildVerifier, TestVerifier, ScopeVerifier, BudgetVerifier, DecisionEngine
+- CLI `aecs run` e `aecs experiment`, SampleProject, 5 task YAML files
+- ExperimentRunner com relatório e CPVC
+- Context Compiler (CodebaseIndexer, ContextSelector, ContextPackage)
+- Adaptive Controller (HistoryStore, ModelSelector, BudgetOptimizer)
+
+---
+
+## 2. O QUE IMPLEMENTAR AGORA (MILESTONE 9)
+
+O Jarvis é a camada de interação humana. Transforma o CLI técnico em uma experiência conversacional.
+
+### 2.1 Modo interativo
+
+```bash
+aecs
+```
+
+Sem argumentos, entra em modo interativo:
+
+```
+AECS — Agentic Engineering Control System
+Type 'help' for commands, 'exit' to quit.
+
+aecs> help
+Commands:
+  run <task-file>     Execute a single task
+  experiment <dir>    Run experiment on task directory
+  status              Show last run status
+  history             Show execution history
+  explain <task-id>   Explain what happened in a task
+  risk <objective>    Classify risk for an objective
+  context <task-id>   Show context package for a task
+  exit                Quit AECS
+
+aecs> risk "Fix null handling in CustomerMapper"
+Risk: R1
+Reason: Simple change, limited scope
+
+aecs> run tasks/task-001-fix-null.yaml
+[... execution output ...]
+
+aecs> explain TASK-001
+Task: Fix NullReferenceException in CustomerMapper
+Risk: R1
+Model: codellama:3b
+Decision: VERIFIED
+Duration: 5.0s
+Verifications: Build PASS, Tests PASS, Scope PASS, Budget PASS
+
+aecs> history
+TASK-001  VERIFIED  5.0s  $0.00
+TASK-002  VERIFIED  4.2s  $0.00
+TASK-003  REJECTED  3.1s  $0.00  (Scope)
+
+aecs> exit
+```
+
+### 2.2 Comando `explain`
+
+Explica o que aconteceu em uma execução de forma clara:
+- O que a task pedia
+- Qual risco foi classificado
+- Qual modelo foi usado
+- Quais verificações passaram/falharam
+- Por que a decisão foi tomada
+- Duração e custo
+
+### 2.3 Comando `status`
+
+Mostra o estado atual do sistema:
+- Última execução
+- Resultado
+- Modelo usado
+- Budget restante (se aplicável)
+
+### 2.4 Níveis de severidade (SEV-1 a SEV-4)
+
+Conforme a Fundação Técnica §9:
+- SEV-1 → interrompe imediatamente (erros críticos)
+- SEV-2 → notificação (warnings)
+- SEV-3 → acumula (info)
+- SEV-4 → mostra apenas sob demanda (debug)
+
+### 2.5 Testes obrigatórios
+
+- Modo interativo: parsing de comandos
+- Comando `explain`: formatação correta
+- Comando `risk`: classificação correta
+- Comando `history`: listagem correta
+
+---
+
+## 3. DEFINITION OF DONE
+
+1. `aecs` sem argumentos entra em modo interativo
+2. Comandos `help`, `run`, `experiment`, `status`, `history`, `explain`, `risk`, `context`, `exit` funcionam
+3. Output formatado e legível
+4. Todos os 90 testes existentes continuam passando
+5. Novos testes adicionados e passando
+6. Solution compila sem erros

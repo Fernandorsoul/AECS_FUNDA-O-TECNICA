@@ -1,0 +1,67 @@
+# Build artifacts
+**/bin/
+**/obj/
+**/Debug/
+**/Release/
+*.dll
+*.exe
+*.pdb
+*.nupkg
+**/packages/
+
+# Dependencies
+packages/
+**/node_modules/
+**/.nuget/
+.nuget/
+**/vendor/
+
+# IDE specific
+.vs/
+**/.vs/
+.vscode/
+**/.vscode/
+**/*.userprefs
+**/*.userosscache
+**/*.sln.docstates
+
+# OS generated
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+**/.AppleDouble
+**/.LSOverride
+
+# Testing
+**/TestResults/
+**/coverage/
+coverage/
+**/*.cover
+*.log
+
+# Environment specific
+.env
+.env.local
+**/.env*
+**/appsettings.*.json
+**/secrets.*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.cache
+**/.cache/
+
+# User-specific files
+**/local.settings.json
+**/launchSettings.json
+
+# Compiled source
+**/Generated\ Files/
+**/generated-sources/
+
+# Local repositories used for demos and experiments
+real-world-demo/
+sample/

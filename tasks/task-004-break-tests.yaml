@@ -1,0 +1,32 @@
+task:
+  id: TASK-004
+  objective: Change CustomerMapper to return null instead of empty string for missing phone numbers
+  acceptance:
+    - Missing phone returns null
+    - All tests pass
+  scope:
+    allowed:
+      - src/Customers/**
+      - tests/Customers/**
+    forbidden:
+      - src/Billing/**
+      - src/Orders/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 60000
+    usd: 0.20
+    retries: 1
+    wall_clock_seconds: 120
+    max_files_changed: 5
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    integration_tests: optional
+    security_scan: optional
+    architecture: optional
+  approval:
+    production: none
