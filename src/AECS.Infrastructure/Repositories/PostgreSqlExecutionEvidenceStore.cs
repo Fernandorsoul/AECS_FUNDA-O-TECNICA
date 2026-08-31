@@ -152,10 +152,16 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
+        await LockEvidenceIdentityAsync(
+            db,
+            transaction,
+            evidenceId,
+            cancellationToken);
         if (!await LockEvidenceAsync(db, transaction, evidenceId, cancellationToken))
             throw new FileNotFoundException("Execution evidence was not found in PostgreSQL.");
 
         var record = await db.ExecutionEvidenceRecords
+            .AsNoTracking()
             .Include(item => item.PromotionEvents)
             .SingleAsync(item => item.Id == evidenceId, cancellationToken);
         var envelope = ValidateStoredRecord(record, evidenceId);
@@ -178,12 +184,30 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
 
         _envelopes.Value.AppendPromotion(envelope, promotion);
         var appended = envelope.PromotionEvents[^1];
-        record.PromotionEvents.Add(ToRecord(evidenceId, appended));
-        record.PromotionCount = envelope.PromotionEvents.Count;
-        record.ChainSealJson = Serialize(envelope.ChainSeal);
-        record.UpdatedAt = envelope.ChainSeal.SignedAt;
+        var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO execution_evidence_promotion_events
+                ("Id", "ExecutionEvidenceId", "Sequence", "PreviousSignature",
+                 "PromotionJson", "SealJson", "SignedAt")
+            VALUES
+                ({appended.Promotion.Id}, {evidenceId}, {appended.Sequence},
+                 {appended.PreviousSignature},
+                 CAST({Serialize(appended.Promotion)} AS jsonb),
+                 CAST({Serialize(appended.Seal)} AS jsonb),
+                 {appended.Seal.SignedAt})
+            """, cancellationToken);
+        var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE execution_evidence
+            SET "PromotionCount" = {envelope.PromotionEvents.Count},
+                "ChainSealJson" = CAST({Serialize(envelope.ChainSeal)} AS jsonb),
+                "UpdatedAt" = {envelope.ChainSeal.SignedAt}
+            WHERE "Id" = {evidenceId}
+            """, cancellationToken);
+        if (inserted != 1 || updated != 1)
+        {
+            throw new DBConcurrencyException(
+                "PostgreSQL promotion append did not affect the expected aggregate rows.");
+        }
 
-        await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -321,19 +345,6 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
             PromotionCount = 0,
             CreatedAt = envelope.Seal.SignedAt,
             UpdatedAt = envelope.ChainSeal.SignedAt
-        };
-
-    private static PromotionEvidenceRecord ToRecord(
-        Guid evidenceId,
-        SignedPromotionEvent promotionEvent) => new()
-        {
-            Id = promotionEvent.Promotion.Id,
-            ExecutionEvidenceId = evidenceId,
-            Sequence = promotionEvent.Sequence,
-            PreviousSignature = promotionEvent.PreviousSignature,
-            PromotionJson = Serialize(promotionEvent.Promotion),
-            SealJson = Serialize(promotionEvent.Seal),
-            SignedAt = promotionEvent.Seal.SignedAt
         };
 
     private static async Task<bool> LockEvidenceAsync(
