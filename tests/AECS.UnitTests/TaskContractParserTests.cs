@@ -529,6 +529,120 @@ public class TaskContractParserTests
     }
 
     [Fact]
+    public void Parse_VersionedTestSuites_MapsIndependentModesTargetsAndTimeouts()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-INDEPENDENT-TESTS
+              objective: Run separate test projects
+              execution:
+                target: Product.sln
+                test_suites:
+                  version: aecs.test-suites/v1
+                  unit:
+                    mode: required
+                    target: tests/Unit/Product.UnitTests.csproj
+                    arguments: ["--configuration", "Release"]
+                    timeout_seconds: 30
+                  integration:
+                    mode: optional
+                    target: tests/Integration/Product.IntegrationTests.csproj
+                    timeout_seconds: 45
+                  acceptance:
+                    mode: disabled
+              verification:
+                unit_tests: optional
+                integration_tests: required
+            """);
+
+        var suites = result.Execution.TestSuites!;
+        suites.Version.Should().Be(TestSuiteSchema.ProfileVersion);
+        suites.Unit.Mode.Should().Be(TestGateMode.Required);
+        suites.Unit.Target.Should().Be("tests/Unit/Product.UnitTests.csproj");
+        suites.Unit.Arguments.Should().Equal("--configuration", "Release");
+        suites.Unit.TimeoutSeconds.Should().Be(30);
+        suites.Integration.Mode.Should().Be(TestGateMode.Optional);
+        suites.Integration.TimeoutSeconds.Should().Be(45);
+        suites.Acceptance.Mode.Should().Be(TestGateMode.Disabled);
+        result.Verification.UnitTests.Should().BeTrue(
+            "the v1 suite mode is authoritative over the legacy verification field");
+        result.Verification.IntegrationTests.Should().BeFalse();
+        result.Execution.EffectiveCapabilities.Processes.Should().Contain(rule =>
+            rule.Executable == "dotnet" &&
+            rule.ArgumentPrefix.Count == 1 &&
+            rule.ArgumentPrefix[0] == "test" &&
+            rule.Phases.Contains(ExecutionCapabilityPhases.BaselineUnitTest) &&
+            rule.Phases.Contains(ExecutionCapabilityPhases.CandidateIntegrationTest));
+    }
+
+    [Theory]
+    [InlineData("version: future/v2", "Unsupported execution.test_suites version")]
+    [InlineData("unit:\n  mode: sometimes\n  target: tests/Unit.csproj", "Unknown test suite mode")]
+    [InlineData("unit:\n  mode: required\n  target: ../outside.csproj", "safe relative")]
+    [InlineData("unit:\n  mode: required\n  target: tests/Unit.csproj\n  timeout_seconds: 0", "timeout_seconds must be positive")]
+    [InlineData("unit:\n  mode: required\n  target: tests/Unit.csproj\n  arguments: [\"--logger\"]", "controller-owned argument")]
+    public void Parse_InvalidVersionedTestSuite_FailsClosed(string fragment, string expected)
+    {
+        var indented = fragment.Replace("\n", "\n        ");
+        var action = () => _parser.Parse($"""
+            task:
+              id: TASK-BAD-TEST-SUITE
+              objective: Reject an invalid test suite profile
+              execution:
+                target: Product.sln
+                test_suites:
+                  {indented}
+            """);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Fact]
+    public void Parse_TestBasedAcceptanceWithDisabledAcceptanceSuite_FailsClosed()
+    {
+        var action = () => _parser.Parse("""
+            task:
+              id: TASK-DISABLED-ACCEPTANCE-SUITE
+              objective: Reject acceptance evidence without an executable suite
+              acceptance:
+                - The targeted behavior passes
+              acceptance_evidence:
+                - id: AC-001
+                  type: test
+                  reference: FullyQualifiedName~TargetedBehavior
+              execution:
+                target: Product.sln
+                test_suites:
+                  version: aecs.test-suites/v1
+                  unit:
+                    mode: required
+                    target: tests/Unit/Product.UnitTests.csproj
+                  acceptance:
+                    mode: disabled
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*requires an enabled acceptance test suite*");
+    }
+
+    [Fact]
+    public void Parse_LegacyTestFields_PreserveAggregateTestsCompatibility()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-LEGACY-TESTS
+              objective: Preserve the aggregate gate
+              verification:
+                unit_tests: required
+                integration_tests: optional
+            """);
+
+        result.Execution.TestSuites.Should().BeNull();
+        result.Verification.UnitTests.Should().BeTrue();
+        result.Verification.IntegrationTests.Should().BeFalse();
+    }
+
+    [Fact]
     public void Parse_MissingTaskKey_ThrowsYamlException()
     {
         var yaml = "not_a_task: true";

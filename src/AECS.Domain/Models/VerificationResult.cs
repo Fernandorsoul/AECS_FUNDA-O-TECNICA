@@ -15,4 +15,7 @@ public class VerificationResult
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecurityScanEvidence? SecurityScan { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TestSuiteEvidence? TestSuite { get; init; }
 }

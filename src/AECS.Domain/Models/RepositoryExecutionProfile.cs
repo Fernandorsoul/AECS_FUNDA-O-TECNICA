@@ -21,6 +21,11 @@ public sealed class RepositoryExecutionProfile
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExecutionCapabilityPolicy? Capabilities { get; init; }
 
+    // Null denotes the authenticated legacy aggregate `Tests` gate. New independent
+    // suites opt into the explicitly versioned matrix.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TestSuiteMatrix? TestSuites { get; init; }
+
     [JsonIgnore]
     public string EffectiveRuntime => string.IsNullOrWhiteSpace(Runtime)
         ? DockerRuntime
@@ -28,7 +33,9 @@ public sealed class RepositoryExecutionProfile
 
     [JsonIgnore]
     public ExecutionCapabilityPolicy EffectiveCapabilities =>
-        Capabilities ?? ExecutionCapabilityPolicy.RestrictiveDefault();
+        Capabilities ?? (TestSuites is null
+            ? ExecutionCapabilityPolicy.RestrictiveDefault()
+            : ExecutionCapabilityPolicy.TestSuitesDefault(TestSuites));
 }
 
 public sealed class SandboxExecutionProfile

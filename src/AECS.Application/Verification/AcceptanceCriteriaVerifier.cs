@@ -1,4 +1,3 @@
-using System.Xml.Linq;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -17,7 +16,8 @@ public sealed class AcceptanceCriteriaVerifier
     private static readonly HashSet<string> StructuralVerifiers = new(
         [
             "AgentSuccess", "Application", "NonEmptyChange", "Scope", "Budget",
-            "Build", "Tests", Name
+            "Build", "Tests", TestSuiteVerifier.UnitName,
+            TestSuiteVerifier.IntegrationName, TestSuiteVerifier.AcceptanceName, Name
         ],
         StringComparer.OrdinalIgnoreCase);
     private readonly IProcessRunner _processRunner;
@@ -156,16 +156,19 @@ public sealed class AcceptanceCriteriaVerifier
         if (!canExecuteTests)
             return MissingEvidence(criterion, "Targeted acceptance test was blocked by an earlier verification failure");
 
+        var prerequisite = context.Contract.Execution.TestSuites is null
+            ? "Tests"
+            : TestSuiteVerifier.AcceptanceName;
         var aggregateTests = verifierResults.Where(result => string.Equals(
                 result.Verifier,
-                "Tests",
+                prerequisite,
                 StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (aggregateTests.Count != 1 || aggregateTests[0].Status != VerificationStatus.Pass)
         {
             return MissingEvidence(
                 criterion,
-                "Targeted acceptance evidence requires one passing Tests verifier result");
+                $"Targeted acceptance evidence requires one passing {prerequisite} verifier result");
         }
 
         if (criterion.Behavioral && !HasChangedTestEvidence(criterion, context.CandidateChangeSet))
@@ -178,7 +181,12 @@ public sealed class AcceptanceCriteriaVerifier
         string resultsDirectory = string.Empty;
         try
         {
-            var timeout = GetTimeout(context.Contract.Budget);
+            var suiteProfile = context.Contract.Execution.TestSuites?.Acceptance;
+            if (suiteProfile is not null)
+                TestSuiteCommandGuard.ValidateArguments(suiteProfile, TestSuiteCategory.Acceptance);
+            var timeout = GetTimeout(
+                context.Contract.Budget,
+                suiteProfile?.TimeoutSeconds);
             if (timeout <= TimeSpan.Zero)
             {
                 return Result(
@@ -187,9 +195,14 @@ public sealed class AcceptanceCriteriaVerifier
                     "Wall-clock budget exhausted before targeted acceptance test",
                     [$"test-filter:{criterion.Evidence.Reference}"]);
             }
-            var execution = RepositoryExecutionProfileResolver.Resolve(
-                context.RepoPath,
-                context.Contract.Execution);
+            var execution = suiteProfile is null
+                ? RepositoryExecutionProfileResolver.Resolve(
+                    context.RepoPath,
+                    context.Contract.Execution)
+                : RepositoryExecutionProfileResolver.ResolveTestSuite(
+                    context.RepoPath,
+                    context.Contract.Execution,
+                    suiteProfile);
             resultsDirectory = Path.Combine(
                 context.RepoPath,
                 ".aecs-verification",
@@ -197,6 +210,8 @@ public sealed class AcceptanceCriteriaVerifier
             Directory.CreateDirectory(resultsDirectory);
 
             var arguments = execution.TestArguments.ToList();
+            if (suiteProfile is not null)
+                arguments.AddRange(suiteProfile.Arguments);
             arguments.Add("--filter");
             arguments.Add(criterion.Evidence.Reference);
             arguments.Add("--logger");
@@ -237,7 +252,7 @@ public sealed class AcceptanceCriteriaVerifier
                     evidenceReferences);
             }
 
-            var testResults = ReadTestResults(resultsDirectory);
+            var testResults = TestResultSummaryReader.Read(resultsDirectory);
             if (testResults.Executed == 0)
             {
                 return Result(
@@ -246,7 +261,7 @@ public sealed class AcceptanceCriteriaVerifier
                     "Test command exited successfully but the filter executed zero tests",
                     evidenceReferences);
             }
-            if (testResults.Passed != testResults.Executed)
+            if (testResults.Failed > 0 || testResults.Passed != testResults.Executed)
             {
                 return Result(
                     criterion,
@@ -297,29 +312,6 @@ public sealed class AcceptanceCriteriaVerifier
     private static bool IsStructuralVerifier(string verifier) =>
         StructuralVerifiers.Contains(verifier);
 
-    private static (int Executed, int Passed) ReadTestResults(string resultsDirectory)
-    {
-        var executed = 0;
-        var passed = 0;
-        foreach (var trxPath in Directory.EnumerateFiles(
-                     resultsDirectory,
-                     "*.trx",
-                     SearchOption.AllDirectories))
-        {
-            var document = XDocument.Load(trxPath);
-            var results = document.Descendants()
-                .Where(element => element.Name.LocalName == "UnitTestResult")
-                .ToList();
-            executed += results.Count;
-            passed += results.Count(element => string.Equals(
-                element.Attribute("outcome")?.Value,
-                "Passed",
-                StringComparison.OrdinalIgnoreCase));
-        }
-
-        return (executed, passed);
-    }
-
     private static AcceptanceCriterionResult MissingEvidence(
         AcceptanceCriterion criterion,
         string message) => Result(
@@ -349,9 +341,11 @@ public sealed class AcceptanceCriteriaVerifier
     private static string Sanitize(string value) => string.Concat(value.Select(character =>
         char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '_'));
 
-    private TimeSpan GetTimeout(ExecutionBudget budget)
+    private TimeSpan GetTimeout(ExecutionBudget budget, int? suiteTimeoutSeconds = null)
     {
-        var configured = TimeSpan.FromSeconds(Math.Max(1, budget.MaxDurationSeconds));
+        var configured = TimeSpan.FromSeconds(Math.Min(
+            Math.Max(1, budget.MaxDurationSeconds),
+            Math.Max(1, suiteTimeoutSeconds ?? budget.MaxDurationSeconds)));
         if (_remainingDuration is null)
             return configured;
         var remaining = _remainingDuration();

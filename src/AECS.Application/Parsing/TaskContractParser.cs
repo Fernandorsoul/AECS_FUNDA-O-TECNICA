@@ -1,5 +1,6 @@
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
+using AECS.Application.Verification;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
@@ -34,6 +35,7 @@ public class TaskContractParser
         var constraints = model.Constraints ?? model.constraints;
         var budget = model.Budget ?? model.budget;
         var execution = model.Execution ?? model.execution;
+        var testSuitesYaml = execution?.TestSuites ?? execution?.test_suites;
         var capabilities = model.Capabilities ?? model.capabilities ??
             execution?.Capabilities ?? execution?.capabilities;
         var verification = model.Verification ?? model.verification;
@@ -65,19 +67,28 @@ public class TaskContractParser
             : null;
         if (mappedSandbox is not null)
             ValidateSandbox(mappedSandbox);
-        var mappedCapabilities = MapCapabilities(capabilities);
+        var mappedAcceptance = MapAcceptanceCriteria(acceptance, acceptanceEvidence);
+        var executionTarget = execution?.Target ?? execution?.target ?? string.Empty;
+        var mappedTestSuites = testSuitesYaml is null
+            ? null
+            : MapTestSuites(testSuitesYaml, executionTarget, mappedAcceptance);
+        var mappedCapabilities = MapCapabilities(
+            capabilities,
+            mappedTestSuites);
         if (mappedSandbox is not null)
             ValidateCapabilityResources(mappedCapabilities, mappedSandbox);
-        var mappedAcceptance = MapAcceptanceCriteria(acceptance, acceptanceEvidence);
         var securityScanRequired = IsRequired(
             verification?.SecurityScan ?? verification?.security_scan ?? "optional");
         var securityPolicyYaml = verification?.SecurityPolicy ?? verification?.security_policy;
         var mappedVerification = new VerificationProfile
         {
             Build = IsRequired(verification?.Build ?? verification?.build ?? "required"),
-            UnitTests = IsRequired(verification?.UnitTests ?? verification?.unit_tests ?? "required"),
-            IntegrationTests = IsRequired(
-                verification?.IntegrationTests ?? verification?.integration_tests ?? "optional"),
+            UnitTests = mappedTestSuites is null
+                ? IsRequired(verification?.UnitTests ?? verification?.unit_tests ?? "required")
+                : mappedTestSuites.Unit.Mode == TestGateMode.Required,
+            IntegrationTests = mappedTestSuites is null
+                ? IsRequired(verification?.IntegrationTests ?? verification?.integration_tests ?? "optional")
+                : mappedTestSuites.Integration.Mode == TestGateMode.Required,
             Scope = IsRequired(verification?.Scope ?? verification?.scope ?? "required"),
             SecurityScan = securityScanRequired,
             Architecture = IsRequired(
@@ -96,7 +107,8 @@ public class TaskContractParser
         ValidateRequiredProcessCapabilities(
             mappedCapabilities,
             mappedVerification,
-            mappedAcceptance);
+            mappedAcceptance,
+            mappedTestSuites);
 
         return new TaskContract
         {
@@ -121,10 +133,11 @@ public class TaskContractParser
                 WorkingDirectory = execution?.WorkingDirectory
                     ?? execution?.working_directory
                     ?? ".",
-                Target = execution?.Target ?? execution?.target ?? string.Empty,
+                Target = executionTarget,
                 Runtime = executionRuntime,
                 Sandbox = mappedSandbox,
-                Capabilities = mappedCapabilities
+                Capabilities = mappedCapabilities,
+                TestSuites = mappedTestSuites
             },
             Verification = mappedVerification,
             Approval = new ApprovalPolicy
@@ -196,10 +209,15 @@ public class TaskContractParser
     }
 
     private static ExecutionCapabilityPolicy MapCapabilities(
-        CapabilitiesYamlModel? model)
+        CapabilitiesYamlModel? model,
+        TestSuiteMatrix? testSuites)
     {
         if (model is null)
-            return ExecutionCapabilityPolicy.RestrictiveDefault();
+        {
+            return testSuites is not null
+                ? ExecutionCapabilityPolicy.TestSuitesDefault(testSuites)
+                : ExecutionCapabilityPolicy.RestrictiveDefault();
+        }
 
         var defaults = new ResourceCapabilities();
         var fileSystem = model.FileSystem ?? model.file_system;
@@ -342,7 +360,8 @@ public class TaskContractParser
     private static void ValidateRequiredProcessCapabilities(
         ExecutionCapabilityPolicy policy,
         VerificationProfile verification,
-        IReadOnlyCollection<AcceptanceCriterion> acceptance)
+        IReadOnlyCollection<AcceptanceCriterion> acceptance,
+        TestSuiteMatrix? testSuites)
     {
         RequireProcess(policy, "git", "--version", ExecutionCapabilityPhases.BaselineToolProbe);
         RequireProcess(policy, "dotnet", "--version", ExecutionCapabilityPhases.BaselineToolProbe);
@@ -351,10 +370,26 @@ public class TaskContractParser
             RequireProcess(policy, "dotnet", "build", ExecutionCapabilityPhases.BaselineBuild);
             RequireProcess(policy, "dotnet", "build", ExecutionCapabilityPhases.CandidateBuild);
         }
-        if (verification.UnitTests || verification.IntegrationTests)
+        if (testSuites is null && (verification.UnitTests || verification.IntegrationTests))
         {
             RequireProcess(policy, "dotnet", "test", ExecutionCapabilityPhases.BaselineTest);
             RequireProcess(policy, "dotnet", "test", ExecutionCapabilityPhases.CandidateTest);
+        }
+        if (testSuites is not null)
+        {
+            foreach (var suite in testSuites.EnabledSuites)
+            {
+                RequireProcess(
+                    policy,
+                    "dotnet",
+                    "test",
+                    TestSuiteVerifier.PhaseFor(suite.Category, baseline: true));
+                RequireProcess(
+                    policy,
+                    "dotnet",
+                    "test",
+                    TestSuiteVerifier.PhaseFor(suite.Category, baseline: false));
+            }
         }
         if (acceptance.Any(criterion => criterion.Evidence.Type == AcceptanceEvidenceType.Test))
         {
@@ -433,9 +468,15 @@ public class TaskContractParser
             ExecutionCapabilityPhases.BaselineToolProbe,
             ExecutionCapabilityPhases.BaselineBuild,
             ExecutionCapabilityPhases.BaselineTest,
+            ExecutionCapabilityPhases.BaselineUnitTest,
+            ExecutionCapabilityPhases.BaselineIntegrationTest,
+            ExecutionCapabilityPhases.BaselineAcceptanceTest,
             ExecutionCapabilityPhases.BaselineSecurityScan,
             ExecutionCapabilityPhases.CandidateBuild,
             ExecutionCapabilityPhases.CandidateTest,
+            ExecutionCapabilityPhases.CandidateUnitTest,
+            ExecutionCapabilityPhases.CandidateIntegrationTest,
+            ExecutionCapabilityPhases.CandidateAcceptanceTest,
             ExecutionCapabilityPhases.CandidateSecurityScan,
             ExecutionCapabilityPhases.CandidateAcceptance
         ], StringComparer.Ordinal);
@@ -475,6 +516,91 @@ public class TaskContractParser
         catch (OverflowException)
         {
             throw new InvalidOperationException($"{field} is too large.");
+        }
+    }
+
+    private static TestSuiteMatrix MapTestSuites(
+        TestSuiteMatrixYamlModel model,
+        string fallbackTarget,
+        IReadOnlyCollection<AcceptanceCriterion> acceptance)
+    {
+        var matrix = new TestSuiteMatrix
+        {
+            Version = model.Version ?? model.version ?? TestSuiteSchema.ProfileVersion,
+            Unit = MapTestSuite(
+                model.Unit ?? model.unit,
+                TestSuiteCategory.Unit,
+                fallbackTarget),
+            Integration = MapTestSuite(
+                model.Integration ?? model.integration,
+                TestSuiteCategory.Integration,
+                fallbackTarget),
+            Acceptance = MapTestSuite(
+                model.Acceptance ?? model.acceptance,
+                TestSuiteCategory.Acceptance,
+                fallbackTarget)
+        };
+        if (matrix.Version != TestSuiteSchema.ProfileVersion)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported execution.test_suites version: '{matrix.Version}'.");
+        }
+        if (acceptance.Any(criterion => criterion.Evidence.Type == AcceptanceEvidenceType.Test) &&
+            matrix.Acceptance.Mode == TestGateMode.Disabled)
+        {
+            throw new InvalidOperationException(
+                "Test-based acceptance evidence requires an enabled acceptance test suite.");
+        }
+        return matrix;
+    }
+
+    private static TestSuiteCommandProfile MapTestSuite(
+        TestSuiteCommandYamlModel? model,
+        TestSuiteCategory category,
+        string fallbackTarget)
+    {
+        var mode = ParseTestGateMode(model?.Mode ?? model?.mode ?? "disabled");
+        var target = model?.Target ?? model?.target ?? fallbackTarget;
+        var arguments = model?.Arguments ?? model?.arguments ?? [];
+        var timeout = model?.TimeoutSeconds ?? model?.timeout_seconds ?? 120;
+        if (timeout <= 0)
+            throw new InvalidOperationException($"{category} test suite timeout_seconds must be positive.");
+        if (mode != TestGateMode.Disabled)
+            ValidateTestSuiteTarget(target, category);
+        var profile = new TestSuiteCommandProfile
+        {
+            Mode = mode,
+            Target = target,
+            Arguments = arguments,
+            TimeoutSeconds = timeout
+        };
+        TestSuiteCommandGuard.ValidateArguments(profile, category);
+        return profile;
+    }
+
+    private static TestGateMode ParseTestGateMode(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "required" => TestGateMode.Required,
+            "optional" => TestGateMode.Optional,
+            "disabled" => TestGateMode.Disabled,
+            _ => throw new InvalidOperationException(
+                $"Unknown test suite mode: '{value}'. Expected required, optional, or disabled.")
+        };
+
+    private static void ValidateTestSuiteTarget(string target, TestSuiteCategory category)
+    {
+        var normalized = target.Trim().Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            normalized.StartsWith('/') ||
+            Regex.IsMatch(normalized, @"^[a-zA-Z]:/") ||
+            normalized.Split('/').Any(segment => segment is "" or "." or ".." ||
+                segment.Equals(".git", StringComparison.OrdinalIgnoreCase)) ||
+            !new[] { ".sln", ".slnx", ".csproj", ".fsproj", ".vbproj" }
+                .Contains(Path.GetExtension(normalized), StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"{category} test suite requires a safe relative solution or project target.");
         }
     }
 
@@ -722,6 +848,32 @@ public class ExecutionYamlModel
     public SandboxYamlModel? sandbox { get; set; }
     public CapabilitiesYamlModel? Capabilities { get; set; }
     public CapabilitiesYamlModel? capabilities { get; set; }
+    public TestSuiteMatrixYamlModel? TestSuites { get; set; }
+    public TestSuiteMatrixYamlModel? test_suites { get; set; }
+}
+
+public class TestSuiteMatrixYamlModel
+{
+    public string? Version { get; set; }
+    public string? version { get; set; }
+    public TestSuiteCommandYamlModel? Unit { get; set; }
+    public TestSuiteCommandYamlModel? unit { get; set; }
+    public TestSuiteCommandYamlModel? Integration { get; set; }
+    public TestSuiteCommandYamlModel? integration { get; set; }
+    public TestSuiteCommandYamlModel? Acceptance { get; set; }
+    public TestSuiteCommandYamlModel? acceptance { get; set; }
+}
+
+public class TestSuiteCommandYamlModel
+{
+    public string? Mode { get; set; }
+    public string? mode { get; set; }
+    public string? Target { get; set; }
+    public string? target { get; set; }
+    public List<string>? Arguments { get; set; }
+    public List<string>? arguments { get; set; }
+    public int? TimeoutSeconds { get; set; }
+    public int? timeout_seconds { get; set; }
 }
 
 public class CapabilitiesYamlModel

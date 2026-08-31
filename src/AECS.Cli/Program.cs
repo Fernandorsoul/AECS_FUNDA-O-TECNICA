@@ -635,7 +635,17 @@ static async Task<int> RunSingle(string[] args)
     Console.WriteLine($"Baseline: {execution.Baseline.Commit} ({execution.Baseline.Branch})");
     Console.WriteLine("Baseline verification:");
     foreach (var result in execution.BaselineVerificationResults)
+    {
         Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
+        if (result.TestSuite is not null)
+        {
+            Console.WriteLine(
+                $"    {result.TestSuite.Mode}: discovered={result.TestSuite.Discovered}, " +
+                $"executed={result.TestSuite.Executed}, passed={result.TestSuite.Passed}, " +
+                $"failed={result.TestSuite.Failed}, skipped={result.TestSuite.Skipped} " +
+                $"[{result.TestSuite.Target}]");
+        }
+    }
     if (execution.BaselineVerificationResults.Count == 0)
         Console.WriteLine("  (not required)");
     Console.WriteLine($"Context: {execution.ContextManifest.Id}");
@@ -671,7 +681,17 @@ static async Task<int> RunSingle(string[] args)
 
     Console.WriteLine("Verification:");
     foreach (var result in execution.VerificationResults)
+    {
         Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
+        if (result.TestSuite is not null)
+        {
+            Console.WriteLine(
+                $"    {result.TestSuite.Mode}: discovered={result.TestSuite.Discovered}, " +
+                $"executed={result.TestSuite.Executed}, passed={result.TestSuite.Passed}, " +
+                $"failed={result.TestSuite.Failed}, skipped={result.TestSuite.Skipped} " +
+                $"[{result.TestSuite.Target}]");
+        }
+    }
 
     var securityResults = execution.BaselineVerificationResults
         .Concat(execution.VerificationResults)

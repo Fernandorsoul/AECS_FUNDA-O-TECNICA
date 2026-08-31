@@ -1,5 +1,6 @@
 using AECS.Application.Replay;
 using AECS.Application.Staging;
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Exceptions;
 using AECS.Domain.Interfaces;
@@ -125,6 +126,31 @@ public sealed class ExecutionReplayTests
             item.Status == ReplayComparisonStatus.Match);
     }
 
+    [Fact]
+    public async Task Replay_ReproducesIndependentTestSuiteEvidence()
+    {
+        await using var fixture = await ReplayFixture.CreateAsync();
+        var execution = await fixture.ExecuteAsync(testSuites: true);
+
+        var replay = await fixture.ReplayAsync(execution.EvidenceId);
+
+        replay.Outcome.Should().Be(ExecutionReplayOutcome.Reproduced);
+        foreach (var gate in new[]
+                 {
+                     TestSuiteVerifier.UnitName,
+                     TestSuiteVerifier.IntegrationName,
+                     TestSuiteVerifier.AcceptanceName
+                 })
+        {
+            replay.Evidence.Gates.Should().Contain(item =>
+                item.Gate == $"baseline:{gate}" &&
+                item.Status == ReplayComparisonStatus.Match);
+            replay.Evidence.Gates.Should().Contain(item =>
+                item.Gate == $"candidate:{gate}" &&
+                item.Status == ReplayComparisonStatus.Match);
+        }
+    }
+
     private sealed class ReplayFixture : IAsyncDisposable
     {
         private const string RootPrefix = "aecs-replay-tests-";
@@ -162,7 +188,8 @@ public sealed class ExecutionReplayTests
 
         public Task<StagedExecutionResult> ExecuteAsync(
             string? requiredGate = null,
-            bool securityScan = false)
+            bool securityScan = false,
+            bool testSuites = false)
         {
             var required = requiredGate is null ? new List<string>() : [requiredGate];
             var contract = new TaskContract
@@ -173,7 +200,15 @@ public sealed class ExecutionReplayTests
                 Execution = new RepositoryExecutionProfile
                 {
                     Target = "ReplayFixture.sln",
-                    Runtime = RepositoryExecutionProfile.HostRuntime
+                    Runtime = RepositoryExecutionProfile.HostRuntime,
+                    TestSuites = testSuites
+                        ? new TestSuiteMatrix
+                        {
+                            Unit = Suite(TestGateMode.Required),
+                            Integration = Suite(TestGateMode.Optional),
+                            Acceptance = Suite(TestGateMode.Required)
+                        }
+                        : null
                 },
                 Verification = new VerificationProfile
                 {
@@ -208,6 +243,13 @@ public sealed class ExecutionReplayTests
                 contract,
                 CancellationToken.None);
         }
+
+        private static TestSuiteCommandProfile Suite(TestGateMode mode) => new()
+        {
+            Mode = mode,
+            Target = "ReplayFixture.sln",
+            TimeoutSeconds = 30
+        };
 
         public Task<ExecutionReplayResult> ReplayAsync(Guid evidenceId) =>
             new ExecutionReplayService(

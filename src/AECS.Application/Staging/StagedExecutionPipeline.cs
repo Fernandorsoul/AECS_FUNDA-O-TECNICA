@@ -133,10 +133,9 @@ public sealed class StagedExecutionPipeline
             baseline,
             CancellationToken.None);
 
-        var baselineFailures = baselineVerificationResults
-            .Where(result => result.Status != VerificationStatus.Pass)
-            .Select(result => $"{result.Verifier}: {result.Status} - {result.Message}")
-            .ToList();
+        var baselineFailures = RequiredBaselineFailures(
+            contract,
+            baselineVerificationResults);
         if (baselineFailures.Count > 0)
         {
             var baselineAgentResult = new AgentRunResult
@@ -336,8 +335,9 @@ public sealed class StagedExecutionPipeline
             FilesChanged = agentResult.FilesChanged.ToList()
         };
 
-        var baselineFailed = baselineVerificationResults.Any(
-            result => result.Status != VerificationStatus.Pass);
+        var baselineFailed = RequiredBaselineFailures(
+            contract,
+            baselineVerificationResults).Count > 0;
         var evidence = new ExecutionEvidence
         {
             TaskContract = contract,
@@ -424,8 +424,9 @@ public sealed class StagedExecutionPipeline
         var buildPassed = results
             .Where(result => result.Verifier == "Build")
             .All(result => result.Status == VerificationStatus.Pass);
-        if (context.Contract.Verification.UnitTests ||
-            context.Contract.Verification.IntegrationTests)
+        if (context.Contract.Execution.TestSuites is null &&
+            (context.Contract.Verification.UnitTests ||
+             context.Contract.Verification.IntegrationTests))
         {
             results.Add(buildPassed
                 ? await RunVerifierAsync(
@@ -433,6 +434,25 @@ public sealed class StagedExecutionPipeline
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
+        }
+        else if (context.Contract.Execution.TestSuites is not null)
+        {
+            foreach (var suite in context.Contract.Execution.TestSuites.EnabledSuites)
+            {
+                results.Add(buildPassed
+                    ? await RunVerifierAsync(
+                        new TestSuiteVerifier(
+                            stagedProcessRunner,
+                            suite.Category,
+                            suite.Profile,
+                            remainingDuration),
+                        context,
+                        cancellationToken)
+                    : Skipped(
+                        context.AgentRunId,
+                        TestSuiteVerifier.NameFor(suite.Category),
+                        "Baseline build prerequisite failed"));
+            }
         }
 
         if (context.Contract.Verification.SecurityScan)
@@ -460,8 +480,16 @@ public sealed class StagedExecutionPipeline
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (contract.Verification.Build)
             required.Add("Build");
-        if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
-            required.Add("Tests");
+        if (contract.Execution.TestSuites is null)
+        {
+            if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
+                required.Add("Tests");
+        }
+        else
+        {
+            foreach (var suite in contract.Execution.TestSuites.RequiredSuites)
+                required.Add(TestSuiteVerifier.NameFor(suite.Category));
+        }
         if (contract.Verification.SecurityScan)
             required.Add(SecurityScanVerifier.VerifierName);
         return required;
@@ -516,7 +544,8 @@ public sealed class StagedExecutionPipeline
             .Where(result => result.Verifier == "Build")
             .All(result => result.Status == VerificationStatus.Pass);
 
-        if (context.Contract.Verification.UnitTests || context.Contract.Verification.IntegrationTests)
+        if (context.Contract.Execution.TestSuites is null &&
+            (context.Contract.Verification.UnitTests || context.Contract.Verification.IntegrationTests))
         {
             results.Add(prerequisitesPassed && buildPassed
                 ? await RunVerifierAsync(
@@ -524,6 +553,25 @@ public sealed class StagedExecutionPipeline
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
+        }
+        else if (context.Contract.Execution.TestSuites is not null)
+        {
+            foreach (var suite in context.Contract.Execution.TestSuites.EnabledSuites)
+            {
+                results.Add(prerequisitesPassed && buildPassed
+                    ? await RunVerifierAsync(
+                        new TestSuiteVerifier(
+                            stagedProcessRunner,
+                            suite.Category,
+                            suite.Profile,
+                            remainingDuration),
+                        context,
+                        cancellationToken)
+                    : Skipped(
+                        context.AgentRunId,
+                        TestSuiteVerifier.NameFor(suite.Category),
+                        "Trust-boundary or build prerequisite failed"));
+            }
         }
 
         if (context.Contract.Verification.SecurityScan)
@@ -615,6 +663,27 @@ public sealed class StagedExecutionPipeline
         .Where(finding => finding.Disposition != SecurityFindingDisposition.Suppressed)
         .Select(finding => finding.Fingerprint)
         .ToHashSet(StringComparer.Ordinal);
+
+    private static List<string> RequiredBaselineFailures(
+        TaskContract contract,
+        IReadOnlyList<VerificationResult> results)
+    {
+        var failures = new List<string>();
+        foreach (var verifier in GetRequiredBaselineVerifiers(contract))
+        {
+            var matches = results.Where(result => result.Verifier.Equals(
+                    verifier,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count == 0)
+                failures.Add($"{verifier}: required baseline verifier result is missing");
+            else if (matches.Count > 1)
+                failures.Add($"{verifier}: duplicate baseline verifier results are ambiguous");
+            else if (matches[0].Status != VerificationStatus.Pass)
+                failures.Add($"{matches[0].Verifier}: {matches[0].Status} - {matches[0].Message}");
+        }
+        return failures;
+    }
 
     private static DecisionResult ApplyTerminalExecutionState(
         DecisionResult decision,

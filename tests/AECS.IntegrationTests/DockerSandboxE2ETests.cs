@@ -1,4 +1,5 @@
 using AECS.Application.Staging;
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -41,7 +42,7 @@ public sealed class DockerSandboxE2ETests
                     Evidence = new AcceptanceEvidenceRequirement
                     {
                         Type = AcceptanceEvidenceType.Verifier,
-                        Reference = "Tests"
+                        Reference = TestSuiteVerifier.UnitName
                     }
                 }
             ],
@@ -65,6 +66,21 @@ public sealed class DockerSandboxE2ETests
                     ProcessLimit = 64,
                     WallClockSeconds = 90,
                     NetworkAccess = false
+                },
+                TestSuites = new TestSuiteMatrix
+                {
+                    Unit = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Required,
+                        Target = "tests/Unit/SandboxFixture.UnitTests.csproj",
+                        TimeoutSeconds = 45
+                    },
+                    Integration = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Optional,
+                        Target = "tests/Integration/SandboxFixture.IntegrationTests.csproj",
+                        TimeoutSeconds = 45
+                    }
                 }
             },
             Verification = new VerificationProfile
@@ -110,7 +126,13 @@ public sealed class DockerSandboxE2ETests
         result.VerificationResults.Should().Contain(item =>
             item.Verifier == "Build" && item.Status == VerificationStatus.Pass);
         result.VerificationResults.Should().Contain(item =>
-            item.Verifier == "Tests" && item.Status == VerificationStatus.Pass);
+            item.Verifier == TestSuiteVerifier.UnitName &&
+            item.Status == VerificationStatus.Pass &&
+            item.TestSuite!.Executed == 2);
+        result.VerificationResults.Should().Contain(item =>
+            item.Verifier == TestSuiteVerifier.IntegrationName &&
+            item.Status == VerificationStatus.Pass &&
+            item.TestSuite!.Executed == 1);
         result.BaselineVerificationResults.Should().Contain(item =>
             item.Verifier == "SecurityScan" &&
             item.Status == VerificationStatus.Pass &&
@@ -455,8 +477,22 @@ public sealed class DockerSandboxE2ETests
                     <TargetFramework>net9.0</TargetFramework>
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="tests/Unit/SandboxFixture.UnitTests.csproj" />
+                    <ProjectReference Include="tests/Integration/SandboxFixture.IntegrationTests.csproj" />
+                  </ItemGroup>
                 </Project>
                 """);
+            await WriteSyntheticTestProjectAsync(
+                repository.Path,
+                "tests/Unit/SandboxFixture.UnitTests.csproj",
+                "unit.trx",
+                total: 2);
+            await WriteSyntheticTestProjectAsync(
+                repository.Path,
+                "tests/Integration/SandboxFixture.IntegrationTests.csproj",
+                "integration.trx",
+                total: 1);
             await File.WriteAllTextAsync(
                 System.IO.Path.Combine(repository.Path, "Program.cs"),
                 "Console.WriteLine(\"baseline\");");
@@ -469,6 +505,30 @@ public sealed class DockerSandboxE2ETests
             await repository.GitAsync("add", "-A", "--");
             await repository.GitAsync("commit", "-m", "sandbox baseline");
             return repository;
+        }
+
+        private static async Task WriteSyntheticTestProjectAsync(
+            string repositoryPath,
+            string relativePath,
+            string trxName,
+            int total)
+        {
+            var path = System.IO.Path.Combine(repositoryPath, relativePath);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                  </PropertyGroup>
+                  <Target Name="WriteSyntheticTrx" BeforeTargets="VSTest">
+                    <MakeDir Directories="$(VSTestResultsDirectory)" />
+                    <WriteLinesToFile
+                      File="$(VSTestResultsDirectory)/{trxName}"
+                      Lines="&lt;TestRun&gt;&lt;ResultSummary&gt;&lt;Counters total=&quot;{total}&quot; executed=&quot;{total}&quot; passed=&quot;{total}&quot; failed=&quot;0&quot; notExecuted=&quot;0&quot; /&gt;&lt;/ResultSummary&gt;&lt;/TestRun&gt;"
+                      Overwrite="true" />
+                  </Target>
+                </Project>
+                """);
         }
 
         public async Task<string> StatusAsync() =>

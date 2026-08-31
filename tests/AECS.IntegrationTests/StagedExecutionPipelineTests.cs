@@ -1,4 +1,5 @@
 using AECS.Application.Staging;
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -307,6 +308,108 @@ public sealed class StagedExecutionPipelineTests
         var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
         evidence!.VerificationResults.Single(item => item.Verifier == "SecurityScan")
             .SecurityScan!.PolicyHash.Should().StartWith("sha256:");
+        (await repository.StatusAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task VersionedTestMatrix_RunsDistinctSuitesInBaselineAndCandidate()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string>
+            {
+                ["tests/Unit/Product.UnitTests.csproj"] =
+                    "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                ["tests/Integration/Product.IntegrationTests.csproj"] =
+                    "<Project Sdk=\"Microsoft.NET.Sdk\" />"
+            });
+        var contract = Contract();
+        contract = new TaskContract
+        {
+            Id = contract.Id,
+            Objective = contract.Objective,
+            Scope = contract.Scope,
+            Budget = contract.Budget,
+            Execution = new RepositoryExecutionProfile
+            {
+                Runtime = RepositoryExecutionProfile.HostRuntime,
+                TestSuites = new TestSuiteMatrix
+                {
+                    Unit = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Required,
+                        Target = "tests/Unit/Product.UnitTests.csproj",
+                        TimeoutSeconds = 20
+                    },
+                    Integration = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Optional,
+                        Target = "tests/Integration/Product.IntegrationTests.csproj",
+                        TimeoutSeconds = 20
+                    }
+                }
+            },
+            Verification = new VerificationProfile
+            {
+                Build = false,
+                UnitTests = true,
+                IntegrationTests = false
+            },
+            Approval = contract.Approval
+        };
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var staged = new MatrixTestRunner();
+
+        var result = await new StagedExecutionPipeline(
+                Agent.Success(Response("src/new-file.txt")),
+                repository.ProcessRunner,
+                store,
+                stagedProcessRunnerFactory: new FixedStagedRunnerFactory(staged))
+            .RunAsync(repository.Path, contract, CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Verified,
+            "the optional integration failure must remain visible without blocking");
+        result.BaselineVerificationResults.Should().Contain(result =>
+            result.Verifier == TestSuiteVerifier.UnitName &&
+            result.Status == VerificationStatus.Pass &&
+            result.TestSuite!.Executed == 2);
+        result.BaselineVerificationResults.Should().Contain(result =>
+            result.Verifier == TestSuiteVerifier.IntegrationName &&
+            result.Status == VerificationStatus.Fail);
+        result.VerificationResults.Should().Contain(result =>
+            result.Verifier == TestSuiteVerifier.UnitName &&
+            result.Status == VerificationStatus.Pass);
+        result.VerificationResults.Should().Contain(result =>
+            result.Verifier == TestSuiteVerifier.IntegrationName &&
+            result.Status == VerificationStatus.Fail);
+        var suiteRequests = staged.Requests.Where(request =>
+            request.Arguments.FirstOrDefault() == "test").ToList();
+        suiteRequests.Should().HaveCount(4);
+        suiteRequests.Select(request => request.Phase).Should().BeEquivalentTo(
+        [
+            ExecutionCapabilityPhases.BaselineUnitTest,
+            ExecutionCapabilityPhases.BaselineIntegrationTest,
+            ExecutionCapabilityPhases.CandidateUnitTest,
+            ExecutionCapabilityPhases.CandidateIntegrationTest
+        ]);
+        suiteRequests.Should().Contain(request =>
+            request.Arguments.Contains("tests/Unit/Product.UnitTests.csproj"));
+        suiteRequests.Should().Contain(request =>
+            request.Arguments.Contains("tests/Integration/Product.IntegrationTests.csproj"));
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence!.FinalDecision.RequiredVerifiers.Should().Contain(TestSuiteVerifier.UnitName);
+        evidence.FinalDecision.RequiredVerifiers.Should().NotContain(
+            TestSuiteVerifier.IntegrationName);
+        var commandIds = evidence.BaselineCommands
+            .Concat(evidence.CandidateCommands)
+            .Select(command => command.Id)
+            .ToHashSet();
+        evidence.BaselineVerificationResults
+            .Concat(evidence.VerificationResults)
+            .Where(verification => verification.TestSuite is not null)
+            .Should().HaveCount(4)
+            .And.OnlyContain(verification =>
+                commandIds.Contains(verification.TestSuite!.CommandEvidenceId));
         (await repository.StatusAsync()).Should().BeEmpty();
     }
 
@@ -897,6 +1000,95 @@ public sealed class StagedExecutionPipelineTests
                 identity),
             Message = "Synthetic normalized finding."
         };
+    }
+
+    private sealed class FixedStagedRunnerFactory : IStagedProcessRunnerFactory
+    {
+        private readonly IProcessRunner _runner;
+
+        public FixedStagedRunnerFactory(IProcessRunner runner)
+        {
+            _runner = runner;
+        }
+
+        public Task<IProcessRunner> CreateAsync(
+            string stagedWorkspacePath,
+            RepositoryExecutionProfile profile,
+            CancellationToken cancellationToken) => Task.FromResult(_runner);
+    }
+
+    private sealed class MatrixTestRunner : IProcessRunner
+    {
+        public List<ProcessExecutionRequest> Requests { get; } = [];
+
+        public Task<ProcessExecutionResult> RunAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            if (request.Arguments.FirstOrDefault() != "test")
+            {
+                return Task.FromResult(new ProcessExecutionResult
+                {
+                    ExitCode = 0,
+                    StandardOutput = request.FileName == "dotnet" ? "9.0.100" : "git version 2.50",
+                    Environment = Evidence(request)
+                });
+            }
+
+            var arguments = request.Arguments.ToList();
+            var resultsDirectory = arguments[arguments.IndexOf("--results-directory") + 1];
+            Directory.CreateDirectory(resultsDirectory);
+            var integration = arguments.Contains(
+                "tests/Integration/Product.IntegrationTests.csproj");
+            File.WriteAllText(
+                Path.Combine(resultsDirectory, "suite.trx"),
+                integration
+                    ? "<TestRun><ResultSummary><Counters total=\"1\" executed=\"1\" passed=\"0\" failed=\"1\" notExecuted=\"0\" /></ResultSummary></TestRun>"
+                    : "<TestRun><ResultSummary><Counters total=\"2\" executed=\"2\" passed=\"2\" failed=\"0\" notExecuted=\"0\" /></ResultSummary></TestRun>");
+            return Task.FromResult(new ProcessExecutionResult
+            {
+                ExitCode = integration ? 1 : 0,
+                Duration = TimeSpan.FromMilliseconds(10),
+                Environment = Evidence(request)
+            });
+        }
+
+        private static ExecutionEnvironmentEvidence Evidence(ProcessExecutionRequest request)
+        {
+            var capabilities = ExecutionCapabilityPolicy.TestSuitesDefault(new TestSuiteMatrix
+            {
+                Unit = new TestSuiteCommandProfile
+                {
+                    Mode = TestGateMode.Required,
+                    Target = "tests/Unit/Product.UnitTests.csproj"
+                },
+                Integration = new TestSuiteCommandProfile
+                {
+                    Mode = TestGateMode.Optional,
+                    Target = "tests/Integration/Product.IntegrationTests.csproj"
+                }
+            });
+            return new ExecutionEnvironmentEvidence
+            {
+                Runtime = RepositoryExecutionProfile.HostRuntime,
+                RuntimeVersion = "fixture",
+                NetworkMode = "host",
+                CpuLimit = "unlimited",
+                MemoryLimit = "unlimited",
+                WallClockLimitSeconds = (int)Math.Ceiling(request.Timeout.TotalSeconds),
+                WorkspaceMount = "host-direct",
+                DevelopmentHostOverride = true,
+                Capabilities = new ExecutionCapabilityEvidence
+                {
+                    PolicyVersion = capabilities.Version,
+                    Authority = capabilities.Authority,
+                    PolicyHash = ExecutionCapabilityPolicyFingerprint.Create(capabilities),
+                    Phase = request.Phase,
+                    Granted = ["fixture"]
+                }
+            };
+        }
     }
 
     private sealed class TemporaryGitRepository : IAsyncDisposable
