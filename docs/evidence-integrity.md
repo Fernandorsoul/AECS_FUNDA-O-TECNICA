@@ -1,6 +1,6 @@
 # Integridade e autenticidade das evidências
 
-Os backends JSON e PostgreSQL persistem cada execução em um envelope `aecs.execution-evidence/v1`. O payload base é serializado de forma canônica, recebe SHA-256 e é assinado com RSA-PSS/SHA-256. `promote` e `export-patch` validam schema, hash, assinatura e isolamento do store antes de usar qualquer campo da evidência.
+Os backends JSON e PostgreSQL persistem cada execução em um envelope `aecs.execution-evidence/v1`. O payload base é serializado de forma canônica, recebe SHA-256 e é assinado com RSA-PSS/SHA-256. `promote`, `export-patch` e `replay` validam schema, hash, assinatura e isolamento do store antes de usar qualquer campo da evidência.
 
 ## Envelope e cadeia de eventos
 
@@ -8,7 +8,10 @@ O documento separa três elementos:
 
 - `evidence`: registro imutável da execução staged, sempre com a lista interna de promoções vazia;
 - `promotionEvents`: exportações e promoções assinadas individualmente, com sequência e assinatura anterior;
+- `replayEvents`: resultados de reprodução assinados, ligados à execução e ao candidato originais;
 - `chainSeal`: cabeça assinada que cobre a quantidade de eventos e a última assinatura.
+
+Promoções e replays usam uma única sequência global. Intercalar os dois tipos não cria cadeias paralelas: cada novo evento aponta para a assinatura do último evento de qualquer tipo.
 
 A serialização canônica ordena propriedades JSON por nome ordinal e preserva a ordem dos arrays. Propriedades duplicadas, campos desconhecidos, comentários, trailing commas e schemas não reconhecidos são recusados. Alterar em conjunto diff, `DiffHash`, decisão ou aprovação não restaura a validade: o hash e a assinatura cobrem o payload completo.
 

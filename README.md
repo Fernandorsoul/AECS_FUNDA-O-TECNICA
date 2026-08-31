@@ -141,7 +141,7 @@ ollama serve
 
 ### Promover ou exportar um candidato
 
-O comando `run` informa o `Evidence ID` e o `Diff hash`. A evidência é selada com RSA-PSS/SHA-256; qualquer alteração no envelope ou em sua cadeia de promoções bloqueia as operações seguintes. Para aplicar um candidato `Verified` no mesmo repositório em que a evidência foi produzida:
+O comando `run` informa o `Evidence ID` e o `Diff hash`. A evidência é selada com RSA-PSS/SHA-256; qualquer alteração no envelope ou em sua cadeia de eventos bloqueia as operações seguintes. Para aplicar um candidato `Verified` no mesmo repositório em que a evidência foi produzida:
 
 ```powershell
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- promote `
@@ -167,6 +167,19 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- export-patch `
 ```
 
 O destino precisa estar fora do repositório-alvo e não pode existir. Ambas as ações acrescentam um evento assinado e encadeado com ator, confirmação, baseline, hash e resultado. Consulte [Promoção controlada](docs/controlled-promotion.md) para as garantias e os casos de recusa e [Integridade das evidências](docs/evidence-integrity.md) para envelope, chaves e rotação.
+
+### Reproduzir uma evidência
+
+O replay reconstrói o candidato e repete ferramentas, comandos, gates e evidências de aceite num worktree descartável, sem chamar o agente nem alterar o checkout original:
+
+```powershell
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- replay `
+  --repo C:\caminho\para\repositorio `
+  --evidence <evidence-id> `
+  --evidence-store json
+```
+
+O resultado separa baseline ausente, divergência do candidato, divergência do ambiente e gate não reproduzível. Cada tentativa válida vira um evento de replay assinado e ligado à evidência original. Consulte [Replay de evidências](docs/evidence-replay.md).
 
 ### Fallback em nuvem
 
@@ -266,6 +279,7 @@ A referência de campos, padrões de escopo, valores padrão e regras de decisã
 | Jarvis | `jarvis --repo <path> --evidence-store <json\|postgres>` | Abre o REPL interativo |
 | Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
+| Replay | `replay --repo <path> --evidence <id> --evidence-store <json\|postgres>` | Reproduz candidato e gates sem chamar o agente |
 | Rotação de chave | `evidence-key rotate [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
 
 Comandos disponíveis dentro do Jarvis:
@@ -304,6 +318,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Referência do TaskContract](docs/task-contract.md) — schema YAML e semântica dos campos;
 - [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
 - [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
+- [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.

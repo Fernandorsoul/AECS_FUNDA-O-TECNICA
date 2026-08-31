@@ -275,7 +275,8 @@ public sealed class StagedExecutionPipelineTests
             .Status.Should().Be(VerificationStatus.Pass);
         result.VerificationResults.Single(item => item.Verifier == "Build")
             .Status.Should().Be(VerificationStatus.Fail);
-        result.BaselineCommands.Should().ContainSingle();
+        result.BaselineCommands.Should().ContainSingle(command =>
+            command.Arguments.FirstOrDefault() == "build");
         result.CandidateCommands.Should().ContainSingle();
         agent.WasCalled.Should().BeTrue();
         (await repository.StatusAsync()).Should().BeEmpty();
@@ -319,7 +320,8 @@ public sealed class StagedExecutionPipelineTests
         var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
         evidence.Should().NotBeNull();
         evidence!.BaselineVerificationResults.Should().ContainSingle();
-        evidence.BaselineCommands.Should().ContainSingle();
+        evidence.BaselineCommands.Should().ContainSingle(command =>
+            command.Arguments.FirstOrDefault() == "build");
         evidence.AgentResult.ExitReason.Should().Be("BaselinePreflightFailed");
         evidence.StateTransitions.Should().Contain(item =>
             item.Contains("BaselineVerifying->Rejected"));
@@ -370,7 +372,8 @@ public sealed class StagedExecutionPipelineTests
 
         var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
         evidence.Should().NotBeNull();
-        evidence!.BaselineCommands.Should().ContainSingle();
+        evidence!.BaselineCommands.Should().ContainSingle(command =>
+            command.Arguments.FirstOrDefault() == "build");
         evidence.CandidateCommands.Should().ContainSingle();
         (await repository.StatusAsync()).Should().BeEmpty();
     }
@@ -394,7 +397,8 @@ public sealed class StagedExecutionPipelineTests
         result.Decision.Decision.Should().Be(TaskDecision.Rejected);
         result.BaselineVerificationResults.Single(item => item.Verifier == "Build")
             .Status.Should().Be(VerificationStatus.Error);
-        result.BaselineCommands.Should().BeEmpty();
+        result.BaselineCommands.Should().HaveCount(2)
+            .And.OnlyContain(command => command.Arguments.SequenceEqual(new[] { "--version" }));
         agent.WasCalled.Should().BeFalse();
         (await repository.StatusAsync()).Should().BeEmpty();
     }
@@ -430,7 +434,7 @@ public sealed class StagedExecutionPipelineTests
         result.VerificationResults.Single(item => item.Verifier == "Tests")
             .Status.Should().Be(VerificationStatus.Fail);
         result.Decision.Decision.Should().Be(TaskDecision.Rejected);
-        result.BaselineCommands.Should().HaveCount(2);
+        result.BaselineCommands.Should().HaveCount(4);
         result.CandidateCommands.Should().HaveCount(2);
         agent.WasCalled.Should().BeTrue();
         (await repository.StatusAsync()).Should().BeEmpty();

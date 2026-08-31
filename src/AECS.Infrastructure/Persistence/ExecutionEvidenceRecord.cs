@@ -11,10 +11,11 @@ public sealed class ExecutionEvidenceRecord
     public string EvidenceJson { get; set; } = "{}";
     public string EvidenceSealJson { get; set; } = "{}";
     public string ChainSealJson { get; set; } = "{}";
-    public int PromotionCount { get; set; }
+    public int EventCount { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public List<PromotionEvidenceRecord> PromotionEvents { get; set; } = [];
+    public List<ReplayEvidenceRecord> ReplayEvents { get; set; } = [];
 }
 
 public sealed class PromotionEvidenceRecord
@@ -24,6 +25,18 @@ public sealed class PromotionEvidenceRecord
     public int Sequence { get; set; }
     public string PreviousSignature { get; set; } = string.Empty;
     public string PromotionJson { get; set; } = "{}";
+    public string SealJson { get; set; } = "{}";
+    public DateTime SignedAt { get; set; }
+    public ExecutionEvidenceRecord ExecutionEvidence { get; set; } = null!;
+}
+
+public sealed class ReplayEvidenceRecord
+{
+    public Guid Id { get; set; }
+    public Guid ExecutionEvidenceId { get; set; }
+    public int Sequence { get; set; }
+    public string PreviousSignature { get; set; } = string.Empty;
+    public string ReplayJson { get; set; } = "{}";
     public string SealJson { get; set; } = "{}";
     public DateTime SignedAt { get; set; }
     public ExecutionEvidenceRecord ExecutionEvidence { get; set; } = null!;

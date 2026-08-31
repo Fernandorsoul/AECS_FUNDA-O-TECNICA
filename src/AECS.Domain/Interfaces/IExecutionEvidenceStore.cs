@@ -11,4 +11,8 @@ public interface IExecutionEvidenceStore
         Guid evidenceId,
         CandidatePromotionEvidence promotion,
         CancellationToken cancellationToken);
+    Task AppendReplayAsync(
+        Guid evidenceId,
+        ExecutionReplayEvidence replay,
+        CancellationToken cancellationToken);
 }

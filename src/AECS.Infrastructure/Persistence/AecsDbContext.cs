@@ -11,6 +11,8 @@ public class AecsDbContext : DbContext
         Set<ExecutionEvidenceRecord>();
     public DbSet<PromotionEvidenceRecord> PromotionEvidenceRecords =>
         Set<PromotionEvidenceRecord>();
+    public DbSet<ReplayEvidenceRecord> ReplayEvidenceRecords =>
+        Set<ReplayEvidenceRecord>();
 
 
     public AecsDbContext(DbContextOptions<AecsDbContext> options) : base(options) { }
@@ -42,8 +44,8 @@ public class AecsDbContext : DbContext
             entity.ToTable("execution_evidence", table =>
             {
                 table.HasCheckConstraint(
-                    "ck_execution_evidence_promotion_count",
-                    "\"PromotionCount\" >= 0");
+                    "ck_execution_evidence_event_count",
+                    "\"EventCount\" >= 0");
                 table.HasCheckConstraint(
                     "ck_execution_evidence_schema_version",
                     "\"SchemaVersion\" = 'aecs.execution-evidence/v1'");
@@ -79,6 +81,26 @@ public class AecsDbContext : DbContext
             entity.HasIndex(record => record.SignedAt);
             entity.HasOne(record => record.ExecutionEvidence)
                 .WithMany(evidence => evidence.PromotionEvents)
+                .HasForeignKey(record => record.ExecutionEvidenceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ReplayEvidenceRecord>(entity =>
+        {
+            entity.ToTable("execution_evidence_replay_events", table =>
+                table.HasCheckConstraint(
+                    "ck_execution_evidence_replay_sequence",
+                    "\"Sequence\" > 0"));
+            entity.HasKey(record => record.Id);
+            entity.Property(record => record.PreviousSignature).IsRequired();
+            entity.Property(record => record.ReplayJson).HasColumnType("jsonb").IsRequired();
+            entity.Property(record => record.SealJson).HasColumnType("jsonb").IsRequired();
+            entity.Property(record => record.SignedAt).HasColumnType("timestamp with time zone");
+            entity.HasIndex(record => new { record.ExecutionEvidenceId, record.Sequence })
+                .IsUnique();
+            entity.HasIndex(record => record.SignedAt);
+            entity.HasOne(record => record.ExecutionEvidence)
+                .WithMany(evidence => evidence.ReplayEvents)
                 .HasForeignKey(record => record.ExecutionEvidenceId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

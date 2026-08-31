@@ -147,11 +147,11 @@ Cada documento preserva:
 - manifesto de contexto;
 - `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
 - matriz de critérios de aceite, decisão final e transições de estado;
-- exportações e promoções posteriores.
+- exportações, promoções e replays posteriores.
 
-A criação inicial produz um envelope `aecs.execution-evidence/v1`: JSON canônico, SHA-256 e assinatura RSA-PSS/SHA-256 identificada pelo hash da chave pública. Promoções e exportações são eventos assinados ligados à assinatura anterior, e uma cabeça também assinada cobre a quantidade de eventos e a última assinatura. A leitura rejeita schema legado, campo desconhecido ou duplicado, hash divergente, chave não confiável e cadeia inválida antes de entregar `ExecutionEvidence` ao consumidor.
+A criação inicial produz um envelope `aecs.execution-evidence/v1`: JSON canônico, SHA-256 e assinatura RSA-PSS/SHA-256 identificada pelo hash da chave pública. Promoções, exportações e replays são eventos assinados numa única sequência ligada à assinatura anterior, e uma cabeça também assinada cobre a quantidade de eventos e a última assinatura. A leitura rejeita schema legado, campo desconhecido ou duplicado, hash divergente, chave não confiável e cadeia inválida antes de entregar `ExecutionEvidence` ao consumidor.
 
-A criação JSON inicial não sobrescreve uma evidência existente. Acréscimos de promoção usam locks em processo e em arquivo, escrita temporária e substituição atômica. No PostgreSQL, o agregado completo ocupa JSONB autenticado com projeções indexadas, enquanto cada promoção é uma linha relacionada e assinada. Transações, lock de linha e índices únicos tornam save/retry idempotentes e serializam escritores de processos distintos sem perder eventos.
+A criação JSON inicial não sobrescreve uma evidência existente. Acréscimos de promoção ou replay usam locks em processo e em arquivo, escrita temporária e substituição atômica. No PostgreSQL, o agregado completo ocupa JSONB autenticado com projeções indexadas, enquanto promoções e replays são linhas relacionadas e assinadas. Transações, lock de linha e índices únicos tornam save/retry idempotentes e serializam escritores de processos distintos sem perder eventos.
 
 Chaves públicas anteriores permanecem confiáveis depois da rotação; JSON legado sem assinatura falha fechado. Detalhes criptográficos estão em [Integridade das evidências](evidence-integrity.md), e setup, migrations e backup do banco em [Store PostgreSQL](postgresql-evidence-store.md).
 
@@ -161,14 +161,18 @@ Promoção não faz parte do pipeline probabilístico. `CandidatePromotionServic
 
 Locks por repositório coordenam promoções concorrentes. Falha pós-aplicação ou impossibilidade de persistir a auditoria aciona rollback para a baseline. A mudança permanece staged e nenhum commit é criado. A exportação de patch é uma operação distinta e não modifica o repositório. Detalhes estão em [Promoção controlada](controlled-promotion.md).
 
+## Replay de evidência
+
+`ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; candidato idêntico com resultados diferentes é divergência do ambiente; gate ausente recebe classificação própria. O resultado é anexado à cadeia como evento assinado, e o checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).
+
 ## Mapa de componentes
 
 | Projeto | Responsabilidade conectada |
 | --- | --- |
 | `AECS.Domain` | contratos, candidatos, evidências, decisões e interfaces sem dependência de infraestrutura |
-| `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão e promoção |
+| `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão, replay e promoção |
 | `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, stores autenticados JSON/PostgreSQL e fundações Docker |
-| `AECS.Cli` | `run`, `experiment`, `jarvis`, `promote` e `export-patch` |
+| `AECS.Cli` | `run`, `experiment`, `jarvis`, `replay`, `promote` e `export-patch` |
 | `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
 | `AECS.IntegrationTests` | Git e PostgreSQL reais, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 
