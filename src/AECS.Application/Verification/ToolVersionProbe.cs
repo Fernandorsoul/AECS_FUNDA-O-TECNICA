@@ -30,7 +30,8 @@ internal static class ToolVersionProbe
                 FileName = tool,
                 Arguments = arguments,
                 WorkingDirectory = context.RepoPath,
-                Timeout = timeout
+                Timeout = timeout,
+                Phase = $"{context.Phase}.tool-probe"
             };
             var result = await processRunner.RunAsync(request, cancellationToken);
             context.CommandEvidence.Add(

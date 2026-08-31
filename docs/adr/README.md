@@ -12,6 +12,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-006](ADR-006-verification-before-learning.md) | Accepted | Aprender apenas com execuções verificadas |
 | [ADR-007](ADR-007-staged-trust-boundary-and-controlled-promotion.md) | Accepted | Isolar descoberta/verificação em worktrees e promover somente por uma ação controlada |
 | [ADR-008](ADR-008-authenticated-evidence-envelope.md) | Accepted | Autenticar a evidência e encadear eventos de promoção assinados |
+| [ADR-009](ADR-009-preventive-execution-capabilities.md) | Accepted | Aplicar capabilities preventivas versionadas aos comandos staged |
 
 ## Convenção para novos ADRs
 

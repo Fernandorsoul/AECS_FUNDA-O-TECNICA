@@ -191,7 +191,7 @@ public sealed class AcceptanceCriteriaVerifier
                 context.RepoPath,
                 context.Contract.Execution);
             resultsDirectory = Path.Combine(
-                execution.WorkingDirectory,
+                context.RepoPath,
                 ".aecs-verification",
                 Sanitize(criterion.Id));
             Directory.CreateDirectory(resultsDirectory);
@@ -208,7 +208,8 @@ public sealed class AcceptanceCriteriaVerifier
                 FileName = "dotnet",
                 Arguments = arguments,
                 WorkingDirectory = execution.WorkingDirectory,
-                Timeout = timeout
+                Timeout = timeout,
+                Phase = ExecutionCapabilityPhases.CandidateAcceptance
             };
             var executionResult = await _processRunner.RunAsync(request, cancellationToken);
             var commandEvidence = ExecutionCommandEvidenceFactory.Create(

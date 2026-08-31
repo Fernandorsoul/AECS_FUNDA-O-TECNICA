@@ -9,4 +9,5 @@ public class VerificationContext
     public AgentRunResult AgentResult { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public List<ExecutionCommandEvidence> CommandEvidence { get; init; } = [];
+    public string Phase { get; init; } = string.Empty;
 }

@@ -19,6 +19,7 @@ Execute repository-provided code and tools inside Docker containers with:
 - CPU, memory, PID and wall-clock limits;
 - read-only root filesystem, restricted privileges and a bounded temporary filesystem;
 - direct structured argv execution, without an intermediary command shell;
+- preventive task-authoritative capabilities for writable paths, processes, phases, network, secrets and resource ceilings;
 - forced cleanup after success, failure, timeout or cancellation.
 
 ## Consequences

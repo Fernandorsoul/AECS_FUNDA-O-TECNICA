@@ -37,7 +37,8 @@ public class TestVerifier : IVerifier
                 FileName = "dotnet",
                 Arguments = execution.TestArguments,
                 WorkingDirectory = execution.WorkingDirectory,
-                Timeout = timeout
+                Timeout = timeout,
+                Phase = $"{context.Phase}.test"
             };
             var result = await _processRunner.RunAsync(request, cancellationToken);
             context.CommandEvidence.Add(

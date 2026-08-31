@@ -54,6 +54,37 @@ task:
       process_limit: 128
       wall_clock_seconds: 120
       network_access: false
+  capabilities:
+    version: aecs.capabilities/v1
+    file_system:
+      read:
+        - "**"
+      write:
+        - "**/bin/**"
+        - "**/obj/**"
+        - .aecs-verification/**
+    processes:
+      - executable: git
+        argument_prefix: ["--version"]
+        phases: [baseline.tool-probe]
+      - executable: dotnet
+        argument_prefix: ["--version"]
+        phases: [baseline.tool-probe]
+      - executable: dotnet
+        argument_prefix: [build]
+        phases: [baseline.build, candidate.build]
+      - executable: dotnet
+        argument_prefix: [test]
+        phases: [baseline.test, candidate.test, candidate.acceptance]
+    network:
+      destinations: []
+      phases: []
+    secrets: []
+    resources:
+      cpu_limit: "1.0"
+      memory_limit: 512m
+      process_limit: 128
+      wall_clock_seconds: 120
   verification:
     build: required
     unit_tests: required
@@ -176,6 +207,31 @@ O container usa root filesystem read-only, `/tmp` limitado, capabilities removid
 `runtime: host` existe somente para desenvolvimento confiável. Na CLI ele exige também `--allow-host-execution`, e a evidência marca `developmentHostOverride: true`. Se Docker for obrigatório e o daemon estiver ausente, a execução falha fechada antes de executar código do repositório. Os verificadores estruturais EB embutidos continuam sendo lógica do controlador que apenas lê o worktree; eles não carregam nem executam código do repositório.
 
 Detalhes operacionais e o modelo de ameaça estão em [Sandbox Docker staged](docker-staged-sandbox.md).
+
+### Capabilities preventivas
+
+`capabilities.version: aecs.capabilities/v1` é a autoridade preventiva dos comandos staged. O bloco pode ficar diretamente sob `task` ou dentro de `task.execution`; em novos contratos, prefira a primeira forma. Quando ele é omitido, o parser materializa exatamente a política restritiva mostrada no exemplo: leitura somente do worktree, escrita apenas em `bin`, `obj` e `.aecs-verification`, comandos `git --version`, `dotnet --version`, `dotnet build` e `dotnet test`, rede e segredos vazios e recursos limitados a `1.0` CPU, `512m`, 128 PIDs e 120 segundos.
+
+Se o bloco for declarado, campos ausentes não herdam permissões de filesystem, processos, rede ou segredos. Uma versão desconhecida, regra incompleta, fase desconhecida, caminho inseguro ou ausência de um comando exigido pelos gates faz o parse/preflight falhar antes do agente. A autoridade é definida pelo contrato (`task-contract`), não pode ser substituída no YAML, e qualquer plano adaptativo é comparado com ela para impedir expansão.
+
+| Campo | Regra em `aecs.capabilities/v1` |
+| --- | --- |
+| `file_system.read` | Deve ser exatamente `["**"]`; o mount expõe somente o worktree staged, nunca o checkout original |
+| `file_system.write` | Aceita `**/bin/**`, `**/obj/**`, um diretório relativo terminado em `/**` ou `**` como ampliação explícita |
+| `processes[].executable` | Nome simples do executável, sem caminho ou shell |
+| `processes[].argument_prefix` | Prefixo não vazio de argv; o comando só é aceito quando executável, prefixo e fase coincidem |
+| `processes[].phases` | Uma ou mais fases conhecidas da tabela abaixo |
+| `network.destinations` / `network.phases` | As duas listas ficam vazias para negar rede ou são declaradas juntas; `network_access` também precisa estar ativo |
+| `secrets[].name` | Nome de variável de ambiente em maiúsculas; o valor vem do ambiente do controlador somente nas fases declaradas |
+| `resources` | Tetos de CPU, memória, PIDs e wall clock; os limites de `execution.sandbox` não podem excedê-los |
+
+Fases reconhecidas: `baseline.tool-probe`, `baseline.build`, `baseline.test`, `candidate.build`, `candidate.test` e `candidate.acceptance`. Build/test obrigatórios e aceite baseado em teste exigem antecipadamente as regras correspondentes. O processo recebe argv estruturado, portanto o prefixo não é reinterpretado por um shell.
+
+No Docker, `/workspace` é read-only e cada diretório autorizado recebe um bind mount gravável separado. Caminhos absolutos, traversal, `.git`, wildcards não suportados, symlinks, junctions/reparse points e escapes por mount são recusados. A implementação atual consegue aplicar egress somente como `none` ou Docker `bridge`: uma lista contendo explicitamente `"*"` autoriza `bridge` nas fases indicadas; destinos mais estreitos falham fechados até existir um enforcer de egress por destino.
+
+Segredos nunca são incluídos no prompt. O Docker recebe apenas `--env NOME`, sem o valor no argv; o nome e a concessão entram na evidência, mas stdout e stderr de qualquer fase que receba segredo são integralmente suprimidos para impedir vazamento direto ou codificado. Use uma fase dedicada e o menor conjunto de nomes possível.
+
+Cada comando registra versão, autoridade e hash da política, fase, concessões, recusas e nomes dos segredos injetados. O replay exige a mesma política para evidências novas; registros autenticados anteriores ao schema v1 usam uma política de compatibilidade marcada como legado, sem alterar o payload assinado original.
 
 ### Contexto compilado
 

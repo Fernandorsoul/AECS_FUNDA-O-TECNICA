@@ -180,11 +180,12 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 | `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
 | `AECS.IntegrationTests` | Git e PostgreSQL reais, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 
-A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-monolith.md). O fluxo staged conecta diretamente enforcers/verificadores, o store configurado e processos no host; Docker ainda não envolve a execução do agente.
+A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-monolith.md). O fluxo staged mantém Git e os enforcers estruturais no controlador, enquanto comandos que carregam código ou ferramentas do repositório passam pelo runner Docker e por capabilities preventivas. O agente produz blocos de arquivo, mas não recebe uma interface de shell.
 
 ## Limitações atuais
 
-- o agente e os verificadores executam no host; o sandbox Docker ainda não envolve a CLI padrão;
+- operações Git e verificadores estruturais permanecem no host; comandos do repositório usam Docker por padrão, mas `runtime: host` continua disponível como override explícito de desenvolvimento confiável;
+- egress por destino específico ainda não possui enforcer: a rede fica negada ou exige a concessão explícita e ampla `"*"` para usar Docker `bridge`;
 - ambos os stores assinam a evidência, mas o keyring local não é um HSM/KMS e PostgreSQL, sozinho, não é uma âncora externa imutável capaz de detectar rollback coordenado de banco e chaves;
 - o compilador de contexto indexa apenas C# e usa tokenização aproximada;
 - unit e integration tests compartilham um único comando/verificador;
