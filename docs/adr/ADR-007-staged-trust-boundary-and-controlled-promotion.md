@@ -42,7 +42,7 @@ The original checkout is therefore immutable during discovery and verification. 
 - Execution requires Git, a valid `HEAD`, a stable branch identity (including detached `HEAD`) and a completely clean checkout.
 - Two temporary worktrees increase disk use and Git process overhead.
 - The current process isolation is a filesystem/Git boundary, not a container boundary; agents and verifiers still execute on the host.
-- The JSON evidence backend is cryptographically signed and atomic locally, but its local keyring is not an HSM/KMS and it has no external monotonic anchor against rollback to a complete older valid file.
+- Both evidence backends are cryptographically signed and atomic; the local keyring is not an HSM/KMS, and neither backend is an independent monotonic anchor against a coordinated rollback.
 - Non-cooperating external processes are detected by repeated repository-state validation, not prevented from racing with a staged execution.
 - Controlled promotion deliberately does not create a commit or bypass the repository's normal review workflow.
 
@@ -50,6 +50,6 @@ The original checkout is therefore immutable during discovery and verification. 
 
 - This decision is the concrete enforcement mechanism for [ADR-001](ADR-001-probabilistic-discovery-deterministic-enforcement.md).
 - It keeps the modular-monolith boundary from [ADR-002](ADR-002-modular-monolith.md).
-- It uses JSON as the currently connected evidence backend while [ADR-003](ADR-003-postgresql-evidence-store.md) remains the intended persistent operational backend.
+- [ADR-003](ADR-003-postgresql-evidence-store.md) provides the selectable durable backend while JSON remains an explicit local fallback.
 - It does not claim that [ADR-004](ADR-004-docker-isolation.md) is implemented in the default CLI path; Docker remains a future additional isolation layer.
-- [ADR-008](ADR-008-authenticated-evidence-envelope.md) authenticates the JSON record and its subsequent promotion events.
+- [ADR-008](ADR-008-authenticated-evidence-envelope.md) authenticates the execution record and its subsequent promotion events in either backend.

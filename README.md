@@ -26,7 +26,7 @@ flowchart LR
     G --> H{Gates determinísticos}
     H -->|falha| R
     H -->|passa| I[Verified ou HumanReviewRequired]
-    I --> J[Envelope JSON assinado fora do repositório]
+    I --> J[Evidência autenticada no store selecionado]
     J -->|confirmação explícita| K[Promoção atômica opcional]
 ```
 
@@ -41,7 +41,7 @@ O protótipo já inclui:
 - critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
 - verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
 - compilação seletiva e limitada de contexto em toda execução staged;
-- `CandidateChangeSet` derivado do Git e evidência JSON canônica assinada;
+- `CandidateChangeSet` derivado do Git e evidência canônica assinada em JSON ou PostgreSQL;
 - promoção controlada ou exportação do patch como operações separadas;
 - execução em lote com métricas como taxa de verificação e CPVC;
 - REPL interativo, chamado Jarvis.
@@ -56,7 +56,7 @@ Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes j
 - [Ollama](https://ollama.com/), opcional para execução com modelo local;
 - Docker, opcional para subir o PostgreSQL definido no repositório.
 
-O PostgreSQL **não é necessário** para compilar, testar ou usar o fluxo atual da CLI. A infraestrutura de persistência existe, mas ainda não está conectada ao entry point.
+O PostgreSQL é opcional: `json` permanece o backend padrão local, enquanto `postgres` pode ser selecionado explicitamente em todos os fluxos da CLI. O CI provisiona PostgreSQL 16 para os testes reais do store.
 
 ## Início rápido
 
@@ -99,6 +99,19 @@ aecs> exit
 
 O adaptador mock simula metadados de uma execução. Ele é apropriado para exercitar o fluxo de controle, mas não comprova a qualidade de uma alteração real.
 
+### Evidência em PostgreSQL
+
+Connection strings são recebidas somente por variável de ambiente ou `.env` não versionado. Depois de configurar `AECS_POSTGRES_CONNECTION_STRING`, selecione o backend com `--evidence-store postgres` ou `AECS_EVIDENCE_STORE=postgres`. Uma indisponibilidade falha fechado e nunca aciona fallback silencioso para JSON.
+
+```powershell
+$env:AECS_POSTGRES_PASSWORD = '<segredo-local>'
+docker compose up -d postgres
+$env:AECS_POSTGRES_CONNECTION_STRING = `
+  "Host=localhost;Port=5432;Database=aecs;Username=aecs;Password=$env:AECS_POSTGRES_PASSWORD"
+```
+
+Setup, migrations, backup e recuperação estão em [Store PostgreSQL de evidências](docs/postgresql-evidence-store.md).
+
 ## Executar uma tarefa
 
 Uma execução individual recebe o repositório-alvo e um contrato YAML:
@@ -107,6 +120,7 @@ Uma execução individual recebe o repositório-alvo e um contrato YAML:
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- run `
   --repo C:\caminho\para\repositorio `
   --task-file C:\caminho\para\contrato.yaml `
+  --evidence-store json `
   --mock
 ```
 
@@ -135,6 +149,7 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- promote `
   --evidence <evidence-id> `
   --diff-hash <sha256-do-candidato> `
   --actor operador@example.com `
+  --evidence-store json `
   --confirm
 ```
 
@@ -147,6 +162,7 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- export-patch `
   --evidence <evidence-id> `
   --diff-hash <sha256-do-candidato> `
   --output C:\revisoes\candidate.patch `
+  --evidence-store json `
   --actor operador@example.com
 ```
 
@@ -169,6 +185,10 @@ Variáveis reconhecidas:
 | `OPENAI_API_KEY` | Chave da API compatível com OpenAI |
 | `OPENAI_MODEL` | Identificador do modelo usado no fallback |
 | `OPENAI_BASE_URL` | URL-base da API, sem `/chat/completions` |
+| `AECS_EVIDENCE_STORE` | Backend padrão: `json` ou `postgres` |
+| `AECS_EVIDENCE_PATH` | Diretório do backend JSON |
+| `AECS_EVIDENCE_KEY_DIRECTORY` | Keyring fora do repositório-alvo |
+| `AECS_POSTGRES_CONNECTION_STRING` | Segredo de conexão exigido pelo backend PostgreSQL |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` | Aliases legados usados quando as variáveis `OPENAI_*` não existem |
 
 As opções `--cloud-key`, `--cloud-model` e `--cloud-url` sobrescrevem as variáveis de ambiente. O REPL Jarvis ainda usa somente Ollama ou mock e não monta o fallback cloud.
@@ -241,9 +261,9 @@ A referência de campos, padrões de escopo, valores padrão e regras de decisã
 
 | Modo | Exemplo | Uso |
 | --- | --- | --- |
-| Tarefa única | `run --repo <path> --task-file <file>` | Executa e verifica um contrato |
-| Experimento | `experiment --repo <path> --tasks <dir>` | Executa um conjunto de contratos |
-| Jarvis | `jarvis --repo <path>` | Abre o REPL interativo |
+| Tarefa única | `run --repo <path> --task-file <file> --evidence-store <json\|postgres>` | Executa e verifica um contrato |
+| Experimento | `experiment --repo <path> --tasks <dir> --evidence-store <json\|postgres>` | Executa um conjunto de contratos |
+| Jarvis | `jarvis --repo <path> --evidence-store <json\|postgres>` | Abre o REPL interativo |
 | Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
 | Rotação de chave | `evidence-key rotate [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
@@ -284,6 +304,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Referência do TaskContract](docs/task-contract.md) — schema YAML e semântica dos campos;
 - [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
 - [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
+- [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
 
@@ -291,7 +312,6 @@ tasks/                    # TaskContracts de exemplo e de experimento
 
 - a promoção é deliberadamente manual ou autorizada por uma referência de política e deixa as mudanças staged, sem criar commit;
 - a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
-- a persistência de evidências em PostgreSQL ainda não está conectada à CLI;
 - o keyring RSA local não substitui KMS/HSM nem detecta rollback integral para uma versão antiga validamente assinada;
 - o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
 - `security_scan: required` falha fechado porque ainda não existe implementação do verificador `SecurityScan`;

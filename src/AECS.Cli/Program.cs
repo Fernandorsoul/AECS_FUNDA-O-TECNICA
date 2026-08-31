@@ -7,6 +7,7 @@ using AECS.Application.Parsing;
 using AECS.Application.Promotion;
 using AECS.Application.Staging;
 using AECS.Application.Verification;
+using AECS.Cli;
 using AECS.Cli.Jarvis;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -41,9 +42,9 @@ static async Task<int> RunPromotion(string[] args)
     string? evidenceIdValue = null;
     string? expectedDiffHash = null;
     string? actor = null;
-    string? evidenceRoot = null;
     string? policyReference = null;
     string? humanApprovalReference = null;
+    var evidenceStoreSelection = new EvidenceStoreSelection();
     var userConfirmed = false;
 
     for (var index = 0; index < args.Length; index++)
@@ -56,14 +57,15 @@ static async Task<int> RunPromotion(string[] args)
             expectedDiffHash = args[++index];
         else if (args[index] == "--actor" && index + 1 < args.Length)
             actor = args[++index];
-        else if (args[index] == "--evidence-root" && index + 1 < args.Length)
-            evidenceRoot = args[++index];
         else if (args[index] == "--policy" && index + 1 < args.Length)
             policyReference = args[++index];
         else if (args[index] == "--human-approval" && index + 1 < args.Length)
             humanApprovalReference = args[++index];
         else if (args[index] == "--confirm")
             userConfirmed = true;
+        else if (evidenceStoreSelection.TryConsume(args, ref index))
+        {
+        }
     }
 
     var confirmationCount = (userConfirmed ? 1 : 0) +
@@ -78,7 +80,7 @@ static async Task<int> RunPromotion(string[] args)
         Console.WriteLine(
             "Usage: aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
             "--actor <actor> (--confirm | --policy <reference> | --human-approval <reference>) " +
-            "[--evidence-root <path>]");
+            EvidenceStoreSelection.Usage);
         return 1;
     }
 
@@ -95,17 +97,27 @@ static async Task<int> RunPromotion(string[] args)
                 Kind = PromotionApprovalKind.HumanReview,
                 Reference = humanApprovalReference!
             };
-    var store = new JsonExecutionEvidenceStore(
-        evidenceRoot ?? JsonExecutionEvidenceStore.GetDefaultRootPath());
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var store))
+        return 1;
     var service = new CandidatePromotionService(new SystemProcessRunner(), store);
-    var result = await service.PromoteAsync(new CandidatePromotionRequest
+    CandidatePromotionResult result;
+    try
     {
-        EvidenceId = evidenceId,
-        RepositoryPath = repositoryPath,
-        ExpectedDiffHash = expectedDiffHash,
-        Actor = actor,
-        Approval = approval
-    }, CancellationToken.None);
+        result = await service.PromoteAsync(new CandidatePromotionRequest
+        {
+            EvidenceId = evidenceId,
+            RepositoryPath = repositoryPath,
+            ExpectedDiffHash = expectedDiffHash,
+            Actor = actor,
+            Approval = approval
+        }, CancellationToken.None);
+    }
+    catch (Exception)
+    {
+        Console.WriteLine(
+            "ERROR: evidence store operation failed; no backend fallback was attempted.");
+        return 1;
+    }
 
     PrintPromotionResult(result);
     return result.Succeeded ? 0 : 1;
@@ -117,7 +129,7 @@ static async Task<int> RunPatchExport(string[] args)
     string? expectedDiffHash = null;
     string? outputPath = null;
     string? actor = null;
-    string? evidenceRoot = null;
+    var evidenceStoreSelection = new EvidenceStoreSelection();
 
     for (var index = 0; index < args.Length; index++)
     {
@@ -129,8 +141,9 @@ static async Task<int> RunPatchExport(string[] args)
             outputPath = args[++index];
         else if (args[index] == "--actor" && index + 1 < args.Length)
             actor = args[++index];
-        else if (args[index] == "--evidence-root" && index + 1 < args.Length)
-            evidenceRoot = args[++index];
+        else if (evidenceStoreSelection.TryConsume(args, ref index))
+        {
+        }
     }
 
     if (!Guid.TryParse(evidenceIdValue, out var evidenceId) ||
@@ -140,20 +153,30 @@ static async Task<int> RunPatchExport(string[] args)
     {
         Console.WriteLine(
             "Usage: aecs export-patch --evidence <id> --diff-hash <sha256> " +
-            "--output <path> --actor <actor> [--evidence-root <path>]");
+            "--output <path> --actor <actor> " + EvidenceStoreSelection.Usage);
         return 1;
     }
 
-    var store = new JsonExecutionEvidenceStore(
-        evidenceRoot ?? JsonExecutionEvidenceStore.GetDefaultRootPath());
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var store))
+        return 1;
     var service = new CandidatePromotionService(new SystemProcessRunner(), store);
-    var result = await service.ExportPatchAsync(new CandidatePatchExportRequest
+    CandidatePromotionResult result;
+    try
     {
-        EvidenceId = evidenceId,
-        DestinationPath = outputPath,
-        ExpectedDiffHash = expectedDiffHash,
-        Actor = actor
-    }, CancellationToken.None);
+        result = await service.ExportPatchAsync(new CandidatePatchExportRequest
+        {
+            EvidenceId = evidenceId,
+            DestinationPath = outputPath,
+            ExpectedDiffHash = expectedDiffHash,
+            Actor = actor
+        }, CancellationToken.None);
+    }
+    catch (Exception)
+    {
+        Console.WriteLine(
+            "ERROR: evidence store operation failed; no backend fallback was attempted.");
+        return 1;
+    }
 
     PrintPromotionResult(result);
     return result.Succeeded ? 0 : 1;
@@ -167,6 +190,23 @@ static void PrintPromotionResult(CandidatePromotionResult result)
     Console.WriteLine($"Diff hash: {result.Evidence.DiffHash}");
     if (!string.IsNullOrWhiteSpace(result.OutputPath))
         Console.WriteLine($"Output: {result.OutputPath}");
+}
+
+static bool TryCreateEvidenceStore(
+    EvidenceStoreSelection selection,
+    out IExecutionEvidenceStore store)
+{
+    try
+    {
+        store = selection.Create();
+        return true;
+    }
+    catch (Exception ex)
+    {
+        store = null!;
+        Console.WriteLine($"ERROR: evidence store configuration failed: {ex.Message}");
+        return false;
+    }
 }
 
 static int RunEvidenceKey(string[] args)
@@ -212,6 +252,7 @@ static async Task<int> RunExperiment(string[] args)
     string? cloudKey = null;
     string? cloudModel = null;
     string? cloudUrl = null;
+    var evidenceStoreSelection = new EvidenceStoreSelection();
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -227,11 +268,17 @@ static async Task<int> RunExperiment(string[] args)
             cloudModel = args[++i];
         else if (args[i] == "--cloud-url" && i + 1 < args.Length)
             cloudUrl = args[++i];
+        else if (evidenceStoreSelection.TryConsume(args, ref i))
+        {
+        }
     }
 
     if (repoPath is null || tasksDir is null)
     {
-        Console.WriteLine("Usage: aecs experiment --repo <path> --tasks <dir> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
+        Console.WriteLine(
+            "Usage: aecs experiment --repo <path> --tasks <dir> [--mock] " +
+            "[--cloud-key <key>] [--cloud-model <model>] " +
+            EvidenceStoreSelection.Usage);
         return 1;
     }
 
@@ -247,9 +294,20 @@ static async Task<int> RunExperiment(string[] args)
     }
 
     IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+        return 1;
 
-    var runner = new ExperimentRunner(CreatePipeline(agent));
-    var report = await runner.RunAsync(repoPath, taskFiles, CancellationToken.None);
+    ExperimentReport report;
+    try
+    {
+        var runner = new ExperimentRunner(CreatePipeline(agent, evidenceStore));
+        report = await runner.RunAsync(repoPath, taskFiles, CancellationToken.None);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERROR: experiment failed closed: {ex.Message}");
+        return 1;
+    }
 
     Console.WriteLine(ExperimentReportFormatter.Format(report));
 
@@ -265,6 +323,7 @@ static async Task<int> RunSingle(string[] args)
     string? cloudKey = null;
     string? cloudModel = null;
     string? cloudUrl = null;
+    var evidenceStoreSelection = new EvidenceStoreSelection();
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -280,14 +339,25 @@ static async Task<int> RunSingle(string[] args)
             cloudModel = args[++i];
         else if (args[i] == "--cloud-url" && i + 1 < args.Length)
             cloudUrl = args[++i];
+        else if (evidenceStoreSelection.TryConsume(args, ref i))
+        {
+        }
     }
 
     if (repoPath is null || taskFile is null)
     {
-        Console.WriteLine("Usage: aecs run --repo <path> --task-file <path> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
-        Console.WriteLine("       aecs experiment --repo <path> --tasks <dir> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
-        Console.WriteLine("       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> --actor <actor> --confirm");
-        Console.WriteLine("       aecs export-patch --evidence <id> --diff-hash <sha256> --output <path> --actor <actor>");
+        Console.WriteLine(
+            "Usage: aecs run --repo <path> --task-file <path> [--mock] " +
+            "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs experiment --repo <path> --tasks <dir> [--mock] " +
+            "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
+            "--actor <actor> --confirm " + EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs export-patch --evidence <id> --diff-hash <sha256> " +
+            "--output <path> --actor <actor> " + EvidenceStoreSelection.Usage);
         Console.WriteLine("       aecs evidence-key rotate [--key-directory <path>]");
         return 1;
     }
@@ -305,11 +375,13 @@ static async Task<int> RunSingle(string[] args)
     }
 
     IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+        return 1;
 
     StagedExecutionResult execution;
     try
     {
-        execution = await CreatePipeline(agent).RunAsync(
+        execution = await CreatePipeline(agent, evidenceStore).RunAsync(
             repoPath,
             contract,
             CancellationToken.None);
@@ -385,11 +457,11 @@ static async Task<int> RunSingle(string[] args)
     return 0;
 }
 
-static StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
+static StagedExecutionPipeline CreatePipeline(
+    IAgentAdapter agent,
+    IExecutionEvidenceStore evidenceStore)
 {
     var processRunner = new SystemProcessRunner();
-    var evidenceStore = new JsonExecutionEvidenceStore(
-        JsonExecutionEvidenceStore.GetDefaultRootPath());
     return new StagedExecutionPipeline(agent, processRunner, evidenceStore);
 }
 
@@ -397,6 +469,7 @@ static async Task<int> RunJarvis(string[] args)
 {
     string? repoPath = null;
     bool useMock = false;
+    var evidenceStoreSelection = new EvidenceStoreSelection();
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -404,11 +477,17 @@ static async Task<int> RunJarvis(string[] args)
             repoPath = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
+        else if (evidenceStoreSelection.TryConsume(args, ref i))
+        {
+        }
     }
 
     repoPath ??= ".";
 
-    var repl = new JarvisRepl(repoPath, useMock);
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+        return 1;
+
+    var repl = new JarvisRepl(repoPath, useMock, evidenceStore);
     await repl.RunAsync(CancellationToken.None);
     return 0;
 }
