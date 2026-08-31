@@ -12,7 +12,7 @@ Promotion events also need to remain attributable after the initial execution. R
 
 ## Decision
 
-Persist JSON evidence in a versioned authenticated envelope:
+Persist evidence in a versioned authenticated envelope shared by JSON and PostgreSQL:
 
 - canonicalize the complete initial execution payload;
 - hash it with SHA-256 and sign it with RSA-PSS/SHA-256;
@@ -23,7 +23,7 @@ Persist JSON evidence in a versioned authenticated envelope:
 - keep private keys outside both the target repository and the evidence payload;
 - retain historical public keys across signing-key rotation.
 
-The JSON store verifies the envelope before returning `ExecutionEvidence`. Security-sensitive consumers therefore cannot accidentally opt out of verification while using `IExecutionEvidenceStore`.
+Each store verifies the envelope before returning `ExecutionEvidence`. Security-sensitive consumers therefore cannot accidentally opt out of verification while using `IExecutionEvidenceStore`.
 
 ## Consequences
 
@@ -32,7 +32,7 @@ The JSON store verifies the envelope before returning `ExecutionEvidence`. Secur
 - Existing unsigned JSON evidence is intentionally not eligible for promotion.
 - Operators must protect and back up the keyring and retain old public keys.
 - RSA-PSS signatures are intentionally nondeterministic; the canonical payload hash remains the stable content identifier.
-- Replacing the complete file with a previously valid version is not detectable without an external monotonic anchor. PostgreSQL or another append-only external store remains necessary for rollback resistance.
+- Replacing a complete JSON file, or restoring database and keyring together to a previous valid state, is not detectable without an independent monotonic anchor.
 
 ## Alternatives considered
 

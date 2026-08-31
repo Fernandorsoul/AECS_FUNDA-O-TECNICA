@@ -19,6 +19,7 @@ public class JarvisRepl
 {
     private readonly string _repoPath;
     private readonly bool _useMock;
+    private readonly IExecutionEvidenceStore _evidenceStore;
     private readonly TaskContractParser _parser = new();
     private readonly RiskClassifier _riskClassifier = new();
     private readonly ExecutionController _executionController = new();
@@ -27,10 +28,15 @@ public class JarvisRepl
     private readonly List<TaskExperimentResult> _history = [];
     private TaskExperimentResult? _lastResult;
 
-    public JarvisRepl(string repoPath, bool useMock)
+    public JarvisRepl(
+        string repoPath,
+        bool useMock,
+        IExecutionEvidenceStore? evidenceStore = null)
     {
         _repoPath = repoPath;
         _useMock = useMock;
+        _evidenceStore = evidenceStore ?? new JsonExecutionEvidenceStore(
+            JsonExecutionEvidenceStore.GetDefaultRootPath());
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -210,12 +216,10 @@ public class JarvisRepl
             _lastResult = report.Results.Last();
     }
 
-    private static StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
+    private StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
     {
         var processRunner = new SystemProcessRunner();
-        var evidenceStore = new JsonExecutionEvidenceStore(
-            JsonExecutionEvidenceStore.GetDefaultRootPath());
-        return new StagedExecutionPipeline(agent, processRunner, evidenceStore);
+        return new StagedExecutionPipeline(agent, processRunner, _evidenceStore);
     }
 
     private void ShowStatus()

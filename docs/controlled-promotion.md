@@ -34,13 +34,13 @@ Cada tentativa acrescenta um evento assinado e ligado à assinatura anterior, pr
 - commit-base, hash do diff e identificador do candidato;
 - repositório ou arquivo exportado, mensagem e duração da operação.
 
-A cabeça assinada da cadeia cobre a quantidade de eventos e a assinatura final, detectando edição, reordenação e remoção simples de cauda. A atualização do JSON usa arquivo temporário e substituição atômica. Se o registro de uma promoção já aplicada não puder ser persistido, o repositório é restaurado.
+A cabeça assinada da cadeia cobre a quantidade de eventos e a assinatura final, detectando edição, reordenação e remoção simples de cauda. JSON usa arquivo temporário e substituição atômica; PostgreSQL anexa o evento e atualiza a cabeça na mesma transação, sob lock de linha. Se o registro de uma promoção já aplicada não puder ser persistido, o repositório é restaurado.
 
 ## Exportação sem aplicação
 
 `export-patch` valida a identidade e a integridade do candidato, mas não exige que ele seja elegível para promoção. Isso permite revisão externa inclusive de um candidato rejeitado. O destino deve estar fora do repositório original, não pode sobrescrever um arquivo existente e só se torna visível depois de uma gravação temporária completa. Se a evidência da exportação falhar, o arquivo produzido é removido.
 
-Quando o store não está no caminho padrão, use `--evidence-root <path>` nos dois comandos.
+Use o mesmo `--evidence-store <json|postgres>` da execução original nos dois comandos. Para JSON fora do caminho padrão, acrescente `--evidence-root <path>`; PostgreSQL usa exclusivamente `AECS_POSTGRES_CONNECTION_STRING`.
 
 ## Recusas esperadas
 

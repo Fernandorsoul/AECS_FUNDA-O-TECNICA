@@ -28,7 +28,7 @@ flowchart TD
     J --> K{Gates determinísticos}
     K -->|falha| X
     K -->|passa| L[Verified ou HumanReviewRequired]
-    X --> M[Envelope JSON assinado fora do repositório]
+    X --> M[Evidência assinada no store selecionado]
     L --> M
     M -->|ação explícita posterior| N[Exportar patch ou promover]
 ```
@@ -46,7 +46,7 @@ O pipeline executa as seguintes etapas:
 9. Git adiciona o estado do worktree e deriva o `CandidateChangeSet`: arquivos adicionados, modificados ou removidos, diff binário e SHA-256. Alegações de arquivos feitas pelo agente não substituem essa leitura.
 10. Os verificadores avaliam os pré-requisitos da trust boundary e, quando habilitados, build, testes, regras semânticas e critérios de aceite.
 11. `DecisionEngine` exige exatamente um `Pass` para cada gate obrigatório. Resultado ausente, duplicado, `Skip`, `Fail` ou `Error` rejeita a execução.
-12. O worktree é removido, o checkout original é conferido novamente e `JsonExecutionEvidenceStore` persiste o resultado fora do repositório.
+12. O worktree é removido, o checkout original é conferido novamente e o `IExecutionEvidenceStore` selecionado (`json` ou `postgres`) persiste o resultado autenticado.
 
 ## Invariantes da trust boundary
 
@@ -133,9 +133,11 @@ Cancelamento, wall clock esgotado, orçamento excedido ou falha permanente do ag
 
 `Verified` prova somente o contrato e a matriz de evidências declarados. Não é uma prova formal de correção nem cobre requisitos ausentes do contrato.
 
-## Evidência JSON autenticada
+## Evidência autenticada
 
-A CLI usa `JsonExecutionEvidenceStore`. O diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windows e o equivalente retornado por `LocalApplicationData` nas demais plataformas; `AECS_EVIDENCE_PATH` pode sobrescrevê-lo. O keyring fica separadamente em `%LOCALAPPDATA%/AECS/keys` e pode ser configurado por `AECS_EVIDENCE_KEY_DIRECTORY`. O store recusa evidências ou chaves localizadas dentro do repositório-alvo.
+A CLI seleciona explicitamente `JsonExecutionEvidenceStore` ou `PostgreSqlExecutionEvidenceStore`. `AECS_EVIDENCE_STORE` e `--evidence-store` aceitam `json` e `postgres`; o padrão compatível é `json`. Selecionar PostgreSQL exige `AECS_POSTGRES_CONNECTION_STRING` e nunca aciona fallback para arquivo em caso de erro.
+
+No backend JSON, o diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windows e o equivalente retornado por `LocalApplicationData` nas demais plataformas; `AECS_EVIDENCE_PATH` pode sobrescrevê-lo. O keyring compartilhado pelos dois backends fica separadamente em `%LOCALAPPDATA%/AECS/keys` e pode ser configurado por `AECS_EVIDENCE_KEY_DIRECTORY`. O store recusa chaves — e, no caso JSON, evidências — localizadas dentro do repositório-alvo.
 
 Cada documento preserva:
 
@@ -149,7 +151,9 @@ Cada documento preserva:
 
 A criação inicial produz um envelope `aecs.execution-evidence/v1`: JSON canônico, SHA-256 e assinatura RSA-PSS/SHA-256 identificada pelo hash da chave pública. Promoções e exportações são eventos assinados ligados à assinatura anterior, e uma cabeça também assinada cobre a quantidade de eventos e a última assinatura. A leitura rejeita schema legado, campo desconhecido ou duplicado, hash divergente, chave não confiável e cadeia inválida antes de entregar `ExecutionEvidence` ao consumidor.
 
-A criação inicial não sobrescreve uma evidência existente. Acréscimos de promoção usam locks em processo e em arquivo, escrita temporária e substituição atômica. Chaves públicas anteriores permanecem confiáveis depois da rotação; JSON legado sem assinatura falha fechado. O backend PostgreSQL existe como fundação, mas não compõe o fluxo da CLI. Detalhes operacionais e limites estão em [Integridade das evidências](evidence-integrity.md).
+A criação JSON inicial não sobrescreve uma evidência existente. Acréscimos de promoção usam locks em processo e em arquivo, escrita temporária e substituição atômica. No PostgreSQL, o agregado completo ocupa JSONB autenticado com projeções indexadas, enquanto cada promoção é uma linha relacionada e assinada. Transações, lock de linha e índices únicos tornam save/retry idempotentes e serializam escritores de processos distintos sem perder eventos.
+
+Chaves públicas anteriores permanecem confiáveis depois da rotação; JSON legado sem assinatura falha fechado. Detalhes criptográficos estão em [Integridade das evidências](evidence-integrity.md), e setup, migrations e backup do banco em [Store PostgreSQL](postgresql-evidence-store.md).
 
 ## Promoção controlada
 
@@ -163,17 +167,17 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 | --- | --- |
 | `AECS.Domain` | contratos, candidatos, evidências, decisões e interfaces sem dependência de infraestrutura |
 | `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão e promoção |
-| `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, evidência JSON e fundações PostgreSQL/Docker |
+| `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, stores autenticados JSON/PostgreSQL e fundações Docker |
 | `AECS.Cli` | `run`, `experiment`, `jarvis`, `promote` e `export-patch` |
 | `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
-| `AECS.IntegrationTests` | Git real, concorrência, rollback e E2E reproduzível do AgronomoPlus |
+| `AECS.IntegrationTests` | Git e PostgreSQL reais, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 
-A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-monolith.md). `ControlKernel`, PostgreSQL e Docker mantêm componentes de fundação, mas o fluxo staged hoje conecta diretamente os enforcers/verificadores, o store JSON e processos no host.
+A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-monolith.md). O fluxo staged conecta diretamente enforcers/verificadores, o store configurado e processos no host; Docker ainda não envolve a execução do agente.
 
 ## Limitações atuais
 
 - o agente e os verificadores executam no host; o sandbox Docker ainda não envolve a CLI padrão;
-- a evidência JSON é assinada, mas o keyring local não é um HSM/KMS e ainda não existe âncora externa imutável capaz de detectar rollback integral para uma versão antiga válida;
+- ambos os stores assinam a evidência, mas o keyring local não é um HSM/KMS e PostgreSQL, sozinho, não é uma âncora externa imutável capaz de detectar rollback coordenado de banco e chaves;
 - o compilador de contexto indexa apenas C# e usa tokenização aproximada;
 - unit e integration tests compartilham um único comando/verificador;
 - `SecurityScan` não foi implementado;

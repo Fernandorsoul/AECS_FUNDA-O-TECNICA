@@ -1,6 +1,6 @@
 # Integridade e autenticidade das evidências
 
-O backend JSON persiste cada execução em um envelope `aecs.execution-evidence/v1`. O payload base é serializado de forma canônica, recebe SHA-256 e é assinado com RSA-PSS/SHA-256. `promote` e `export-patch` validam schema, hash, assinatura e isolamento do store antes de usar qualquer campo da evidência.
+Os backends JSON e PostgreSQL persistem cada execução em um envelope `aecs.execution-evidence/v1`. O payload base é serializado de forma canônica, recebe SHA-256 e é assinado com RSA-PSS/SHA-256. `promote` e `export-patch` validam schema, hash, assinatura e isolamento do store antes de usar qualquer campo da evidência.
 
 ## Envelope e cadeia de eventos
 
@@ -12,7 +12,7 @@ O documento separa três elementos:
 
 A serialização canônica ordena propriedades JSON por nome ordinal e preserva a ordem dos arrays. Propriedades duplicadas, campos desconhecidos, comentários, trailing commas e schemas não reconhecidos são recusados. Alterar em conjunto diff, `DiffHash`, decisão ou aprovação não restaura a validade: o hash e a assinatura cobrem o payload completo.
 
-O `chainSeal` detecta remoção simples do último evento. Uma cópia integral de um estado antigo ainda é um rollback criptograficamente válido; detectar esse ataque exige uma âncora monotônica ou store externo append-only, planejado na issue #19.
+O `chainSeal` detecta remoção simples do último evento. PostgreSQL persiste os eventos em linhas relacionadas e transacionais, melhorando concorrência, backup e recuperação. Uma restauração coordenada de banco e keyring para um estado antigo ainda é um rollback criptograficamente válido; detectar esse ataque exige uma âncora monotônica independente.
 
 ## Chaves
 
@@ -23,7 +23,7 @@ Por padrão:
 - chave ativa: `current-private.pem`;
 - chaves públicas confiáveis: `<key-id>.public.pem`.
 
-Em outros sistemas operacionais, `LocalApplicationData` define a raiz equivalente. `AECS_EVIDENCE_PATH` e `AECS_EVIDENCE_KEY_DIRECTORY` sobrescrevem os diretórios. Ambos precisam ficar fora do repositório-alvo. A chave privada nunca entra no envelope nem no repositório; em Unix, o arquivo criado pelo AECS recebe permissão somente para o usuário.
+Em outros sistemas operacionais, `LocalApplicationData` define a raiz equivalente. `AECS_EVIDENCE_PATH` sobrescreve o diretório JSON e `AECS_EVIDENCE_KEY_DIRECTORY` define o keyring usado pelos dois backends. Evidências JSON e chaves precisam ficar fora do repositório-alvo. A chave privada nunca entra no envelope, no banco nem no repositório; em Unix, o arquivo criado pelo AECS recebe permissão somente para o usuário.
 
 O `keyId` é o SHA-256 da chave pública no formato SubjectPublicKeyInfo. Uma chave ausente, desconhecida, fraca, inválida ou uma assinatura incompatível interrompe a operação de forma fechada.
 
@@ -50,4 +50,4 @@ JSONs sem envelope e assinatura são recusados. Não existe fallback silencioso 
 
 ## Limites da garantia
 
-A assinatura prova que o documento foi produzido por uma chave confiável e não foi modificado desde então. Ela não prova que o código está correto, não compensa um contrato incompleto e não protege contra um invasor que obtenha a chave privada. O keyring local também não substitui HSM, KMS, transparência externa ou armazenamento imutável.
+A assinatura prova que o documento foi produzido por uma chave confiável e não foi modificado desde então. Ela não prova que o código está correto, não compensa um contrato incompleto e não protege contra um invasor que obtenha a chave privada. O keyring local também não substitui HSM, KMS, transparência externa ou armazenamento imutável. Para operação e recuperação do banco, consulte [Store PostgreSQL de evidências](postgresql-evidence-store.md).
