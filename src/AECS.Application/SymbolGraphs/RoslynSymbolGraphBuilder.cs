@@ -724,6 +724,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         private readonly RepositorySnapshot _snapshot;
         private readonly CSharpSymbolGraphLimits _limits;
         private readonly CancellationToken _cancellationToken;
+        private readonly Dictionary<string, RepositorySnapshotFile> _snapshotFiles;
         private readonly Dictionary<string, CSharpSymbolGraphProject> _projects =
             new(StringComparer.Ordinal);
         private readonly Dictionary<string, CSharpSymbolGraphNode> _nodes =
@@ -746,6 +747,9 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
             _snapshot = snapshot;
             _limits = limits;
             _cancellationToken = cancellationToken;
+            _snapshotFiles = snapshot.Files.ToDictionary(
+                file => file.Path,
+                StringComparer.OrdinalIgnoreCase);
         }
 
         public void AddProjectNode(RepositorySnapshotProject project)
@@ -779,8 +783,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
 
         public void AddFileNode(string projectPath, string filePath)
         {
-            var snapshotFile = _snapshot.Files.First(file =>
-                file.Path.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+            var snapshotFile = _snapshotFiles[filePath];
             var projectNodeId = CSharpSymbolGraphFingerprint.StableNodeId(
                 $"project|{projectPath}");
             var node = new CSharpSymbolGraphNode
@@ -814,15 +817,10 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 return null;
             }
 
-            if (symbol.ContainingType is not null)
-                AddSymbolNode(symbol.ContainingType, currentProjectPath, maps);
-            else if (symbol.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace)
-                AddSymbolNode(containingNamespace, currentProjectPath, maps);
-
             var files = symbol.Locations.Where(location => location.IsInSource &&
                     !string.IsNullOrWhiteSpace(location.SourceTree?.FilePath))
                 .Select(location => RelativePath(_root, location.SourceTree!.FilePath))
-                .Select(path => SnapshotFilePath(_snapshot, path))
+                .Select(CanonicalFilePath)
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(path => path, StringComparer.Ordinal)
@@ -843,10 +841,22 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
             };
             var identity = $"{kind}|{projectPath}|{assemblyName}|" +
                 (string.IsNullOrWhiteSpace(documentationId) ? displayName : documentationId);
+            var nodeId = CSharpSymbolGraphFingerprint.StableNodeId(identity);
+            if (_nodes.TryGetValue(nodeId, out var existing) &&
+                (!existing.IsExternal || files.Count == 0))
+            {
+                return existing;
+            }
+
+            if (symbol.ContainingType is not null)
+                AddSymbolNode(symbol.ContainingType, currentProjectPath, maps);
+            else if (symbol.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace)
+                AddSymbolNode(containingNamespace, currentProjectPath, maps);
+
             var containingId = ContainingNodeId(symbol, projectPath, assemblyName);
             var node = new CSharpSymbolGraphNode
             {
-                Id = CSharpSymbolGraphFingerprint.StableNodeId(identity),
+                Id = nodeId,
                 Kind = kind,
                 Name = symbol.Name,
                 DisplayName = displayName,
@@ -889,9 +899,9 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         public bool IsIncludedDeclaration(ISymbol symbol) => symbol.Locations.Any(location =>
             location.IsInSource &&
             !string.IsNullOrWhiteSpace(location.SourceTree?.FilePath) &&
-            _snapshot.Files.Any(file => file.Path.Equals(
-                RelativePath(_root, location.SourceTree!.FilePath),
-                StringComparison.OrdinalIgnoreCase)));
+            _snapshotFiles.ContainsKey(RelativePath(
+                _root,
+                location.SourceTree!.FilePath)));
 
         public void AddEdge(string kind, string fromNodeId, string toNodeId)
         {
@@ -944,7 +954,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 : default;
             var filePath = diagnostic.Location.IsInSource &&
                 !string.IsNullOrWhiteSpace(span.Path)
-                ? SnapshotFilePath(_snapshot, RelativePath(_root, span.Path))
+                ? CanonicalFilePath(RelativePath(_root, span.Path))
                 : string.Empty;
             AddDiagnostic(new CSharpSymbolGraphDiagnostic
             {
@@ -1078,6 +1088,11 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 JsonSerializer.Serialize(value).Length * sizeof(char) + 128L);
             CheckLimits();
         }
+
+        private string CanonicalFilePath(string candidate) =>
+            _snapshotFiles.TryGetValue(candidate, out var file) && file.Language == "C#"
+                ? file.Path
+                : string.Empty;
 
         private static string ContainingNodeId(
             ISymbol symbol,
