@@ -206,8 +206,9 @@ public sealed class RoslynSymbolGraphTests
             return;
         }
 
-        graph.Projects.Should().HaveCount(6, string.Join("; ", graph.Diagnostics.Select(
-            diagnostic => diagnostic.Message)));
+        graph.Projects.Should().HaveCount(
+            snapshot.Projects.Count(project => project.Language == "C#"),
+            string.Join("; ", graph.Diagnostics.Select(diagnostic => diagnostic.Message)));
         graph.Nodes.Should().Contain(node =>
             node.Kind == "type" && node.DisplayName.EndsWith(
                 ".RepositorySnapshot",
