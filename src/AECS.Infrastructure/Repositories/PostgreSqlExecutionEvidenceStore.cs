@@ -106,6 +106,7 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
         var existing = await db.ExecutionEvidenceRecords
             .AsNoTracking()
             .Include(record => record.PromotionEvents)
+            .Include(record => record.ReplayEvents)
             .SingleOrDefaultAsync(record => record.Id == evidence.Id, cancellationToken);
         if (existing is not null)
         {
@@ -130,6 +131,7 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
         var record = await db.ExecutionEvidenceRecords
             .AsNoTracking()
             .Include(item => item.PromotionEvents)
+            .Include(item => item.ReplayEvents)
             .SingleOrDefaultAsync(item => item.Id == evidenceId, cancellationToken);
         if (record is null)
             return null;
@@ -163,6 +165,7 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
         var record = await db.ExecutionEvidenceRecords
             .AsNoTracking()
             .Include(item => item.PromotionEvents)
+            .Include(item => item.ReplayEvents)
             .SingleAsync(item => item.Id == evidenceId, cancellationToken);
         var envelope = ValidateStoredRecord(record, evidenceId);
 
@@ -197,7 +200,7 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
             """, cancellationToken);
         var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE execution_evidence
-            SET "PromotionCount" = {envelope.PromotionEvents.Count},
+            SET "EventCount" = {envelope.PromotionEvents.Count + envelope.ReplayEvents.Count},
                 "ChainSealJson" = CAST({Serialize(envelope.ChainSeal)} AS jsonb),
                 "UpdatedAt" = {envelope.ChainSeal.SignedAt}
             WHERE "Id" = {evidenceId}
@@ -206,6 +209,74 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
         {
             throw new DBConcurrencyException(
                 "PostgreSQL promotion append did not affect the expected aggregate rows.");
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task AppendReplayAsync(
+        Guid evidenceId,
+        ExecutionReplayEvidence replay,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(replay);
+        await EnsureInitializedAsync(cancellationToken);
+
+        await using var db = CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
+        await LockEvidenceIdentityAsync(db, transaction, evidenceId, cancellationToken);
+        if (!await LockEvidenceAsync(db, transaction, evidenceId, cancellationToken))
+            throw new FileNotFoundException("Execution evidence was not found in PostgreSQL.");
+
+        var record = await db.ExecutionEvidenceRecords
+            .AsNoTracking()
+            .Include(item => item.PromotionEvents)
+            .Include(item => item.ReplayEvents)
+            .SingleAsync(item => item.Id == evidenceId, cancellationToken);
+        var envelope = ValidateStoredRecord(record, evidenceId);
+
+        var existingEvent = envelope.ReplayEvents
+            .FirstOrDefault(item => item.Replay.Id == replay.Id);
+        if (existingEvent is not null)
+        {
+            if (!AuthenticatedEvidenceEnvelopeCodec.ReplayEquals(
+                    existingEvent.Replay,
+                    replay))
+            {
+                throw new InvalidOperationException(
+                    "Replay evidence ID is already associated with different content.");
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return;
+        }
+
+        _envelopes.Value.AppendReplay(envelope, replay);
+        var appended = envelope.ReplayEvents[^1];
+        var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO execution_evidence_replay_events
+                ("Id", "ExecutionEvidenceId", "Sequence", "PreviousSignature",
+                 "ReplayJson", "SealJson", "SignedAt")
+            VALUES
+                ({appended.Replay.Id}, {evidenceId}, {appended.Sequence},
+                 {appended.PreviousSignature},
+                 CAST({Serialize(appended.Replay)} AS jsonb),
+                 CAST({Serialize(appended.Seal)} AS jsonb),
+                 {appended.Seal.SignedAt})
+            """, cancellationToken);
+        var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE execution_evidence
+            SET "EventCount" = {envelope.PromotionEvents.Count + envelope.ReplayEvents.Count},
+                "ChainSealJson" = CAST({Serialize(envelope.ChainSeal)} AS jsonb),
+                "UpdatedAt" = {envelope.ChainSeal.SignedAt}
+            WHERE "Id" = {evidenceId}
+            """, cancellationToken);
+        if (inserted != 1 || updated != 1)
+        {
+            throw new DBConcurrencyException(
+                "PostgreSQL replay append did not affect the expected aggregate rows.");
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -258,6 +329,16 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
                         Promotion = Deserialize<CandidatePromotionEvidence>(item.PromotionJson),
                         Seal = Deserialize<EvidenceSeal>(item.SealJson)
                     })
+                    .ToList(),
+                ReplayEvents = record.ReplayEvents
+                    .OrderBy(item => item.Sequence)
+                    .Select(item => new SignedReplayEvent
+                    {
+                        Sequence = item.Sequence,
+                        PreviousSignature = item.PreviousSignature,
+                        Replay = Deserialize<ExecutionReplayEvidence>(item.ReplayJson),
+                        Seal = Deserialize<EvidenceSeal>(item.SealJson)
+                    })
                     .ToList()
             };
 
@@ -295,8 +376,8 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
             throw new EvidenceIntegrityException("PostgreSQL agent run projection is invalid.");
         if (record.CandidateId != evidence.CandidateChangeSet.Id)
             throw new EvidenceIntegrityException("PostgreSQL candidate projection is invalid.");
-        if (record.PromotionCount != envelope.PromotionEvents.Count)
-            throw new EvidenceIntegrityException("PostgreSQL promotion count projection is invalid.");
+        if (record.EventCount != envelope.PromotionEvents.Count + envelope.ReplayEvents.Count)
+            throw new EvidenceIntegrityException("PostgreSQL event count projection is invalid.");
 
         var contentHash = AuthenticatedEvidenceEnvelopeCodec.ContentHash(evidence);
         if (!FixedTimeEquals(record.EvidenceContentHash, contentHash))
@@ -314,6 +395,22 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
             {
                 throw new EvidenceIntegrityException(
                     "PostgreSQL promotion event projection is invalid.");
+            }
+        }
+
+
+        for (var index = 0; index < record.ReplayEvents.Count; index++)
+        {
+            var relational = record.ReplayEvents.OrderBy(item => item.Sequence).ElementAt(index);
+            var signed = envelope.ReplayEvents[index];
+            if (relational.Id != signed.Replay.Id ||
+                relational.ExecutionEvidenceId != record.Id ||
+                relational.Sequence != signed.Sequence ||
+                Math.Abs((relational.SignedAt - signed.Seal.SignedAt).Ticks) >=
+                    TimeSpan.TicksPerMicrosecond)
+            {
+                throw new EvidenceIntegrityException(
+                    "PostgreSQL replay event projection is invalid.");
             }
         }
     }
@@ -342,7 +439,7 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
             EvidenceJson = Serialize(envelope.Evidence),
             EvidenceSealJson = Serialize(envelope.Seal),
             ChainSealJson = Serialize(envelope.ChainSeal),
-            PromotionCount = 0,
+            EventCount = 0,
             CreatedAt = envelope.Seal.SignedAt,
             UpdatedAt = envelope.ChainSeal.SignedAt
         };

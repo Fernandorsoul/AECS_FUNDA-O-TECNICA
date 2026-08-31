@@ -95,15 +95,21 @@ public sealed class StagedExecutionPipeline
             baseline,
             budgetScope.Token))
         {
+            var baselineContext = new VerificationContext
+            {
+                TaskId = contract.Id,
+                AgentRunId = agentRunId,
+                RepoPath = preflightWorkspace.Path,
+                Contract = contract,
+                CommandEvidence = baselineCommands
+            };
+            await ToolVersionProbe.CaptureAsync(
+                _processRunner,
+                baselineContext,
+                budgetScope.Token,
+                () => budgetScope.RemainingDuration);
             baselineVerificationResults = await VerifyBaselineAsync(
-                new VerificationContext
-                {
-                    TaskId = contract.Id,
-                    AgentRunId = agentRunId,
-                    RepoPath = preflightWorkspace.Path,
-                    Contract = contract,
-                    CommandEvidence = baselineCommands
-                },
+                baselineContext,
                 budgetScope.Token,
                 () => budgetScope.RemainingDuration);
         }

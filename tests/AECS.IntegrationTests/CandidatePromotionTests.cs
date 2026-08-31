@@ -303,6 +303,14 @@ public sealed class CandidatePromotionTests
             Guid evidenceId,
             CandidatePromotionEvidence promotion,
             CancellationToken cancellationToken) => throw new IOException("simulated evidence failure");
+
+        public Task AppendReplayAsync(
+            Guid evidenceId,
+            ExecutionReplayEvidence replay,
+            CancellationToken cancellationToken) => _inner.AppendReplayAsync(
+                evidenceId,
+                replay,
+                cancellationToken);
     }
 
     private sealed class PromotionFixture : IAsyncDisposable

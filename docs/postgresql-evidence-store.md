@@ -1,14 +1,14 @@
 # Store PostgreSQL de evidências
 
-O backend PostgreSQL implementa `IExecutionEvidenceStore` sem alterar o envelope autenticado. A execução completa fica em JSONB canônico e assinado; cada exportação ou promoção ocupa uma linha append-only com sequência, assinatura anterior e selo próprio.
+O backend PostgreSQL implementa `IExecutionEvidenceStore` sem alterar o envelope autenticado. A execução completa fica em JSONB canônico e assinado; cada exportação, promoção ou replay ocupa uma linha append-only com sequência, assinatura anterior e selo próprio.
 
 ## Modelo e garantias
 
 `execution_evidence` mantém o agregado imutável, o selo inicial, a cabeça atual da cadeia e projeções indexadas de tarefa, `AgentRun` e candidato. O JSONB inclui contrato, tentativas, orçamento, baseline, comandos, contexto, critérios, verificações, decisão e transições.
 
-`execution_evidence_promotion_events` mantém os eventos posteriores com FK para a execução e índice único `(ExecutionEvidenceId, Sequence)`. Constraints também fixam o schema do envelope, sequência positiva e contador não negativo. O store valida as projeções relacionais e todas as assinaturas antes de devolver dados.
+`execution_evidence_promotion_events` mantém exportações e promoções; `execution_evidence_replay_events` mantém os resultados de replay ligados à mesma execução. Ambas têm FK, sequência positiva e índices únicos por agregado. `execution_evidence.EventCount` cobre a sequência global, e o store valida projeções relacionais e todas as assinaturas antes de devolver dados.
 
-`SaveAsync` é idempotente para o mesmo ID e conteúdo. `AppendPromotionAsync` bloqueia a linha da execução com `SELECT ... FOR UPDATE`, valida a cadeia dentro da transação e atualiza evento e cabeça de forma atômica. Repetir o mesmo ID de evento e payload não duplica a auditoria; reutilizar o ID com outro conteúdo falha.
+`SaveAsync` é idempotente para o mesmo ID e conteúdo. `AppendPromotionAsync` e `AppendReplayAsync` bloqueiam a linha da execução com `SELECT ... FOR UPDATE`, validam a cadeia dentro da transação e atualizam evento, contador e cabeça de forma atômica. Repetir o mesmo ID de evento e payload não duplica a auditoria; reutilizar o ID com outro conteúdo falha.
 
 ## Configuração local
 
@@ -38,7 +38,7 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- run `
   --evidence-store postgres
 ```
 
-Use `--evidence-store postgres` também em `experiment`, `jarvis`, `promote` e `export-patch`. Para o backend local, selecione `--evidence-store json`; `--evidence-root` só é válido nesse modo. `AECS_EVIDENCE_STORE` define o padrão da sessão e, na ausência dessa variável, a compatibilidade atual permanece `json`.
+Use `--evidence-store postgres` também em `experiment`, `jarvis`, `promote`, `export-patch` e `replay`. Para o backend local, selecione `--evidence-store json`; `--evidence-root` só é válido nesse modo. `AECS_EVIDENCE_STORE` define o padrão da sessão e, na ausência dessa variável, a compatibilidade atual permanece `json`.
 
 Selecionar PostgreSQL sem a variável de conexão, com configuração inválida ou com o servidor indisponível encerra a operação. O AECS nunca muda para JSON silenciosamente.
 

@@ -17,7 +17,9 @@ internal static class ExecutionCommandEvidenceFactory
         return new ExecutionCommandEvidence
         {
             FileName = request.FileName,
-            Arguments = request.Arguments.ToList(),
+            Arguments = request.Arguments
+                .Select(argument => NormalizeWorkspaceArgument(context.RepoPath, argument))
+                .ToList(),
             WorkingDirectory = relativeWorkingDirectory,
             ExitCode = result.ExitCode,
             TimedOut = result.TimedOut,
@@ -26,5 +28,29 @@ internal static class ExecutionCommandEvidenceFactory
             StandardOutput = result.StandardOutput,
             StandardError = result.StandardError
         };
+    }
+
+    private static string NormalizeWorkspaceArgument(string workspacePath, string argument)
+    {
+        if (!Path.IsPathRooted(argument))
+            return argument;
+
+        try
+        {
+            var root = Path.GetFullPath(workspacePath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var candidate = Path.GetFullPath(argument);
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!candidate.StartsWith(root + Path.DirectorySeparatorChar, comparison))
+                return argument;
+
+            return Path.GetRelativePath(root, candidate).Replace('\\', '/');
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return argument;
+        }
     }
 }

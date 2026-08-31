@@ -158,6 +158,62 @@ public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
         }
     }
 
+    public async Task AppendReplayAsync(
+        Guid evidenceId,
+        ExecutionReplayEvidence replay,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(replay);
+        var targetPath = GetEvidencePath(evidenceId);
+        var writeLock = WriteLocks.GetOrAdd(targetPath, _ => new SemaphoreSlim(1, 1));
+        await writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            await using var fileLock = await AcquireFileLockAsync(
+                targetPath + ".lock",
+                cancellationToken);
+            if (!File.Exists(targetPath))
+                throw new FileNotFoundException("Execution evidence not found.", targetPath);
+
+            var envelope = await ReadAndValidateEnvelopeAsync(
+                targetPath,
+                evidenceId,
+                cancellationToken);
+            var existingEvent = envelope.ReplayEvents
+                .FirstOrDefault(item => item.Replay.Id == replay.Id);
+            if (existingEvent is not null)
+            {
+                if (!AuthenticatedEvidenceEnvelopeCodec.ReplayEquals(
+                        existingEvent.Replay,
+                        replay))
+                {
+                    throw new InvalidOperationException(
+                        "Replay evidence ID is already associated with different content.");
+                }
+
+                return;
+            }
+
+            _envelopes.Value.AppendReplay(envelope, replay);
+
+            var temporaryPath = targetPath + $".{Guid.NewGuid():N}.tmp";
+            try
+            {
+                await WriteEnvelopeAsync(temporaryPath, envelope, cancellationToken);
+                File.Move(temporaryPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+        }
+        finally
+        {
+            writeLock.Release();
+        }
+    }
+
     private async Task<SignedExecutionEvidenceEnvelope> ReadAndValidateEnvelopeAsync(
         string path,
         Guid expectedEvidenceId,

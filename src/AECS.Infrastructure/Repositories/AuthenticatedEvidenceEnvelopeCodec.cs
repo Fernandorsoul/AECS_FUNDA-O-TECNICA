@@ -10,6 +10,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
 {
     private const string ExecutionPayloadKind = "execution-evidence";
     private const string PromotionPayloadKind = "candidate-promotion";
+    private const string ReplayPayloadKind = "execution-replay";
     private const string ChainPayloadKind = "evidence-chain-head";
 
     private readonly IEvidenceSignatureService _signatures;
@@ -57,15 +58,38 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         Validate(envelope, envelope.Evidence.Id);
         ValidatePromotion(envelope, promotion);
 
-        var sequence = envelope.PromotionEvents.Count + 1;
-        var previousSignature = envelope.PromotionEvents.Count == 0
+        var chain = GetChainEvents(envelope);
+        var sequence = chain.Count + 1;
+        var previousSignature = chain.Count == 0
             ? envelope.Seal.Signature
-            : envelope.PromotionEvents[^1].Seal.Signature;
+            : chain[^1].Seal.Signature;
         envelope.PromotionEvents.Add(CreatePromotionEvent(
             envelope.Evidence.Id,
             sequence,
             previousSignature,
             promotion));
+        envelope.ChainSeal = CreateChainSeal(envelope);
+    }
+
+    public void AppendReplay(
+        SignedExecutionEvidenceEnvelope envelope,
+        ExecutionReplayEvidence replay)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        ArgumentNullException.ThrowIfNull(replay);
+        Validate(envelope, envelope.Evidence.Id);
+        ValidateReplay(envelope, replay);
+
+        var chain = GetChainEvents(envelope);
+        var sequence = chain.Count + 1;
+        var previousSignature = chain.Count == 0
+            ? envelope.Seal.Signature
+            : chain[^1].Seal.Signature;
+        envelope.ReplayEvents.Add(CreateReplayEvent(
+            envelope.Evidence.Id,
+            sequence,
+            previousSignature,
+            replay));
         envelope.ChainSeal = CreateChainSeal(envelope);
     }
 
@@ -101,35 +125,55 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             "execution evidence");
 
         var previousSignature = envelope.Seal.Signature;
-        for (var index = 0; index < envelope.PromotionEvents.Count; index++)
+        var chain = GetChainEvents(envelope);
+        for (var index = 0; index < chain.Count; index++)
         {
-            var promotionEvent = envelope.PromotionEvents[index];
+            var chainEvent = chain[index];
             var expectedSequence = index + 1;
-            if (promotionEvent.Sequence != expectedSequence)
+            if (chainEvent.Sequence != expectedSequence)
             {
                 throw new EvidenceIntegrityException(
-                    $"Promotion event sequence {promotionEvent.Sequence} is invalid; expected {expectedSequence}.");
+                    $"Evidence event sequence {chainEvent.Sequence} is invalid; expected {expectedSequence}.");
             }
 
-            if (!FixedTimeTextEquals(promotionEvent.PreviousSignature, previousSignature))
+            if (!FixedTimeTextEquals(chainEvent.PreviousSignature, previousSignature))
             {
                 throw new EvidenceIntegrityException(
-                    $"Promotion event {expectedSequence} is disconnected from the signature chain.");
+                    $"Evidence event {expectedSequence} is disconnected from the signature chain.");
             }
 
-            ValidatePromotion(envelope, promotionEvent.Promotion, validateDuplicate: false);
-            VerifySeal(
-                promotionEvent.Seal,
-                CreatePromotionPayload(
-                    envelope.Evidence.Id,
-                    promotionEvent.Sequence,
-                    promotionEvent.PreviousSignature,
-                    promotionEvent.Promotion,
-                    promotionEvent.Seal.Algorithm,
-                    promotionEvent.Seal.KeyId,
-                    promotionEvent.Seal.SignedAt),
-                $"promotion event {expectedSequence}");
-            previousSignature = promotionEvent.Seal.Signature;
+            if (chainEvent.Promotion is not null)
+            {
+                ValidatePromotion(envelope, chainEvent.Promotion, validateDuplicate: false);
+                VerifySeal(
+                    chainEvent.Seal,
+                    CreatePromotionPayload(
+                        envelope.Evidence.Id,
+                        chainEvent.Sequence,
+                        chainEvent.PreviousSignature,
+                        chainEvent.Promotion,
+                        chainEvent.Seal.Algorithm,
+                        chainEvent.Seal.KeyId,
+                        chainEvent.Seal.SignedAt),
+                    $"promotion event {expectedSequence}");
+            }
+            else
+            {
+                ValidateReplay(envelope, chainEvent.Replay!, validateDuplicate: false);
+                VerifySeal(
+                    chainEvent.Seal,
+                    CreateReplayPayload(
+                        envelope.Evidence.Id,
+                        chainEvent.Sequence,
+                        chainEvent.PreviousSignature,
+                        chainEvent.Replay!,
+                        chainEvent.Seal.Algorithm,
+                        chainEvent.Seal.KeyId,
+                        chainEvent.Seal.SignedAt),
+                    $"replay event {expectedSequence}");
+            }
+
+            previousSignature = chainEvent.Seal.Signature;
         }
 
         var duplicatePromotion = envelope.PromotionEvents
@@ -141,11 +185,20 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 $"Promotion event ID '{duplicatePromotion.Key}' occurs more than once.");
         }
 
+        var duplicateReplay = envelope.ReplayEvents
+            .GroupBy(item => item.Replay.Id)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateReplay is not null)
+        {
+            throw new EvidenceIntegrityException(
+                $"Replay event ID '{duplicateReplay.Key}' occurs more than once.");
+        }
+
         VerifySeal(
             envelope.ChainSeal,
             CreateChainPayload(
                 envelope.Evidence.Id,
-                envelope.PromotionEvents.Count,
+                chain.Count,
                 envelope.Seal.Signature,
                 previousSignature,
                 envelope.ChainSeal.Algorithm,
@@ -165,6 +218,21 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
     public static bool PromotionEquals(
         CandidatePromotionEvidence left,
         CandidatePromotionEvidence right)
+    {
+        var leftPayload = CanonicalJson.Serialize(
+            left,
+            EvidenceEnvelopeFormat.SerializerOptions);
+        var rightPayload = CanonicalJson.Serialize(
+            right,
+            EvidenceEnvelopeFormat.SerializerOptions);
+        return CryptographicOperations.FixedTimeEquals(
+            SHA256.HashData(leftPayload),
+            SHA256.HashData(rightPayload));
+    }
+
+    public static bool ReplayEquals(
+        ExecutionReplayEvidence left,
+        ExecutionReplayEvidence right)
     {
         var leftPayload = CanonicalJson.Serialize(
             left,
@@ -201,6 +269,30 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         };
     }
 
+    private SignedReplayEvent CreateReplayEvent(
+        Guid executionEvidenceId,
+        int sequence,
+        string previousSignature,
+        ExecutionReplayEvidence replay)
+    {
+        var signedAt = DateTime.UtcNow;
+        var seal = CreateSeal(CreateReplayPayload(
+            executionEvidenceId,
+            sequence,
+            previousSignature,
+            replay,
+            _signatures.Algorithm,
+            _signatures.KeyId,
+            signedAt), signedAt);
+        return new SignedReplayEvent
+        {
+            Sequence = sequence,
+            PreviousSignature = previousSignature,
+            Replay = replay,
+            Seal = seal
+        };
+    }
+
     private EvidenceSeal CreateSeal(object payload, DateTime signedAt)
     {
         var canonicalPayload = CanonicalJson.Serialize(
@@ -219,12 +311,13 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
     private EvidenceSeal CreateChainSeal(SignedExecutionEvidenceEnvelope envelope)
     {
         var signedAt = DateTime.UtcNow;
-        var lastSignature = envelope.PromotionEvents.Count == 0
+        var chain = GetChainEvents(envelope);
+        var lastSignature = chain.Count == 0
             ? envelope.Seal.Signature
-            : envelope.PromotionEvents[^1].Seal.Signature;
+            : chain[^1].Seal.Signature;
         return CreateSeal(CreateChainPayload(
             envelope.Evidence.Id,
-            envelope.PromotionEvents.Count,
+            chain.Count,
             envelope.Seal.Signature,
             lastSignature,
             _signatures.Algorithm,
@@ -238,10 +331,16 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             envelope.Seal is null ||
             envelope.ChainSeal is null ||
             envelope.PromotionEvents is null ||
+            envelope.ReplayEvents is null ||
             envelope.PromotionEvents.Any(item =>
-                item is null || item.Promotion is null || item.Seal is null))
+                item is null || item.Promotion is null || item.Seal is null) ||
+            envelope.ReplayEvents.Any(item =>
+                item is null || item.Replay is null || item.Seal is null) ||
+            !IsStrictlyIncreasing(envelope.PromotionEvents.Select(item => item.Sequence)) ||
+            !IsStrictlyIncreasing(envelope.ReplayEvents.Select(item => item.Sequence)))
         {
-            throw new EvidenceIntegrityException("Evidence envelope is incomplete.");
+            throw new EvidenceIntegrityException(
+                "Evidence envelope is incomplete or its event sequence is invalid.");
         }
 
         ValidateEvidenceStructure(envelope.Evidence);
@@ -347,6 +446,73 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new InvalidOperationException("Promotion evidence has already been recorded.");
     }
 
+    private static void ValidateReplay(
+        SignedExecutionEvidenceEnvelope envelope,
+        ExecutionReplayEvidence replay,
+        bool validateDuplicate = true)
+    {
+        if (replay.Id == Guid.Empty)
+            throw new EvidenceIntegrityException("Replay evidence must have a non-empty ID.");
+        if (replay.ExecutionEvidenceId != envelope.Evidence.Id)
+            throw new EvidenceIntegrityException("Replay event references a different evidence ID.");
+        if (replay.CandidateId != envelope.Evidence.CandidateChangeSet.Id)
+            throw new EvidenceIntegrityException("Replay event references a different candidate ID.");
+        if (!string.Equals(
+                replay.BaselineCommit,
+                envelope.Evidence.Baseline.Commit,
+                StringComparison.Ordinal))
+        {
+            throw new EvidenceIntegrityException(
+                "Replay event references a different baseline commit.");
+        }
+
+        if (!FixedTimeTextEquals(
+                replay.ExpectedDiffHash,
+                envelope.Evidence.CandidateChangeSet.DiffHash))
+        {
+            throw new EvidenceIntegrityException(
+                "Replay event references a different expected diff hash.");
+        }
+
+        if (replay.Tools is null ||
+            replay.Commands is null ||
+            replay.Gates is null ||
+            replay.AcceptanceCriteria is null ||
+            string.IsNullOrWhiteSpace(replay.RepositoryPath) ||
+            string.IsNullOrWhiteSpace(replay.RequestedRepositoryPath) ||
+            replay.StartedAt == default ||
+            replay.FinishedAt == default ||
+            replay.FinishedAt < replay.StartedAt)
+        {
+            throw new EvidenceIntegrityException("Replay event is incomplete.");
+        }
+
+        var replayRepository = Path.GetFullPath(replay.RepositoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var evidenceRepository = Path.GetFullPath(envelope.Evidence.Baseline.RepositoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(
+                replayRepository,
+                evidenceRepository,
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new EvidenceIntegrityException(
+                "Replay event references a different repository path.");
+        }
+
+        if (replay.Outcome == ExecutionReplayOutcome.Reproduced &&
+            !FixedTimeTextEquals(replay.ActualDiffHash, replay.ExpectedDiffHash))
+        {
+            throw new EvidenceIntegrityException(
+                "Successful replay event does not reproduce the expected diff hash.");
+        }
+
+        if (validateDuplicate && envelope.ReplayEvents.Any(item => item.Replay.Id == replay.Id))
+            throw new InvalidOperationException("Replay evidence has already been recorded.");
+    }
+
     private static object CreateExecutionPayload(
         ExecutionEvidence evidence,
         string algorithm,
@@ -379,6 +545,26 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             Sequence = sequence,
             PreviousSignature = previousSignature,
             Promotion = promotion
+        };
+
+    private static object CreateReplayPayload(
+        Guid executionEvidenceId,
+        int sequence,
+        string previousSignature,
+        ExecutionReplayEvidence replay,
+        string algorithm,
+        string keyId,
+        DateTime signedAt) => new
+        {
+            SchemaVersion = EvidenceEnvelopeFormat.CurrentSchemaVersion,
+            Kind = ReplayPayloadKind,
+            Algorithm = algorithm,
+            KeyId = keyId,
+            SignedAt = signedAt,
+            ExecutionEvidenceId = executionEvidenceId,
+            Sequence = sequence,
+            PreviousSignature = previousSignature,
+            Replay = replay
         };
 
     private static object CreateChainPayload(
@@ -414,4 +600,41 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         return leftBytes.Length == rightBytes.Length &&
             CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
+
+    private static bool IsStrictlyIncreasing(IEnumerable<int> values)
+    {
+        var previous = 0;
+        foreach (var value in values)
+        {
+            if (value <= previous)
+                return false;
+            previous = value;
+        }
+
+        return true;
+    }
+
+    private static List<ChainEvent> GetChainEvents(SignedExecutionEvidenceEnvelope envelope) =>
+        envelope.PromotionEvents
+            .Select(item => new ChainEvent(
+                item.Sequence,
+                item.PreviousSignature,
+                item.Seal,
+                item.Promotion,
+                null))
+            .Concat(envelope.ReplayEvents.Select(item => new ChainEvent(
+                item.Sequence,
+                item.PreviousSignature,
+                item.Seal,
+                null,
+                item.Replay)))
+            .OrderBy(item => item.Sequence)
+            .ToList();
+
+    private sealed record ChainEvent(
+        int Sequence,
+        string PreviousSignature,
+        EvidenceSeal Seal,
+        CandidatePromotionEvidence? Promotion,
+        ExecutionReplayEvidence? Replay);
 }

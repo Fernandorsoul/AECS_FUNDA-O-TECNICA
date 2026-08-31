@@ -197,6 +197,40 @@ public sealed class AuthenticatedEvidenceStoreTests
     }
 
     [Fact]
+    public async Task ReplayAndPromotionEvents_ShareOneAuthenticatedOrderedChain()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var evidence = fixture.CreateEvidence();
+        await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+        await fixture.Store.AppendPromotionAsync(
+            evidence.Id,
+            fixture.CreatePromotion(evidence, "first"),
+            CancellationToken.None);
+        await fixture.Store.AppendReplayAsync(
+            evidence.Id,
+            fixture.CreateReplay(evidence),
+            CancellationToken.None);
+        await fixture.Store.AppendPromotionAsync(
+            evidence.Id,
+            fixture.CreatePromotion(evidence, "second"),
+            CancellationToken.None);
+
+        var envelope = await fixture.ReadEnvelopeAsync(evidence.Id);
+        envelope["promotionEvents"]![0]!["sequence"]!.GetValue<int>().Should().Be(1);
+        envelope["replayEvents"]![0]!["sequence"]!.GetValue<int>().Should().Be(2);
+        envelope["promotionEvents"]![1]!["sequence"]!.GetValue<int>().Should().Be(3);
+        (await fixture.Store.LoadAsync(evidence.Id, CancellationToken.None))!
+            .Promotions.Should().HaveCount(2);
+
+        await fixture.MutateEnvelopeAsync(
+            evidence.Id,
+            root => root["replayEvents"]![0]!["replay"]!["message"] = "forged replay");
+        var load = () => fixture.Store.LoadAsync(evidence.Id, CancellationToken.None);
+        await load.Should().ThrowAsync<EvidenceIntegrityException>()
+            .WithMessage("*replay event 2 payload hash is invalid*");
+    }
+
+    [Fact]
     public async Task KeyRotation_PreservesOldVerificationAndSignsNewEventsWithNewKey()
     {
         await using var fixture = AuthenticatedEvidenceFixture.Create();
@@ -355,6 +389,21 @@ public sealed class AuthenticatedEvidenceStoreTests
                 OutputPath = Path.Combine(RootPath, $"{actor}.patch"),
                 Message = "test event"
             };
+
+        public ExecutionReplayEvidence CreateReplay(ExecutionEvidence evidence) => new()
+        {
+            ExecutionEvidenceId = evidence.Id,
+            CandidateId = evidence.CandidateChangeSet.Id,
+            Outcome = ExecutionReplayOutcome.Reproduced,
+            RepositoryPath = evidence.Baseline.RepositoryPath,
+            RequestedRepositoryPath = evidence.Baseline.RepositoryPath,
+            BaselineCommit = evidence.Baseline.Commit,
+            ExpectedDiffHash = evidence.CandidateChangeSet.DiffHash,
+            ActualDiffHash = evidence.CandidateChangeSet.DiffHash,
+            Message = "candidate reproduced",
+            StartedAt = DateTime.UtcNow.AddSeconds(-1),
+            FinishedAt = DateTime.UtcNow
+        };
 
         public string GetEvidencePath(Guid evidenceId) =>
             Path.Combine(EvidencePath, $"{evidenceId:N}.json");

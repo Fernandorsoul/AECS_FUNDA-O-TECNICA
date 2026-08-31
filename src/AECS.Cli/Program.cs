@@ -5,6 +5,7 @@ using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
 using AECS.Application.Parsing;
 using AECS.Application.Promotion;
+using AECS.Application.Replay;
 using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Cli;
@@ -33,8 +34,73 @@ else if (command == "export-patch")
     return await RunPatchExport(args[1..]);
 else if (command == "evidence-key")
     return RunEvidenceKey(args[1..]);
+else if (command == "replay")
+    return await RunReplay(args[1..]);
 else
     return await RunSingle(args);
+
+static async Task<int> RunReplay(string[] args)
+{
+    string? repositoryPath = null;
+    string? evidenceIdValue = null;
+    var evidenceStoreSelection = new EvidenceStoreSelection();
+
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--repo" && index + 1 < args.Length)
+            repositoryPath = args[++index];
+        else if (args[index] == "--evidence" && index + 1 < args.Length)
+            evidenceIdValue = args[++index];
+        else if (evidenceStoreSelection.TryConsume(args, ref index))
+        {
+        }
+        else
+        {
+            Console.WriteLine(
+                "Usage: aecs replay --repo <path> --evidence <id> " +
+                EvidenceStoreSelection.Usage);
+            return 1;
+        }
+    }
+
+    if (repositoryPath is null || !Guid.TryParse(evidenceIdValue, out var evidenceId))
+    {
+        Console.WriteLine(
+            "Usage: aecs replay --repo <path> --evidence <id> " +
+            EvidenceStoreSelection.Usage);
+        return 1;
+    }
+
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var store))
+        return 1;
+
+    try
+    {
+        var result = await new ExecutionReplayService(
+            new SystemProcessRunner(),
+            store).ReplayAsync(new ExecutionReplayRequest
+            {
+                EvidenceId = evidenceId,
+                RepositoryPath = repositoryPath
+            }, CancellationToken.None);
+        Console.WriteLine("AECS EVIDENCE REPLAY");
+        Console.WriteLine($"Outcome: {result.Outcome}");
+        Console.WriteLine($"Message: {result.Message}");
+        Console.WriteLine($"Replay evidence: {result.Evidence.Id:N}");
+        Console.WriteLine($"Expected diff: {result.Evidence.ExpectedDiffHash}");
+        Console.WriteLine($"Actual diff: {result.Evidence.ActualDiffHash}");
+        foreach (var tool in result.Evidence.Tools)
+            Console.WriteLine($"Tool {tool.Tool}: {tool.Status}");
+        foreach (var gate in result.Evidence.Gates)
+            Console.WriteLine($"Gate {gate.Gate}: {gate.Status}");
+        return result.Succeeded ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERROR: evidence replay failed closed: {ex.Message}");
+        return 1;
+    }
+}
 
 static async Task<int> RunPromotion(string[] args)
 {
@@ -358,6 +424,9 @@ static async Task<int> RunSingle(string[] args)
         Console.WriteLine(
             "       aecs export-patch --evidence <id> --diff-hash <sha256> " +
             "--output <path> --actor <actor> " + EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs replay --repo <path> --evidence <id> " +
+            EvidenceStoreSelection.Usage);
         Console.WriteLine("       aecs evidence-key rotate [--key-directory <path>]");
         return 1;
     }

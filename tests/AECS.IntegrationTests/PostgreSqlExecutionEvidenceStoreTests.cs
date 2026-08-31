@@ -106,6 +106,28 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
             .WithMessage("*content hash is invalid*");
     }
 
+    [PostgreSqlFact]
+    public async Task ReplayAppend_IsLinkedAuthenticatedAndTamperEvident()
+    {
+        await using var fixture = PostgreSqlEvidenceFixture.Create();
+        var evidence = fixture.CreateEvidence();
+        await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+        var replay = fixture.CreateReplay(evidence);
+
+        await fixture.Store.AppendReplayAsync(
+            evidence.Id,
+            replay,
+            CancellationToken.None);
+
+        (await fixture.ReplayCountAsync(evidence.Id)).Should().Be(1);
+        (await fixture.Store.LoadAsync(evidence.Id, CancellationToken.None)).Should().NotBeNull();
+
+        await fixture.TamperReplayOutcomeAsync(replay.Id);
+        var load = () => fixture.Store.LoadAsync(evidence.Id, CancellationToken.None);
+        await load.Should().ThrowAsync<EvidenceIntegrityException>()
+            .WithMessage("*replay event 1 payload hash is invalid*");
+    }
+
     private sealed class PostgreSqlEvidenceFixture : IAsyncDisposable
     {
         private const string TemporaryRootPrefix = "aecs-postgresql-evidence-tests-";
@@ -291,6 +313,46 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
                 OutputPath = Path.Combine(RootPath, $"{actor}.patch"),
                 Message = "concurrent PostgreSQL event"
             };
+
+        public ExecutionReplayEvidence CreateReplay(ExecutionEvidence evidence) => new()
+        {
+            ExecutionEvidenceId = evidence.Id,
+            CandidateId = evidence.CandidateChangeSet.Id,
+            Outcome = ExecutionReplayOutcome.Reproduced,
+            RepositoryPath = evidence.Baseline.RepositoryPath,
+            RequestedRepositoryPath = evidence.Baseline.RepositoryPath,
+            BaselineCommit = evidence.Baseline.Commit,
+            ExpectedDiffHash = evidence.CandidateChangeSet.DiffHash,
+            ActualDiffHash = evidence.CandidateChangeSet.DiffHash,
+            Message = "PostgreSQL replay reproduced the candidate",
+            StartedAt = DateTime.UtcNow.AddSeconds(-1),
+            FinishedAt = DateTime.UtcNow
+        };
+
+        public async Task<int> ReplayCountAsync(Guid evidenceId)
+        {
+            await using var connection = new NpgsqlConnection(ConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT COUNT(*) FROM execution_evidence_replay_events " +
+                "WHERE \"ExecutionEvidenceId\" = @evidenceId";
+            command.Parameters.AddWithValue("evidenceId", evidenceId);
+            return Convert.ToInt32(await command.ExecuteScalarAsync());
+        }
+
+        public async Task TamperReplayOutcomeAsync(Guid replayId)
+        {
+            await using var connection = new NpgsqlConnection(ConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "UPDATE execution_evidence_replay_events " +
+                "SET \"ReplayJson\" = jsonb_set(\"ReplayJson\", '{outcome}', '2'::jsonb) " +
+                "WHERE \"Id\" = @replayId";
+            command.Parameters.AddWithValue("replayId", replayId);
+            await command.ExecuteNonQueryAsync();
+        }
 
         public async Task TamperDecisionAsync(Guid evidenceId)
         {
