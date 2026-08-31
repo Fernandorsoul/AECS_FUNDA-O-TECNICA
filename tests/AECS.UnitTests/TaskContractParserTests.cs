@@ -171,6 +171,9 @@ public class TaskContractParserTests
         result.Budget.MaxCostUsd.Should().Be(0.20m);
         result.Verification.Build.Should().BeTrue();
         result.Approval.Production.Should().Be(ApprovalLevel.None);
+        result.Execution.Runtime.Should().Be(RepositoryExecutionProfile.DockerRuntime);
+        result.Execution.Sandbox.Should().NotBeNull();
+        result.Execution.Sandbox!.Image.Should().Contain("@sha256:");
     }
 
     [Fact]
@@ -205,6 +208,7 @@ public class TaskContractParserTests
 
         result.Execution.WorkingDirectory.Should().Be("Backend");
         result.Execution.Target.Should().Be("AgronomoPlus.sln");
+        result.Execution.EffectiveRuntime.Should().Be(RepositoryExecutionProfile.DockerRuntime);
     }
 
     [Fact]
@@ -220,6 +224,50 @@ public class TaskContractParserTests
 
         result.Execution.WorkingDirectory.Should().Be(".");
         result.Execution.Target.Should().BeEmpty();
+        result.Execution.Runtime.Should().Be(RepositoryExecutionProfile.DockerRuntime);
+    }
+
+    [Fact]
+    public void Parse_ExplicitHostRuntime_MarksDevelopmentModeWithoutSandbox()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-HOST
+              objective: Local development
+              execution:
+                runtime: host
+                target: Fixture.csproj
+            """);
+
+        result.Execution.Runtime.Should().Be(RepositoryExecutionProfile.HostRuntime);
+        result.Execution.Sandbox.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("image", "mcr.microsoft.com/dotnet/sdk:9.0", "pinned by sha256")]
+    [InlineData("cpu_limit", "0", "cpu_limit")]
+    [InlineData("memory_limit", "0m", "memory_limit")]
+    [InlineData("process_limit", "0", "process_limit")]
+    [InlineData("wall_clock_seconds", "0", "wall_clock_seconds")]
+    public void Parse_InvalidDockerSandbox_FailsClosed(
+        string field,
+        string value,
+        string expectedMessage)
+    {
+        var yaml = $"""
+            task:
+              id: TASK-BAD-SANDBOX
+              objective: Reject weak isolation
+              execution:
+                target: Fixture.csproj
+                sandbox:
+                  {field}: {value}
+            """;
+
+        var action = () => _parser.Parse(yaml);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*{expectedMessage}*");
     }
 
     [Fact]

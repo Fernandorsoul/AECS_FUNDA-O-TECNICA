@@ -20,16 +20,20 @@ public sealed class ExecutionReplayService
     private readonly IProcessRunner _processRunner;
     private readonly IExecutionEvidenceStore _evidenceStore;
     private readonly GitWorkspaceManager _workspaceManager;
+    private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
 
     public ExecutionReplayService(
         IProcessRunner processRunner,
-        IExecutionEvidenceStore evidenceStore)
+        IExecutionEvidenceStore evidenceStore,
+        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(evidenceStore);
         _processRunner = processRunner;
         _evidenceStore = evidenceStore;
         _workspaceManager = new GitWorkspaceManager(processRunner);
+        _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
+            new DefaultStagedProcessRunnerFactory(processRunner);
     }
 
     public async Task<ExecutionReplayResult> ReplayAsync(
@@ -158,6 +162,10 @@ public sealed class ExecutionReplayService
         await using var workspace = await _workspaceManager.CreateWorkspaceAsync(
             persistedBaseline,
             cancellationToken);
+        var stagedProcessRunner = await _stagedProcessRunnerFactory.CreateAsync(
+            workspace.Path,
+            ReplayExecutionProfile(original),
+            cancellationToken);
 
         var baselineCommands = new List<ExecutionCommandEvidence>();
         var baselineContext = CreateContext(
@@ -166,10 +174,13 @@ public sealed class ExecutionReplayService
             original.CandidateChangeSet,
             baselineCommands);
         await ToolVersionProbe.CaptureAsync(
-            _processRunner,
+            stagedProcessRunner,
             baselineContext,
             cancellationToken);
-        var baselineResults = await VerifyBaselineAsync(baselineContext, cancellationToken);
+        var baselineResults = await VerifyBaselineAsync(
+            stagedProcessRunner,
+            baselineContext,
+            cancellationToken);
 
         var patchApplied = await ApplyAuthenticatedDiffAsync(
             workspace.Path,
@@ -211,6 +222,7 @@ public sealed class ExecutionReplayService
             candidateCommands);
         var acceptanceCriteria = new List<AcceptanceCriterionResult>();
         var candidateResults = await VerifyCandidateAsync(
+            stagedProcessRunner,
             candidateContext,
             acceptanceCriteria,
             cancellationToken);
@@ -297,7 +309,29 @@ public sealed class ExecutionReplayService
             CommandEvidence = commands
         };
 
+    private static RepositoryExecutionProfile ReplayExecutionProfile(
+        ExecutionEvidence original)
+    {
+        var profile = original.TaskContract.Execution;
+        if (profile.Runtime is not null ||
+            original.BaselineCommands.Concat(original.CandidateCommands)
+                .Any(command => command.Environment is not null))
+        {
+            return profile;
+        }
+
+        // Evidence emitted before sandbox metadata existed necessarily ran staged
+        // commands on the host. The CLI still requires its explicit development opt-in.
+        return new RepositoryExecutionProfile
+        {
+            WorkingDirectory = profile.WorkingDirectory,
+            Target = profile.Target,
+            Runtime = RepositoryExecutionProfile.HostRuntime
+        };
+    }
+
     private async Task<List<VerificationResult>> VerifyBaselineAsync(
+        IProcessRunner stagedProcessRunner,
         VerificationContext context,
         CancellationToken cancellationToken)
     {
@@ -305,7 +339,7 @@ public sealed class ExecutionReplayService
         if (context.Contract.Verification.Build)
         {
             results.Add(await RunVerifierAsync(
-                new BuildVerifier(_processRunner),
+                new BuildVerifier(stagedProcessRunner),
                 context,
                 cancellationToken));
         }
@@ -318,7 +352,7 @@ public sealed class ExecutionReplayService
         {
             results.Add(buildPassed
                 ? await RunVerifierAsync(
-                    new TestVerifier(_processRunner),
+                    new TestVerifier(stagedProcessRunner),
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
@@ -328,6 +362,7 @@ public sealed class ExecutionReplayService
     }
 
     private async Task<List<VerificationResult>> VerifyCandidateAsync(
+        IProcessRunner stagedProcessRunner,
         VerificationContext context,
         List<AcceptanceCriterionResult> acceptanceCriteria,
         CancellationToken cancellationToken)
@@ -349,7 +384,7 @@ public sealed class ExecutionReplayService
         {
             results.Add(prerequisitesPassed
                 ? await RunVerifierAsync(
-                    new BuildVerifier(_processRunner),
+                    new BuildVerifier(stagedProcessRunner),
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Build", "Trust-boundary prerequisite failed"));
@@ -363,7 +398,7 @@ public sealed class ExecutionReplayService
         {
             results.Add(prerequisitesPassed && buildPassed
                 ? await RunVerifierAsync(
-                    new TestVerifier(_processRunner),
+                    new TestVerifier(stagedProcessRunner),
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
@@ -382,7 +417,7 @@ public sealed class ExecutionReplayService
 
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)
         {
-            var acceptance = await new AcceptanceCriteriaVerifier(_processRunner).VerifyAsync(
+            var acceptance = await new AcceptanceCriteriaVerifier(stagedProcessRunner).VerifyAsync(
                 context,
                 results,
                 prerequisitesPassed && buildPassed,
@@ -461,7 +496,8 @@ public sealed class ExecutionReplayService
             var actualVersion = VersionOutput(actualProbe);
             var status = !SuccessfulProbe(expectedProbe) || !SuccessfulProbe(actualProbe)
                 ? ReplayComparisonStatus.Missing
-                : string.Equals(expectedVersion, actualVersion, StringComparison.Ordinal)
+                : string.Equals(expectedVersion, actualVersion, StringComparison.Ordinal) &&
+                  EnvironmentEquals(expectedProbe!, actualProbe!)
                     ? ReplayComparisonStatus.Match
                     : ReplayComparisonStatus.Diverged;
             return new ReplayToolComparison
@@ -614,7 +650,30 @@ public sealed class ExecutionReplayService
         string.Equals(
             NormalizeWorkingDirectory(expected.WorkingDirectory),
             NormalizeWorkingDirectory(actual.WorkingDirectory),
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.OrdinalIgnoreCase) &&
+        EnvironmentEquals(expected, actual);
+
+    private static bool EnvironmentEquals(
+        ExecutionCommandEvidence expected,
+        ExecutionCommandEvidence actual)
+    {
+        // Legacy authenticated commands did not carry environment metadata.
+        if (expected.Environment is null)
+            return true;
+        var left = expected.Environment;
+        var right = actual.Environment;
+        return right is not null &&
+            left.Runtime == right.Runtime &&
+            left.RuntimeVersion == right.RuntimeVersion &&
+            left.Image == right.Image &&
+            left.ImageDigest == right.ImageDigest &&
+            left.NetworkMode == right.NetworkMode &&
+            left.CpuLimit == right.CpuLimit &&
+            left.MemoryLimit == right.MemoryLimit &&
+            left.ProcessLimit == right.ProcessLimit &&
+            left.WorkspaceMount == right.WorkspaceMount &&
+            left.DevelopmentHostOverride == right.DevelopmentHostOverride;
+    }
 
     private static bool CommandResultEquals(
         ExecutionCommandEvidence expected,

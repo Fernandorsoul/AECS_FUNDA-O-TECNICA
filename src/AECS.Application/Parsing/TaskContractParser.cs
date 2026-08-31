@@ -1,5 +1,7 @@
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -45,6 +47,22 @@ public class TaskContractParser
             MaxFilesChanged = budget?.MaxFilesChanged ?? budget?.max_files_changed ?? 10
         };
         ValidateBudget(mappedBudget);
+        var executionRuntime = ParseExecutionRuntime(
+            execution?.Runtime ?? execution?.runtime ?? RepositoryExecutionProfile.DockerRuntime);
+        var sandbox = execution?.Sandbox ?? execution?.sandbox;
+        var mappedSandbox = executionRuntime == RepositoryExecutionProfile.DockerRuntime
+            ? new SandboxExecutionProfile
+            {
+                Image = sandbox?.Image ?? sandbox?.image ?? SandboxExecutionProfile.DefaultImage,
+                CpuLimit = sandbox?.CpuLimit ?? sandbox?.cpu_limit ?? "1.0",
+                MemoryLimit = sandbox?.MemoryLimit ?? sandbox?.memory_limit ?? "512m",
+                ProcessLimit = sandbox?.ProcessLimit ?? sandbox?.process_limit ?? 128,
+                WallClockSeconds = sandbox?.WallClockSeconds ?? sandbox?.wall_clock_seconds ?? 120,
+                NetworkAccess = sandbox?.NetworkAccess ?? sandbox?.network_access ?? false
+            }
+            : null;
+        if (mappedSandbox is not null)
+            ValidateSandbox(mappedSandbox);
 
         return new TaskContract
         {
@@ -69,7 +87,9 @@ public class TaskContractParser
                 WorkingDirectory = execution?.WorkingDirectory
                     ?? execution?.working_directory
                     ?? ".",
-                Target = execution?.Target ?? execution?.target ?? string.Empty
+                Target = execution?.Target ?? execution?.target ?? string.Empty,
+                Runtime = executionRuntime,
+                Sandbox = mappedSandbox
             },
             Verification = new VerificationProfile
             {
@@ -108,6 +128,51 @@ public class TaskContractParser
             throw new InvalidOperationException("budget.wall_clock_seconds must be positive.");
         if (budget.MaxFilesChanged < 0)
             throw new InvalidOperationException("budget.max_files_changed cannot be negative.");
+    }
+
+    private static string ParseExecutionRuntime(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            RepositoryExecutionProfile.DockerRuntime => RepositoryExecutionProfile.DockerRuntime,
+            RepositoryExecutionProfile.HostRuntime => RepositoryExecutionProfile.HostRuntime,
+            _ => throw new InvalidOperationException(
+                $"Unknown execution.runtime: '{value}'. Expected 'docker' or 'host'.")
+        };
+
+    private static void ValidateSandbox(SandboxExecutionProfile sandbox)
+    {
+        if (!Regex.IsMatch(
+                sandbox.Image,
+                @"^[^\s@]+@sha256:[a-fA-F0-9]{64}$",
+                RegexOptions.CultureInvariant))
+        {
+            throw new InvalidOperationException(
+                "execution.sandbox.image must be an immutable image reference pinned by sha256 digest.");
+        }
+
+        if (!decimal.TryParse(
+                sandbox.CpuLimit,
+                NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out var cpuLimit) || cpuLimit <= 0)
+        {
+            throw new InvalidOperationException(
+                "execution.sandbox.cpu_limit must be a positive invariant decimal.");
+        }
+
+        if (!Regex.IsMatch(
+                sandbox.MemoryLimit,
+                @"^[1-9][0-9]*(?:[kKmMgG])?$",
+                RegexOptions.CultureInvariant))
+        {
+            throw new InvalidOperationException(
+                "execution.sandbox.memory_limit must be a positive Docker memory limit.");
+        }
+
+        if (sandbox.ProcessLimit <= 0)
+            throw new InvalidOperationException("execution.sandbox.process_limit must be positive.");
+        if (sandbox.WallClockSeconds <= 0)
+            throw new InvalidOperationException("execution.sandbox.wall_clock_seconds must be positive.");
     }
 
     private static List<AcceptanceCriterion> MapAcceptanceCriteria(
@@ -276,6 +341,26 @@ public class ExecutionYamlModel
     public string? working_directory { get; set; }
     public string? Target { get; set; }
     public string? target { get; set; }
+    public string? Runtime { get; set; }
+    public string? runtime { get; set; }
+    public SandboxYamlModel? Sandbox { get; set; }
+    public SandboxYamlModel? sandbox { get; set; }
+}
+
+public class SandboxYamlModel
+{
+    public string? Image { get; set; }
+    public string? image { get; set; }
+    public string? CpuLimit { get; set; }
+    public string? cpu_limit { get; set; }
+    public string? MemoryLimit { get; set; }
+    public string? memory_limit { get; set; }
+    public int? ProcessLimit { get; set; }
+    public int? process_limit { get; set; }
+    public int? WallClockSeconds { get; set; }
+    public int? wall_clock_seconds { get; set; }
+    public bool? NetworkAccess { get; set; }
+    public bool? network_access { get; set; }
 }
 
 public class VerificationYamlModel

@@ -35,7 +35,7 @@ public sealed class StagedExecutionResult
 public sealed class StagedExecutionPipeline
 {
     private readonly IAgentAdapter _agentAdapter;
-    private readonly IProcessRunner _processRunner;
+    private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
     private readonly IExecutionEvidenceStore _evidenceStore;
     private readonly GitWorkspaceManager _workspaceManager;
     private readonly RepositoryContextCompiler _contextCompiler;
@@ -51,10 +51,12 @@ public sealed class StagedExecutionPipeline
         IExecutionEvidenceStore evidenceStore,
         RepositoryContextCompiler? contextCompiler = null,
         Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
-        TimeSpan? maximumRetryBackoff = null)
+        TimeSpan? maximumRetryBackoff = null,
+        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null)
     {
         _agentAdapter = agentAdapter;
-        _processRunner = processRunner;
+        _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
+            new DefaultStagedProcessRunnerFactory(processRunner);
         _evidenceStore = evidenceStore;
         _workspaceManager = new GitWorkspaceManager(processRunner);
         _contextCompiler = contextCompiler ?? new RepositoryContextCompiler();
@@ -95,6 +97,10 @@ public sealed class StagedExecutionPipeline
             baseline,
             budgetScope.Token))
         {
+            var stagedProcessRunner = await _stagedProcessRunnerFactory.CreateAsync(
+                preflightWorkspace.Path,
+                contract.Execution,
+                budgetScope.Token);
             var baselineContext = new VerificationContext
             {
                 TaskId = contract.Id,
@@ -104,11 +110,12 @@ public sealed class StagedExecutionPipeline
                 CommandEvidence = baselineCommands
             };
             await ToolVersionProbe.CaptureAsync(
-                _processRunner,
+                stagedProcessRunner,
                 baselineContext,
                 budgetScope.Token,
                 () => budgetScope.RemainingDuration);
             baselineVerificationResults = await VerifyBaselineAsync(
+                stagedProcessRunner,
                 baselineContext,
                 budgetScope.Token,
                 () => budgetScope.RemainingDuration);
@@ -177,6 +184,10 @@ public sealed class StagedExecutionPipeline
             baseline,
             budgetScope.Token))
         {
+            var stagedProcessRunner = await _stagedProcessRunnerFactory.CreateAsync(
+                workspace.Path,
+                contract.Execution,
+                budgetScope.Token);
             var compiledContext = _contextCompiler.Compile(
                 workspace.Path,
                 contract,
@@ -231,6 +242,7 @@ public sealed class StagedExecutionPipeline
             };
 
             verificationResults = await VerifyAsync(
+                stagedProcessRunner,
                 verificationContext,
                 applicationResult,
                 acceptanceCriteriaResults,
@@ -293,6 +305,9 @@ public sealed class StagedExecutionPipeline
         await _workspaceManager.EnsureBaselineUnchangedAsync(
             baseline,
             CancellationToken.None);
+        ValidateCommandEnvironments(
+            contract.Execution,
+            baselineCommands.Concat(candidateCommands));
 
         var agentRun = new AgentRun
         {
@@ -381,6 +396,7 @@ public sealed class StagedExecutionPipeline
     }
 
     private async Task<List<VerificationResult>> VerifyBaselineAsync(
+        IProcessRunner stagedProcessRunner,
         VerificationContext context,
         CancellationToken cancellationToken,
         Func<TimeSpan> remainingDuration)
@@ -390,7 +406,7 @@ public sealed class StagedExecutionPipeline
         if (context.Contract.Verification.Build)
         {
             results.Add(await RunVerifierAsync(
-                new BuildVerifier(_processRunner, remainingDuration),
+                new BuildVerifier(stagedProcessRunner, remainingDuration),
                 context,
                 cancellationToken));
         }
@@ -403,7 +419,7 @@ public sealed class StagedExecutionPipeline
         {
             results.Add(buildPassed
                 ? await RunVerifierAsync(
-                    new TestVerifier(_processRunner, remainingDuration),
+                    new TestVerifier(stagedProcessRunner, remainingDuration),
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
@@ -434,6 +450,7 @@ public sealed class StagedExecutionPipeline
         };
 
     private async Task<List<VerificationResult>> VerifyAsync(
+        IProcessRunner stagedProcessRunner,
         VerificationContext context,
         FileApplicatorResult applicationResult,
         List<AcceptanceCriterionResult> acceptanceCriteriaResults,
@@ -459,7 +476,7 @@ public sealed class StagedExecutionPipeline
         {
             results.Add(prerequisitesPassed
                 ? await RunVerifierAsync(
-                    new BuildVerifier(_processRunner, remainingDuration),
+                    new BuildVerifier(stagedProcessRunner, remainingDuration),
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Build", "Trust-boundary prerequisite failed"));
@@ -473,7 +490,7 @@ public sealed class StagedExecutionPipeline
         {
             results.Add(prerequisitesPassed && buildPassed
                 ? await RunVerifierAsync(
-                    new TestVerifier(_processRunner, remainingDuration),
+                    new TestVerifier(stagedProcessRunner, remainingDuration),
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
@@ -497,7 +514,7 @@ public sealed class StagedExecutionPipeline
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)
         {
             var acceptance = await new AcceptanceCriteriaVerifier(
-                _processRunner,
+                stagedProcessRunner,
                 remainingDuration).VerifyAsync(
                 context,
                 results,
@@ -622,6 +639,44 @@ public sealed class StagedExecutionPipeline
                 agentResult.FailureKind == AgentFailureKind.BudgetExceeded,
             ExhaustionReason = exhaustionReason
         };
+    }
+
+    private static void ValidateCommandEnvironments(
+        RepositoryExecutionProfile profile,
+        IEnumerable<ExecutionCommandEvidence> commands)
+    {
+        foreach (var command in commands)
+        {
+            var environment = command.Environment ?? throw new InvalidOperationException(
+                "Staged command evidence is missing its execution environment.");
+            if (profile.EffectiveRuntime == RepositoryExecutionProfile.DockerRuntime)
+            {
+                var sandbox = profile.Sandbox ?? new SandboxExecutionProfile();
+                var separator = sandbox.Image.LastIndexOf('@');
+                if (environment.Runtime != RepositoryExecutionProfile.DockerRuntime ||
+                    separator <= 0 ||
+                    environment.Image != sandbox.Image[..separator] ||
+                    !string.Equals(
+                        environment.ImageDigest,
+                        sandbox.Image[(separator + 1)..],
+                        StringComparison.OrdinalIgnoreCase) ||
+                    environment.CpuLimit != sandbox.CpuLimit ||
+                    environment.MemoryLimit != sandbox.MemoryLimit ||
+                    environment.ProcessLimit != sandbox.ProcessLimit ||
+                    environment.NetworkMode != (sandbox.NetworkAccess ? "bridge" : "none") ||
+                    environment.DevelopmentHostOverride)
+                {
+                    throw new InvalidOperationException(
+                        "Staged command evidence does not match the required Docker sandbox policy.");
+                }
+            }
+            else if (environment.Runtime != RepositoryExecutionProfile.HostRuntime ||
+                     !environment.DevelopmentHostOverride)
+            {
+                throw new InvalidOperationException(
+                    "Host execution evidence must be marked as an explicit development override.");
+            }
+        }
     }
 
     private static TaskContract WithRisk(TaskContract contract, RiskLevel risk) => new()
