@@ -125,6 +125,7 @@ public sealed class SecurityScanVerifierTests : IDisposable
         {
             ExitCode = 0,
             StandardOutput = """
+                An issue was encountered verifying workloads. For more information, run "dotnet workload update".
                 {
                   "version": 1,
                   "projects": [{
@@ -169,7 +170,7 @@ public sealed class SecurityScanVerifierTests : IDisposable
         runner.Requests[0].FileName.Should().Be("dotnet");
         runner.Requests[0].Arguments.Should().Equal(
             "list", "Fixture.csproj", "package", "--include-transitive",
-            "--format", "json", "--no-restore");
+            "--format", "json");
         runner.Requests[0].Phase.Should().Be(ExecutionCapabilityPhases.CandidateSecurityScan);
         context.CommandEvidence.Should().ContainSingle();
         JsonSerializer.Serialize(context.CommandEvidence).Should()

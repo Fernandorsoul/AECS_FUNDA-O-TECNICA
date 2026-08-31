@@ -90,7 +90,21 @@ public sealed class DockerSandboxE2ETests
                 stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(runner))
             .RunAsync(repository.Path, contract, CancellationToken.None);
 
-        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        var diagnostics = string.Join(" | ", result.BaselineVerificationResults
+            .Concat(result.VerificationResults)
+            .Select(item => $"{item.Verifier}:{item.Status}:{item.Message}"));
+        var commandDiagnostics = string.Join(" | ", result.BaselineCommands
+            .Concat(result.CandidateCommands)
+            .Where(command => command.ExitCode != 0 ||
+                command.Arguments.FirstOrDefault() == "list")
+            .Select(command =>
+                $"{command.FileName} {string.Join(' ', command.Arguments)} => " +
+                $"{command.ExitCode}: stdout={command.StandardOutput}; " +
+                $"stderr={command.StandardError}"));
+        result.Decision.Decision.Should().Be(
+            TaskDecision.Verified,
+            $"the staged gates should pass; decision={result.Decision.Reason}; " +
+            $"results={diagnostics}; commands={commandDiagnostics}");
         result.BaselineVerificationResults.Should().OnlyContain(item =>
             item.Status == VerificationStatus.Pass);
         result.VerificationResults.Should().Contain(item =>

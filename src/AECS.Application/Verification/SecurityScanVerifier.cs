@@ -367,7 +367,7 @@ internal sealed class DotNetDependencySecurityScanner : ISecurityScanner
         }
 
         var arguments = new List<string> { "list", execution.TargetArgument!, "package" };
-        arguments.AddRange(["--include-transitive", "--format", "json", "--no-restore"]);
+        arguments.AddRange(["--include-transitive", "--format", "json"]);
         var request = new ProcessExecutionRequest
         {
             FileName = "dotnet",
@@ -428,7 +428,10 @@ internal sealed class DotNetDependencySecurityScanner : ISecurityScanner
 
     private static List<(string Id, string Version)> ParsePackages(string json)
     {
-        using var document = JsonDocument.Parse(json);
+        var documentStart = json.IndexOf('{');
+        if (documentStart < 0)
+            throw new JsonException("Dependency inventory did not contain a JSON document.");
+        using var document = JsonDocument.Parse(json[documentStart..]);
         var packages = new List<(string Id, string Version)>();
         Visit(document.RootElement, packages);
         return packages

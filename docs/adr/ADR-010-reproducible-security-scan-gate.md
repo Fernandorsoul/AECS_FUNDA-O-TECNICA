@@ -12,7 +12,7 @@ Um gate que consulta sempre uma base móvel ou registra o conteúdo detectado n�
 Implementar `SecurityScan` como composição de `ISecurityScanner` sob a política `aecs.security-scan/v1`:
 
 - scanners determinísticos de segredos e padrões leem o worktree sem carregar código;
-- dependências são enumeradas com `dotnet list ... --format json --no-restore` por argv estruturado no sandbox;
+- dependências são enumeradas com `dotnet list ... --format json` por argv estruturado no sandbox .NET 9 sem rede;
 - advisories vêm de uma snapshot local explícita e versionada;
 - a baseline produz fingerprints e o candidato bloqueia somente findings novos no limiar configurado;
 - supressões exigem regra, caminho seguro, justificativa e fingerprint opcional;
