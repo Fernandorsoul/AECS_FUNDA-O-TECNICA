@@ -9,8 +9,10 @@ public static class ExecutionCapabilityPhases
     public const string BaselineToolProbe = "baseline.tool-probe";
     public const string BaselineBuild = "baseline.build";
     public const string BaselineTest = "baseline.test";
+    public const string BaselineSecurityScan = "baseline.security-scan";
     public const string CandidateBuild = "candidate.build";
     public const string CandidateTest = "candidate.test";
+    public const string CandidateSecurityScan = "candidate.security-scan";
     public const string CandidateAcceptance = "candidate.acceptance";
 }
 
@@ -45,7 +47,10 @@ public sealed class ExecutionCapabilityPolicy
             Rule("dotnet", ["test"],
                 ExecutionCapabilityPhases.BaselineTest,
                 ExecutionCapabilityPhases.CandidateTest,
-                ExecutionCapabilityPhases.CandidateAcceptance)
+                ExecutionCapabilityPhases.CandidateAcceptance),
+            Rule("dotnet", ["list"],
+                ExecutionCapabilityPhases.BaselineSecurityScan,
+                ExecutionCapabilityPhases.CandidateSecurityScan)
         ],
         Resources = new ResourceCapabilities()
     };

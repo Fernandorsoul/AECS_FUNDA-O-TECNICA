@@ -119,7 +119,7 @@ Gates condicionais:
 - nomes listados em `required_semantic_verifiers`;
 - qualquer resultado EB crítico que não seja `Pass`, quando `critical_semantic_failures` é `required`.
 
-`security_scan: required` adiciona `SecurityScan` à matriz, mas ainda não existe implementação desse verificador; por isso o resultado é rejeitado por gate ausente. Os verificadores EB001–EB005 só executam depois dos pré-requisitos e do build. Exceções de qualquer verificador viram `Error`, não sucesso.
+`security_scan: required` adiciona `SecurityScan` à matriz. O gate inventaria a baseline e o candidato com scanners pluggable de segredos, dependências e padrões; somente findings novos acima da política bloqueiam, enquanto falha ou saída inconclusiva vira `Error`. O inventário `dotnet list` passa pelo runner staged e os scanners embutidos apenas leem arquivos, sem carregar código. Os verificadores EB001–EB005 só executam depois dos pré-requisitos e do build. Exceções de qualquer verificador viram `Error`, não sucesso.
 
 Critérios de aceite obrigatórios precisam apontar para um resultado de verificador ou teste filtrado. Para testes, exit code zero sem nenhum caso TRX executado falha. Critérios comportamentais também exigem que o arquivo de teste declarado apareça no diff, salvo evidência equivalente explicitamente autorizada.
 
@@ -189,7 +189,7 @@ A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-mon
 - ambos os stores assinam a evidência, mas o keyring local não é um HSM/KMS e PostgreSQL, sozinho, não é uma âncora externa imutável capaz de detectar rollback coordenado de banco e chaves;
 - o compilador de contexto indexa apenas C# e usa tokenização aproximada;
 - unit e integration tests compartilham um único comando/verificador;
-- `SecurityScan` não foi implementado;
+- a base de vulnerabilidades do `SecurityScan` é uma snapshot local pequena e versionada, não uma réplica completa e atualizada continuamente do GitHub Advisory Database;
 - a estimativa de custo do adapter não equivale à fatura final do provedor;
 - a promoção é deliberadamente manual ou autorizada por referência de política e não cria commit;
 - a interface da CLI ainda pode mudar sem compatibilidade retroativa.

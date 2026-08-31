@@ -71,6 +71,7 @@ public sealed class DockerSandboxE2ETests
             {
                 Build = true,
                 UnitTests = true,
+                SecurityScan = true,
                 Scope = true,
                 Budget = true
             },
@@ -89,13 +90,35 @@ public sealed class DockerSandboxE2ETests
                 stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(runner))
             .RunAsync(repository.Path, contract, CancellationToken.None);
 
-        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        var diagnostics = string.Join(" | ", result.BaselineVerificationResults
+            .Concat(result.VerificationResults)
+            .Select(item => $"{item.Verifier}:{item.Status}:{item.Message}"));
+        var commandDiagnostics = string.Join(" | ", result.BaselineCommands
+            .Concat(result.CandidateCommands)
+            .Where(command => command.ExitCode != 0 ||
+                command.Arguments.FirstOrDefault() == "list")
+            .Select(command =>
+                $"{command.FileName} {string.Join(' ', command.Arguments)} => " +
+                $"{command.ExitCode}: stdout={command.StandardOutput}; " +
+                $"stderr={command.StandardError}"));
+        result.Decision.Decision.Should().Be(
+            TaskDecision.Verified,
+            $"the staged gates should pass; decision={result.Decision.Reason}; " +
+            $"results={diagnostics}; commands={commandDiagnostics}");
         result.BaselineVerificationResults.Should().OnlyContain(item =>
             item.Status == VerificationStatus.Pass);
         result.VerificationResults.Should().Contain(item =>
             item.Verifier == "Build" && item.Status == VerificationStatus.Pass);
         result.VerificationResults.Should().Contain(item =>
             item.Verifier == "Tests" && item.Status == VerificationStatus.Pass);
+        result.BaselineVerificationResults.Should().Contain(item =>
+            item.Verifier == "SecurityScan" &&
+            item.Status == VerificationStatus.Pass &&
+            item.SecurityScan != null);
+        result.VerificationResults.Should().Contain(item =>
+            item.Verifier == "SecurityScan" &&
+            item.Status == VerificationStatus.Pass &&
+            item.SecurityScan != null);
         result.AcceptanceCriteriaResults.Should().ContainSingle(item =>
             item.Status == VerificationStatus.Pass);
         result.BaselineCommands.Concat(result.CandidateCommands).Should().NotBeEmpty()
@@ -110,6 +133,11 @@ public sealed class DockerSandboxE2ETests
                     ExecutionCapabilityPolicy.CurrentVersion &&
                 command.Environment.Capabilities.Authority == "task-contract" &&
                 !command.Environment.DevelopmentHostOverride);
+        result.BaselineCommands.Concat(result.CandidateCommands).Should().Contain(command =>
+            command.Arguments.FirstOrDefault() == "list" &&
+            command.Environment!.Capabilities!.Phase.EndsWith(
+                ".security-scan",
+                StringComparison.Ordinal));
         (await repository.StatusAsync()).Should().BeEmpty();
         (await SandboxContainersAsync(runner, repository.Path)).Should().BeEmpty();
     }

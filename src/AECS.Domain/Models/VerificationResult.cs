@@ -1,4 +1,5 @@
 using AECS.Domain.Enums;
+using System.Text.Json.Serialization;
 
 namespace AECS.Domain.Models;
 
@@ -11,4 +12,7 @@ public class VerificationResult
     public Severity Severity { get; init; }
     public string Message { get; init; } = string.Empty;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SecurityScanEvidence? SecurityScan { get; init; }
 }

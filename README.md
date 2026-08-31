@@ -296,6 +296,9 @@ task:
       - executable: dotnet
         argument_prefix: [test]
         phases: [baseline.test, candidate.test, candidate.acceptance]
+      - executable: dotnet
+        argument_prefix: [list]
+        phases: [baseline.security-scan, candidate.security-scan]
     network:
       destinations: []
       phases: []
@@ -377,7 +380,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - o keyring RSA local não substitui KMS/HSM nem detecta rollback integral para uma versão antiga validamente assinada;
 - build, testes e aceite executável usam imagem Docker fixada por digest, sem rede por padrão e com limites de CPU, memória, PIDs e wall clock;
 - `execution.runtime: host` só é aceito pela CLI junto com `--allow-host-execution` e fica marcado na evidência como override de desenvolvimento;
-- `security_scan: required` falha fechado porque ainda não existe implementação do verificador `SecurityScan`;
+- `security_scan: required` executa scanners determinísticos de segredos, dependências e padrões; a snapshot de advisories é versionada e deliberadamente limitada;
 - o indexador de contexto atual é específico para arquivos C# e usa estimativa aproximada de quatro caracteres por token;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.
 

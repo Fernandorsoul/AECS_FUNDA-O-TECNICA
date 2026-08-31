@@ -673,6 +673,27 @@ static async Task<int> RunSingle(string[] args)
     foreach (var result in execution.VerificationResults)
         Console.WriteLine($"  {result.Verifier.PadRight(24)} {result.Status}");
 
+    var securityResults = execution.BaselineVerificationResults
+        .Concat(execution.VerificationResults)
+        .Where(result => result.SecurityScan is not null)
+        .ToList();
+    if (securityResults.Count > 0)
+    {
+        Console.WriteLine("Security findings:");
+        foreach (var result in securityResults)
+        {
+            var phase = result.SecurityScan!.IsBaseline ? "baseline" : "candidate";
+            foreach (var finding in result.SecurityScan.Findings)
+            {
+                Console.WriteLine(
+                    $"  {phase,-9} {finding.Severity,-8} {finding.Disposition,-10} " +
+                    $"{finding.Rule} {finding.Path}:{finding.Line}");
+            }
+        }
+        if (securityResults.All(result => result.SecurityScan!.Findings.Count == 0))
+            Console.WriteLine("  (none)");
+    }
+
     Console.WriteLine("Acceptance evidence:");
     foreach (var criterion in execution.AcceptanceCriteriaResults)
     {
