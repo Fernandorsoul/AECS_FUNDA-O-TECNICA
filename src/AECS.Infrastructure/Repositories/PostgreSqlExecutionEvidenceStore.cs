@@ -12,7 +12,7 @@ using Npgsql;
 
 namespace AECS.Infrastructure.Repositories;
 
-public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
+public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore, IEvidenceGraphSource
 {
     public const string ConnectionStringEnvironmentVariable =
         "AECS_POSTGRES_CONNECTION_STRING";
@@ -282,6 +282,91 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task<EvidenceGraphQueryResult> QueryEvidenceGraphsAsync(
+        EvidenceGraphQuery query,
+        EvidenceReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(scope);
+        EnsureRepositoryIsolation(scope.RepositoryPath);
+        await EnsureInitializedAsync(cancellationToken);
+
+        await using var db = CreateDbContext();
+        var records = db.ExecutionEvidenceRecords
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(item => item.PromotionEvents)
+            .Include(item => item.ReplayEvents)
+            .AsQueryable();
+        if (query.TaskId is not null)
+            records = records.Where(item => item.TaskId == query.TaskId);
+        if (query.RunId is not null)
+            records = records.Where(item => item.AgentRunId == query.RunId.Value);
+        if (query.CandidateId is not null)
+            records = records.Where(item => item.CandidateId == query.CandidateId.Value);
+
+        var storedRecords = await records.ToListAsync(cancellationToken);
+        var graphs = new List<EvidenceGraph>();
+        var diagnostics = new List<string>();
+        foreach (var record in storedRecords)
+        {
+            try
+            {
+                var envelope = ValidateStoredRecord(record, record.Id);
+                EvidenceGraphProjection.EnsureAuthorized(
+                    envelope.Evidence.Baseline.RepositoryPath,
+                    scope);
+                var graph = EvidenceGraphProjection.Project(envelope, scope);
+                if (EvidenceGraphProjection.Matches(graph.Summary, query))
+                    graphs.Add(graph);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Repository-scoped reads intentionally reveal no cross-repository record.
+            }
+            catch (EvidenceIntegrityException)
+            {
+                diagnostics.Add("A PostgreSQL evidence record was invalid and was omitted.");
+            }
+        }
+
+        return new EvidenceGraphQueryResult
+        {
+            Items = graphs
+                .OrderByDescending(item => item.Summary.CreatedAt)
+                .Take(query.Limit)
+                .Select(item => item.Summary)
+                .ToList(),
+            Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToList()
+        };
+    }
+
+    public async Task<EvidenceGraph?> LoadEvidenceGraphAsync(
+        Guid evidenceId,
+        EvidenceReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        EnsureRepositoryIsolation(scope.RepositoryPath);
+        await EnsureInitializedAsync(cancellationToken);
+        await using var db = CreateDbContext();
+        var record = await db.ExecutionEvidenceRecords
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(item => item.PromotionEvents)
+            .Include(item => item.ReplayEvents)
+            .SingleOrDefaultAsync(item => item.Id == evidenceId, cancellationToken);
+        if (record is null)
+            return null;
+
+        var envelope = ValidateStoredRecord(record, evidenceId);
+        EvidenceGraphProjection.EnsureAuthorized(
+            envelope.Evidence.Baseline.RepositoryPath,
+            scope);
+        return EvidenceGraphProjection.Project(envelope, scope);
+    }
+
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (_initialized)
@@ -397,7 +482,6 @@ public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore
                     "PostgreSQL promotion event projection is invalid.");
             }
         }
-
 
         for (var index = 0; index < record.ReplayEvents.Count; index++)
         {

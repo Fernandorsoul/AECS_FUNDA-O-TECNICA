@@ -8,7 +8,7 @@ using AECS.Infrastructure.Cryptography;
 
 namespace AECS.Infrastructure.Repositories;
 
-public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
+public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore, IEvidenceGraphSource
 {
     public const string CurrentSchemaVersion = EvidenceEnvelopeFormat.CurrentSchemaVersion;
 
@@ -212,6 +212,84 @@ public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
         {
             writeLock.Release();
         }
+    }
+
+    public async Task<EvidenceGraphQueryResult> QueryEvidenceGraphsAsync(
+        EvidenceGraphQuery query,
+        EvidenceReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(scope);
+        EnsureRepositoryIsolation(scope.RepositoryPath);
+        var graphs = new List<EvidenceGraph>();
+        var diagnostics = new List<string>();
+        if (!Directory.Exists(_rootPath))
+            return new EvidenceGraphQueryResult();
+
+        foreach (var path in Directory.EnumerateFiles(_rootPath, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Guid.TryParseExact(Path.GetFileNameWithoutExtension(path), "N", out var evidenceId))
+            {
+                diagnostics.Add("An evidence file has an invalid storage key and was omitted.");
+                continue;
+            }
+
+            try
+            {
+                var envelope = await ReadAndValidateEnvelopeAsync(
+                    path,
+                    evidenceId,
+                    cancellationToken);
+                EvidenceGraphProjection.EnsureAuthorized(
+                    envelope.Evidence.Baseline.RepositoryPath,
+                    scope);
+                var graph = EvidenceGraphProjection.Project(envelope, scope);
+                if (EvidenceGraphProjection.Matches(graph.Summary, query))
+                    graphs.Add(graph);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Repository-scoped reads intentionally reveal no cross-repository record.
+            }
+            catch (EvidenceIntegrityException)
+            {
+                diagnostics.Add("An evidence record was invalid and was omitted.");
+            }
+            catch (IOException)
+            {
+                diagnostics.Add("An evidence record could not be read and was omitted.");
+            }
+        }
+
+        return new EvidenceGraphQueryResult
+        {
+            Items = graphs
+                .OrderByDescending(item => item.Summary.CreatedAt)
+                .Take(query.Limit)
+                .Select(item => item.Summary)
+                .ToList(),
+            Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToList()
+        };
+    }
+
+    public async Task<EvidenceGraph?> LoadEvidenceGraphAsync(
+        Guid evidenceId,
+        EvidenceReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        EnsureRepositoryIsolation(scope.RepositoryPath);
+        var path = GetEvidencePath(evidenceId);
+        if (!File.Exists(path))
+            return null;
+
+        var envelope = await ReadAndValidateEnvelopeAsync(path, evidenceId, cancellationToken);
+        EvidenceGraphProjection.EnsureAuthorized(
+            envelope.Evidence.Baseline.RepositoryPath,
+            scope);
+        return EvidenceGraphProjection.Project(envelope, scope);
     }
 
     private async Task<SignedExecutionEvidenceEnvelope> ReadAndValidateEnvelopeAsync(

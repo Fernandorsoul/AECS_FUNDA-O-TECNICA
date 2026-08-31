@@ -165,6 +165,10 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 `ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; candidato idêntico com resultados diferentes é divergência do ambiente; gate ausente recebe classificação própria. O resultado é anexado à cadeia como evento assinado, e o checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).
 
+## Evidence Graph
+
+`IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
+
 ## Mapa de componentes
 
 | Projeto | Responsabilidade conectada |
@@ -172,7 +176,7 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 | `AECS.Domain` | contratos, candidatos, evidências, decisões e interfaces sem dependência de infraestrutura |
 | `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão, replay e promoção |
 | `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, stores autenticados JSON/PostgreSQL e fundações Docker |
-| `AECS.Cli` | `run`, `experiment`, `jarvis`, `replay`, `promote` e `export-patch` |
+| `AECS.Cli` | `run`, `experiment`, `jarvis`, `evidence`, `replay`, `promote` e `export-patch` |
 | `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
 | `AECS.IntegrationTests` | Git e PostgreSQL reais, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 

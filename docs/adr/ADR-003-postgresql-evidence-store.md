@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-08-29
 
-> **Implementation status (2026-08-31):** `PostgreSqlExecutionEvidenceStore` now implements the staged `IExecutionEvidenceStore` contract and is selectable in every CLI flow. JSON remains an explicit local fallback; PostgreSQL selection never falls back silently.
+> **Implementation status (2026-08-31):** `PostgreSqlExecutionEvidenceStore` implements the staged `IExecutionEvidenceStore` contract and the repository-scoped `IEvidenceGraphSource`, and is selectable in every CLI flow. JSON remains an explicit local fallback; PostgreSQL selection never falls back silently.
 
 ## Context
 

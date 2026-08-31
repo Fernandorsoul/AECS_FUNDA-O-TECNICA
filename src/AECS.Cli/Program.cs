@@ -3,6 +3,7 @@ using AECS.Application;
 using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
+using AECS.Application.EvidenceGraph;
 using AECS.Application.Parsing;
 using AECS.Application.Promotion;
 using AECS.Application.Replay;
@@ -34,10 +35,147 @@ else if (command == "export-patch")
     return await RunPatchExport(args[1..]);
 else if (command == "evidence-key")
     return RunEvidenceKey(args[1..]);
+else if (command == "evidence")
+    return await RunEvidenceQuery(args[1..]);
 else if (command == "replay")
     return await RunReplay(args[1..]);
 else
     return await RunSingle(args);
+
+static async Task<int> RunEvidenceQuery(string[] args)
+{
+    const string usage =
+        "Usage: aecs evidence <show|list|trace> --repo <path> " +
+        "[--evidence <id>] [--task <id>] [--run <id>] [--candidate <id>] " +
+        "[--baseline <commit>] [--decision <decision>] [--promotion <id>] " +
+        "[--limit <1-500>] [--format <text|json|dot>] " + EvidenceStoreSelection.Usage;
+    if (args.Length == 0 || args[0] is not ("show" or "list" or "trace"))
+    {
+        Console.WriteLine(usage);
+        return 1;
+    }
+
+    var operation = args[0];
+    string? repositoryPath = null;
+    string? evidenceIdValue = null;
+    string? taskId = null;
+    string? runIdValue = null;
+    string? candidateIdValue = null;
+    string? baselineCommit = null;
+    string? decisionValue = null;
+    string? promotionIdValue = null;
+    var limit = 100;
+    var format = "text";
+    var evidenceStoreSelection = new EvidenceStoreSelection();
+    for (var index = 1; index < args.Length; index++)
+    {
+        if (args[index] == "--repo" && index + 1 < args.Length)
+            repositoryPath = args[++index];
+        else if (args[index] == "--evidence" && index + 1 < args.Length)
+            evidenceIdValue = args[++index];
+        else if (args[index] == "--task" && index + 1 < args.Length)
+            taskId = args[++index];
+        else if (args[index] == "--run" && index + 1 < args.Length)
+            runIdValue = args[++index];
+        else if (args[index] == "--candidate" && index + 1 < args.Length)
+            candidateIdValue = args[++index];
+        else if (args[index] == "--baseline" && index + 1 < args.Length)
+            baselineCommit = args[++index];
+        else if (args[index] == "--decision" && index + 1 < args.Length)
+            decisionValue = args[++index];
+        else if (args[index] == "--promotion" && index + 1 < args.Length)
+            promotionIdValue = args[++index];
+        else if (args[index] == "--limit" && index + 1 < args.Length &&
+                 int.TryParse(args[++index], out var parsedLimit))
+            limit = parsedLimit;
+        else if (args[index] == "--format" && index + 1 < args.Length)
+            format = args[++index];
+        else if (evidenceStoreSelection.TryConsume(args, ref index))
+        {
+        }
+        else
+        {
+            Console.WriteLine(usage);
+            return 1;
+        }
+    }
+
+    var needsEvidenceId = operation is "show" or "trace";
+    if (repositoryPath is null ||
+        (needsEvidenceId && !Guid.TryParse(evidenceIdValue, out _)) ||
+        (runIdValue is not null && !Guid.TryParse(runIdValue, out _)) ||
+        (candidateIdValue is not null && !Guid.TryParse(candidateIdValue, out _)) ||
+        (promotionIdValue is not null && !Guid.TryParse(promotionIdValue, out _)) ||
+        (decisionValue is not null &&
+         !Enum.TryParse<TaskDecision>(decisionValue, ignoreCase: true, out _)) ||
+        format is not ("text" or "json" or "dot") ||
+        (operation == "list" && format == "dot"))
+    {
+        Console.WriteLine(usage);
+        return 1;
+    }
+
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var store))
+        return 1;
+    if (store is not IEvidenceGraphSource graphSource)
+    {
+        Console.WriteLine("ERROR: selected evidence store does not support graph queries.");
+        return 1;
+    }
+
+    var scope = new EvidenceReadScope
+    {
+        RepositoryPath = repositoryPath,
+        Principal = Environment.UserName
+    };
+    var service = new EvidenceGraphService(graphSource);
+    try
+    {
+        if (operation == "list")
+        {
+            var queryResult = await service.ListAsync(new EvidenceGraphQuery
+            {
+                TaskId = taskId,
+                RunId = runIdValue is null ? null : Guid.Parse(runIdValue),
+                CandidateId = candidateIdValue is null ? null : Guid.Parse(candidateIdValue),
+                BaselineCommit = baselineCommit,
+                Decision = decisionValue is null
+                    ? null
+                    : Enum.Parse<TaskDecision>(decisionValue, ignoreCase: true),
+                PromotionId = promotionIdValue is null ? null : Guid.Parse(promotionIdValue),
+                Limit = limit
+            }, scope, CancellationToken.None);
+            Console.Write(format == "json"
+                ? EvidenceGraphFormatter.ToJson(queryResult) + Environment.NewLine
+                : EvidenceGraphFormatter.ToListText(queryResult));
+            return 0;
+        }
+
+        var evidenceId = Guid.Parse(evidenceIdValue!);
+        var graph = operation == "show"
+            ? await service.ShowAsync(evidenceId, scope, CancellationToken.None)
+            : await service.TraceAsync(evidenceId, scope, CancellationToken.None);
+        if (graph is null)
+        {
+            Console.WriteLine($"Evidence '{evidenceId:N}' was not found.");
+            return 1;
+        }
+
+        Console.Write(format switch
+        {
+            "json" => EvidenceGraphFormatter.ToJson(graph) + Environment.NewLine,
+            "dot" => EvidenceGraphFormatter.ToDot(graph),
+            _ when operation == "show" => EvidenceGraphFormatter.ToShowText(graph),
+            _ => EvidenceGraphFormatter.ToTraceText(graph)
+        });
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERROR: evidence query failed closed: {ex.Message}");
+        return 1;
+    }
+}
 
 static async Task<int> RunReplay(string[] args)
 {
@@ -426,6 +564,10 @@ static async Task<int> RunSingle(string[] args)
             "--output <path> --actor <actor> " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs replay --repo <path> --evidence <id> " +
+            EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs evidence <show|list|trace> --repo <path> " +
+            "[--evidence <id>] [--format <text|json|dot>] " +
             EvidenceStoreSelection.Usage);
         Console.WriteLine("       aecs evidence-key rotate [--key-directory <path>]");
         return 1;

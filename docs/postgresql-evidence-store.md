@@ -42,6 +42,8 @@ Use `--evidence-store postgres` também em `experiment`, `jarvis`, `promote`, `e
 
 Selecionar PostgreSQL sem a variável de conexão, com configuração inválida ou com o servidor indisponível encerra a operação. O AECS nunca muda para JSON silenciosamente.
 
+`evidence list` aplica primeiro os filtros indexados de task, run e candidato no PostgreSQL. Baseline, decisão e promoção são filtrados após reconstrução e validação do agregado autenticado. Nenhum campo é projetado no Evidence Graph antes da verificação de conteúdo, projeções relacionais e assinaturas. O escopo exato do repositório é aplicado antes de qualquer resultado ser devolvido.
+
 ## Migrations
 
 O store executa migrations pendentes antes da primeira operação de cada processo. Em ambientes controlados, aplique-as antecipadamente com a mesma variável secreta:

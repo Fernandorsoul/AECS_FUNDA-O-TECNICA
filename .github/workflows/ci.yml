@@ -100,6 +100,17 @@ jobs:
 
           grep -q "Usage: aecs run" <<< "$output"
 
+          graph_output=$(dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            evidence list \
+            --repo "${GITHUB_WORKSPACE}" \
+            --evidence-root "${RUNNER_TEMP}/empty-evidence" \
+            --key-directory "${RUNNER_TEMP}/evidence-keys" \
+            --format json)
+
+          printf '%s\n' "$graph_output"
+          grep -q '"items": \[\]' <<< "$graph_output"
+
           set +e
           postgres_output=$(env -u AECS_POSTGRES_CONNECTION_STRING \
             dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
