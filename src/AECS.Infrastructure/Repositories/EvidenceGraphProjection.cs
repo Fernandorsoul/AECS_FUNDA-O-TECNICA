@@ -140,6 +140,46 @@ internal static class EvidenceGraphProjection
                 "execution-evidence", envelope.Seal.KeyId, evidence.CreatedAt);
         }
 
+        string? symbolGraphNode = null;
+        if (evidence.CSharpSymbolGraph is not null)
+        {
+            var symbolGraph = evidence.CSharpSymbolGraph;
+            symbolGraphNode = $"csharp-symbol-graph:{symbolGraph.GraphHash[7..]}";
+            builder.Node(symbolGraphNode, EvidenceGraphNodeKind.CSharpSymbolGraph,
+                symbolGraph.GraphHash, symbolGraph.StrategyVersion, envelope.Seal.KeyId,
+                evidence.Baseline.CapturedAt,
+                hashes: new()
+                {
+                    ["graphSha256"] = symbolGraph.GraphHash,
+                    ["repositorySnapshotSha256"] = symbolGraph.RepositorySnapshotHash,
+                    ["gitCommit"] = symbolGraph.BaselineCommit
+                },
+                attributes: new()
+                {
+                    ["schemaVersion"] = symbolGraph.SchemaVersion,
+                    ["strategyVersion"] = symbolGraph.StrategyVersion,
+                    ["compilerVersion"] = symbolGraph.CompilerVersion,
+                    ["msBuildVersion"] = symbolGraph.MsBuildVersion,
+                    ["sdkVersion"] = symbolGraph.SdkVersion,
+                    ["loadSucceeded"] = symbolGraph.LoadSucceeded.ToString(),
+                    ["projects"] = symbolGraph.Projects.Count.ToString(),
+                    ["nodes"] = symbolGraph.Nodes.Count.ToString(),
+                    ["edges"] = symbolGraph.Edges.Count.ToString(),
+                    ["diagnostics"] = symbolGraph.Diagnostics.Count.ToString()
+                });
+            if (repositorySnapshotNode is not null)
+            {
+                builder.Edge(repositorySnapshotNode, symbolGraphNode, "derives-symbol-graph",
+                    symbolGraph.StrategyVersion, envelope.Seal.KeyId,
+                    evidence.Baseline.CapturedAt);
+            }
+            builder.Edge(baselineNode, symbolGraphNode, "analyzed-by",
+                symbolGraph.StrategyVersion, envelope.Seal.KeyId,
+                evidence.Baseline.CapturedAt);
+            builder.Edge(executionNode, symbolGraphNode, "records-symbol-graph",
+                "execution-evidence", envelope.Seal.KeyId, evidence.CreatedAt);
+        }
+
         var contextStatus = string.IsNullOrWhiteSpace(evidence.ContextManifest.Id)
             ? EvidenceGraphDataStatus.Missing
             : EvidenceGraphDataStatus.Valid;
@@ -153,6 +193,7 @@ internal static class EvidenceGraphProjection
             attributes: new()
             {
                 ["strategy"] = evidence.ContextManifest.Strategy,
+                ["semanticIndex"] = evidence.ContextManifest.SemanticIndex ?? string.Empty,
                 ["files"] = evidence.ContextManifest.Files.Count.ToString(),
                 ["estimatedTokens"] = evidence.ContextManifest.EstimatedTokens.ToString()
             });
@@ -174,6 +215,15 @@ internal static class EvidenceGraphProjection
             {
                 builder.Edge(repositorySnapshotNode, contextNode, "informs-context",
                     "repository-snapshot", envelope.Seal.KeyId);
+            }
+            if (symbolGraphNode is not null &&
+                string.Equals(
+                    evidence.ContextManifest.SymbolGraphHash,
+                    evidence.CSharpSymbolGraph?.GraphHash,
+                    StringComparison.Ordinal))
+            {
+                builder.Edge(symbolGraphNode, contextNode, "informs-context",
+                    "csharp-symbol-graph", envelope.Seal.KeyId);
             }
         }
         else if (!string.IsNullOrWhiteSpace(evidence.ContextManifest.Id))

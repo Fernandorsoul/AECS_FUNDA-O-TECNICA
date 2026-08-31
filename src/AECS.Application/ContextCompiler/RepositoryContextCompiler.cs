@@ -47,13 +47,22 @@ public sealed class RepositoryContextCompiler
         string workspacePath,
         TaskContract contract,
         string baselineCommit,
-        ContextCompilationOptions? options = null)
+        ContextCompilationOptions? options = null,
+        CSharpSymbolGraph? symbolGraph = null)
     {
         var resolvedRoot = Path.GetFullPath(workspacePath);
         options ??= ContextCompilationOptions.FromBudget(contract.Budget);
         ValidateOptions(options);
+        if (symbolGraph is not null && !string.Equals(
+                symbolGraph.BaselineCommit,
+                baselineCommit,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "C# symbol graph baseline does not match the context baseline.");
+        }
 
-        var index = _indexer.Index(resolvedRoot);
+        var index = _indexer.Index(resolvedRoot, symbolGraph);
         var package = _selector.Select(
             index,
             contract.Id,
@@ -68,7 +77,8 @@ public sealed class RepositoryContextCompiler
         prompt.AppendLine($"Source: {SourceName}");
         prompt.AppendLine($"Task: {contract.Id}");
         prompt.AppendLine($"Baseline: {baselineCommit}");
-        prompt.AppendLine($"Strategy: {package.Strategy}");
+        var strategy = $"{package.Strategy}+{index.Source}";
+        prompt.AppendLine($"Strategy: {strategy}");
         prompt.AppendLine($"Limit: {options.MaxTokens} estimated tokens / {characterLimit} characters");
         prompt.AppendLine();
 
@@ -134,7 +144,8 @@ public sealed class RepositoryContextCompiler
         var manifestHash = HashManifest(
             contract.Id,
             baselineCommit,
-            package.Strategy,
+            strategy,
+            index.SemanticAuthority ? index.SymbolGraphHash : null,
             options,
             characterLimit,
             estimatedTokens,
@@ -149,7 +160,9 @@ public sealed class RepositoryContextCompiler
             TaskId = contract.Id,
             BaselineCommit = baselineCommit,
             Source = SourceName,
-            Strategy = package.Strategy,
+            Strategy = strategy,
+            SemanticIndex = index.Source,
+            SymbolGraphHash = index.SemanticAuthority ? index.SymbolGraphHash : null,
             MaxTokens = options.MaxTokens,
             MaxCharacters = characterLimit,
             EstimatedTokens = estimatedTokens,
@@ -175,6 +188,7 @@ public sealed class RepositoryContextCompiler
             taskId,
             baselineCommit,
             "not-compiled",
+            null,
             new ContextCompilationOptions(),
             0,
             0,
@@ -279,6 +293,7 @@ public sealed class RepositoryContextCompiler
         string taskId,
         string baselineCommit,
         string strategy,
+        string? symbolGraphHash,
         ContextCompilationOptions options,
         int characterLimit,
         int estimatedTokens,
@@ -292,6 +307,7 @@ public sealed class RepositoryContextCompiler
         canonical.AppendLine(taskId);
         canonical.AppendLine(baselineCommit);
         canonical.AppendLine(strategy);
+        canonical.AppendLine(symbolGraphHash ?? string.Empty);
         canonical.AppendLine($"{options.MaxTokens}|{characterLimit}|{options.MaxFileCharacters}");
         canonical.AppendLine($"{estimatedTokens}|{totalCharacters}|{eligibleFileCount}|{omittedFileCount}|{truncated}");
         foreach (var file in files)

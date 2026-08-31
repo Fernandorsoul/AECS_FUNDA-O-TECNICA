@@ -30,6 +30,9 @@ public sealed class StagedExecutionPipelineTests
         result.RepositorySnapshot.BaselineCommit.Should().Be(result.Baseline.Commit);
         result.RepositorySnapshot.TaskContractId.Should().Be(result.Contract.Id);
         result.RepositorySnapshot.Files.Should().ContainSingle(file => file.Path == "README.md");
+        result.CSharpSymbolGraph.GraphHash.Should().StartWith("sha256:");
+        result.CSharpSymbolGraph.RepositorySnapshotHash.Should()
+            .Be(result.RepositorySnapshot.SnapshotHash);
         result.OriginalRepositoryUnchanged.Should().BeTrue();
         File.Exists(System.IO.Path.Combine(repository.Path, "src", "new-file.txt")).Should().BeFalse();
         (await repository.StatusAsync()).Should().BeEmpty();
@@ -39,6 +42,8 @@ public sealed class StagedExecutionPipelineTests
         evidence!.CandidateChangeSet.DiffHash.Should().Be(result.CandidateChangeSet.DiffHash);
         evidence.RepositorySnapshot.Should().NotBeNull();
         evidence.RepositorySnapshot!.SnapshotHash.Should().Be(result.RepositorySnapshot.SnapshotHash);
+        evidence.CSharpSymbolGraph.Should().NotBeNull();
+        evidence.CSharpSymbolGraph!.GraphHash.Should().Be(result.CSharpSymbolGraph.GraphHash);
         evidence.FinalDecision.Decision.Should().Be(TaskDecision.Verified);
         evidence.VerificationResults.Should().OnlyContain(item =>
             !evidence.FinalDecision.RequiredVerifiers.Contains(item.Verifier) ||
@@ -67,8 +72,11 @@ public sealed class StagedExecutionPipelineTests
             "the context source worktree must be disposed after execution");
         agent.LastRequest.CodeContext.Should().ContainKey("src/ExistingHandler.cs")
             .WhoseValue.Should().Be(handler);
-        agent.LastRequest.ContextPrompt.Should().Contain("class Fixture.ExistingHandler");
+        agent.LastRequest.ContextPrompt.Should().Contain("class ExistingHandler");
+        agent.LastRequest.ContextPrompt.Should().NotContain("Symbols:");
         result.ContextManifest.Source.Should().Be("isolated-git-worktree");
+        result.ContextManifest.SemanticIndex.Should().Be("textual-file-inventory");
+        result.ContextManifest.SymbolGraphHash.Should().BeNull();
         result.ContextManifest.BaselineCommit.Should().Be(result.Baseline.Commit);
         result.ContextManifest.Files.Should().ContainSingle(file =>
             file.Path == "src/ExistingHandler.cs" && file.Sha256.StartsWith("sha256:"));

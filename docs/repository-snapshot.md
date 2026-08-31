@@ -67,4 +67,4 @@ A correspondência dos defaults vale para qualquer segmento com o nome conhecido
 - o evento assinado registra hashes esperado/observado e o diff;
 - evidências antigas sem snapshot continuam reproduzíveis pelo fluxo legado e não recebem um snapshot retroativo.
 
-No Evidence Graph, o snapshot é um nó autenticado ligado ao TaskContract, à baseline, à execução e ao contexto compilado.
+O snapshot também é a lista de autorização do [CSharpSymbolGraph](csharp-symbol-graph.md): soluções, projetos e documentos fora dele não podem originar fatos semânticos. No Evidence Graph, o snapshot é um nó autenticado ligado ao TaskContract, à baseline, à execução, ao grafo semântico e ao contexto compilado.

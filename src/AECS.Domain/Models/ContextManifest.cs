@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace AECS.Domain.Models;
 
 public sealed class ContextFileManifest
@@ -18,6 +20,10 @@ public sealed class ContextManifest
     public string BaselineCommit { get; init; } = string.Empty;
     public string Source { get; init; } = "isolated-git-worktree";
     public string Strategy { get; init; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SemanticIndex { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SymbolGraphHash { get; init; }
     public int MaxTokens { get; init; }
     public int MaxCharacters { get; init; }
     public int EstimatedTokens { get; init; }

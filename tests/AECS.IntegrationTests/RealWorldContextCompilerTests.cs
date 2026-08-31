@@ -79,8 +79,11 @@ public sealed class RealWorldContextCompilerTests
             path.StartsWith("Backend/AgronomoPlus.Api/", StringComparison.OrdinalIgnoreCase));
         result.Prompt.Should().Contain("CreateAnimalHandler");
         result.Prompt.Should().Contain("CreateAnimalCommand");
-        result.Prompt.Should().Contain("AgronomoPlus.Domain.Models.Animal");
+        result.Prompt.Should().NotContain("Symbols:",
+            "textual fallback must not promote regex matches to semantic facts");
         result.Prompt.Should().Contain("CreateAnimalHandlerTests");
+        result.Manifest.SemanticIndex.Should().Be("textual-file-inventory");
+        result.Manifest.SymbolGraphHash.Should().BeNull();
         result.Manifest.Files.Should().OnlyContain(file =>
             file.Sha256.StartsWith("sha256:") && file.IncludedSha256.StartsWith("sha256:"));
 

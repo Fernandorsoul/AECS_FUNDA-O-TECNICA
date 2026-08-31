@@ -41,6 +41,7 @@ public sealed class EvidenceGraphTests
             EvidenceGraphNodeKind.AgentAttempt,
             EvidenceGraphNodeKind.Baseline,
             EvidenceGraphNodeKind.RepositorySnapshot,
+            EvidenceGraphNodeKind.CSharpSymbolGraph,
             EvidenceGraphNodeKind.Context,
             EvidenceGraphNodeKind.Candidate,
             EvidenceGraphNodeKind.Command,
@@ -61,7 +62,11 @@ public sealed class EvidenceGraphTests
             .Hashes["diffSha256"].Should().Be(evidence.CandidateChangeSet.DiffHash);
         first.Edges.Count(item => item.Kind == "authenticated-next").Should().Be(2);
         first.Edges.Should().Contain(item => item.Kind == "described-by");
+        first.Edges.Should().Contain(item => item.Kind == "derives-symbol-graph");
+        first.Edges.Should().Contain(item => item.Kind == "records-symbol-graph");
         first.Edges.Should().Contain(item => item.Kind == "informs-context");
+        first.Nodes.Single(item => item.Kind == EvidenceGraphNodeKind.CSharpSymbolGraph)
+            .Hashes["graphSha256"].Should().Be(evidence.CSharpSymbolGraph!.GraphHash);
         first.Diagnostics.Should().BeEmpty();
 
         var filters = new EvidenceGraphQuery[]
@@ -200,6 +205,8 @@ public sealed class EvidenceGraphTests
             var baseline = Convert.ToHexString(RandomNumberGenerator.GetBytes(20)).ToLowerInvariant();
             var diff = "diff --git a/src/file.cs b/src/file.cs\n-old\n+new\n";
             var now = DateTime.UtcNow;
+            var repositorySnapshot = Snapshot(taskId, baseline);
+            var symbolGraph = SymbolGraph(repositorySnapshot, baseline);
             return new ExecutionEvidence
             {
                 TaskContract = new TaskContract
@@ -237,7 +244,8 @@ public sealed class EvidenceGraphTests
                     RepositoryPath = repositoryPath,
                     CapturedAt = now
                 },
-                RepositorySnapshot = Snapshot(taskId, baseline),
+                RepositorySnapshot = repositorySnapshot,
+                CSharpSymbolGraph = symbolGraph,
                 BaselineCommands =
                 [
                     new ExecutionCommandEvidence
@@ -258,7 +266,10 @@ public sealed class EvidenceGraphTests
                     TaskId = invalidContextReference ? "another-task" : taskId,
                     BaselineCommit = baseline,
                     ManifestHash = Hash("context"),
-                    Source = "isolated-git-worktree"
+                    Source = "isolated-git-worktree",
+                    Strategy = "scope+task-relevance+tests+roslyn-symbol-graph",
+                    SemanticIndex = "roslyn-symbol-graph",
+                    SymbolGraphHash = symbolGraph.GraphHash
                 },
                 CandidateChangeSet = new CandidateChangeSet
                 {
@@ -346,6 +357,8 @@ public sealed class EvidenceGraphTests
             ActualDiffHash = evidence.CandidateChangeSet.DiffHash,
             ExpectedRepositorySnapshotHash = evidence.RepositorySnapshot?.SnapshotHash,
             ActualRepositorySnapshotHash = evidence.RepositorySnapshot?.SnapshotHash,
+            ExpectedCSharpSymbolGraphHash = evidence.CSharpSymbolGraph?.GraphHash,
+            ActualCSharpSymbolGraphHash = evidence.CSharpSymbolGraph?.GraphHash,
             RepositorySnapshotDiff = evidence.RepositorySnapshot is null
                 ? null
                 : new RepositorySnapshotDiff
@@ -404,6 +417,31 @@ public sealed class EvidenceGraphTests
                 ConfigurationHash = configurationHash,
                 BaselineCommit = baseline,
                 TaskContractId = taskId
+            };
+        }
+
+        private static CSharpSymbolGraph SymbolGraph(
+            RepositorySnapshot snapshot,
+            string baseline)
+        {
+            var draft = new CSharpSymbolGraph
+            {
+                RepositorySnapshotHash = snapshot.SnapshotHash,
+                BaselineCommit = baseline,
+                CompilerVersion = "5.0.0",
+                MsBuildVersion = "17.14.0",
+                SdkVersion = "9.0.100",
+                LoadSucceeded = true
+            };
+            return new CSharpSymbolGraph
+            {
+                GraphHash = CSharpSymbolGraphFingerprint.Create(draft),
+                RepositorySnapshotHash = draft.RepositorySnapshotHash,
+                BaselineCommit = draft.BaselineCommit,
+                CompilerVersion = draft.CompilerVersion,
+                MsBuildVersion = draft.MsBuildVersion,
+                SdkVersion = draft.SdkVersion,
+                LoadSucceeded = draft.LoadSucceeded
             };
         }
 

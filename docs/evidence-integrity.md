@@ -2,6 +2,8 @@
 
 Os backends JSON e PostgreSQL persistem cada execução em um envelope `aecs.execution-evidence/v1`. O payload base é serializado de forma canônica, recebe SHA-256 e é assinado com RSA-PSS/SHA-256. `promote`, `export-patch` e `replay` validam schema, hash, assinatura e isolamento do store antes de usar qualquer campo da evidência.
 
+Quando presente, `CSharpSymbolGraph` também é validado estruturalmente antes da leitura: versões, vínculo ao `RepositorySnapshot` e à baseline, limites, caminhos relativos, unicidade, hashes de projetos/nós/arestas e referências entre elementos precisam ser consistentes. O store recalcula `graphHash`; o `ContextManifest` só pode declarar o mesmo hash autenticado. Evidências legadas sem esse campo permanecem compatíveis, mas não ganham autoridade semântica retroativa.
+
 ## Envelope e cadeia de eventos
 
 O documento separa três elementos:

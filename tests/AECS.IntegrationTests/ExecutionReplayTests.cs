@@ -29,6 +29,10 @@ public sealed class ExecutionReplayTests
             .Be(execution.RepositorySnapshot.SnapshotHash);
         replay.Evidence.ActualRepositorySnapshotHash.Should()
             .Be(execution.RepositorySnapshot.SnapshotHash);
+        replay.Evidence.ExpectedCSharpSymbolGraphHash.Should()
+            .Be(execution.CSharpSymbolGraph.GraphHash);
+        replay.Evidence.ActualCSharpSymbolGraphHash.Should()
+            .Be(execution.CSharpSymbolGraph.GraphHash);
         replay.Evidence.RepositorySnapshotDiff.Should().NotBeNull();
         replay.Evidence.RepositorySnapshotDiff!.HasChanges.Should().BeFalse();
         replay.Evidence.Tools.Should().OnlyContain(item =>
@@ -82,6 +86,9 @@ public sealed class ExecutionReplayTests
                 "tool provenance is authenticated separately from repository content addressing");
         replay.Evidence.RepositorySnapshotDiff!.HasChanges.Should().BeFalse(
             "the inventory files match even though the authenticated tool environment changed");
+        replay.Evidence.ActualCSharpSymbolGraphHash.Should().Be(
+            replay.Evidence.ExpectedCSharpSymbolGraphHash,
+            "changing the probed tool version does not change the SDK actually loaded by Roslyn/MSBuild");
     }
 
     [Fact]

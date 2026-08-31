@@ -3,6 +3,7 @@ using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
 using AECS.Application.ControlKernel;
 using AECS.Application.RepositorySnapshots;
+using AECS.Application.SymbolGraphs;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -21,6 +22,7 @@ public sealed class StagedExecutionResult
     public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public BaselineSnapshot Baseline { get; init; } = new();
     public RepositorySnapshot RepositorySnapshot { get; init; } = new();
+    public CSharpSymbolGraph CSharpSymbolGraph { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public IReadOnlyList<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public IReadOnlyList<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
@@ -49,6 +51,7 @@ public sealed class StagedExecutionPipeline
     private readonly AgentExecutionCoordinator _agentExecutionCoordinator;
     private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
     private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
+    private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -59,7 +62,8 @@ public sealed class StagedExecutionPipeline
         TimeSpan? maximumRetryBackoff = null,
         IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
         IReadOnlyList<ISecurityScanner>? securityScanners = null,
-        RepositorySnapshotBuilder? repositorySnapshotBuilder = null)
+        RepositorySnapshotBuilder? repositorySnapshotBuilder = null,
+        ICSharpSymbolGraphBuilder? symbolGraphBuilder = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -70,6 +74,7 @@ public sealed class StagedExecutionPipeline
         _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
         _repositorySnapshotBuilder = repositorySnapshotBuilder ??
             new RepositorySnapshotBuilder(processRunner);
+        _symbolGraphBuilder = symbolGraphBuilder ?? new RoslynSymbolGraphBuilder();
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -107,6 +112,7 @@ public sealed class StagedExecutionPipeline
         var baselineCommands = new List<ExecutionCommandEvidence>();
         List<VerificationResult> baselineVerificationResults;
         RepositorySnapshot repositorySnapshot;
+        CSharpSymbolGraph symbolGraph;
         await using (var preflightWorkspace = await _workspaceManager.CreateWorkspaceAsync(
             baseline,
             budgetScope.Token))
@@ -135,6 +141,10 @@ public sealed class StagedExecutionPipeline
                 contract,
                 baselineCommands,
                 budgetScope.Token);
+            symbolGraph = await _symbolGraphBuilder.BuildAsync(
+                preflightWorkspace.Path,
+                repositorySnapshot,
+                cancellationToken: budgetScope.Token);
             baselineVerificationResults = await VerifyBaselineAsync(
                 stagedProcessRunner,
                 baselineContext,
@@ -173,6 +183,7 @@ public sealed class StagedExecutionPipeline
                 plan.Model,
                 baseline,
                 repositorySnapshot,
+                symbolGraph,
                 agentRunId,
                 startedAt,
                 baselineAgentResult,
@@ -212,7 +223,8 @@ public sealed class StagedExecutionPipeline
             var compiledContext = _contextCompiler.Compile(
                 workspace.Path,
                 contract,
-                baseline.Commit);
+                baseline.Commit,
+                symbolGraph: symbolGraph);
             contextManifest = compiledContext.Manifest;
 
             var agentOutcome = await _agentExecutionCoordinator.ExecuteAsync(
@@ -288,6 +300,7 @@ public sealed class StagedExecutionPipeline
             plan.Model,
             baseline,
             repositorySnapshot,
+            symbolGraph,
             agentRunId,
             startedAt,
             agentResult,
@@ -311,6 +324,7 @@ public sealed class StagedExecutionPipeline
         string model,
         BaselineSnapshot baseline,
         RepositorySnapshot repositorySnapshot,
+        CSharpSymbolGraph symbolGraph,
         string agentRunId,
         DateTime startedAt,
         AgentRunResult agentResult,
@@ -368,6 +382,7 @@ public sealed class StagedExecutionPipeline
                 budgetExhaustionReason),
             Baseline = baseline,
             RepositorySnapshot = repositorySnapshot,
+            CSharpSymbolGraph = symbolGraph,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,
             ContextManifest = contextManifest,
@@ -408,6 +423,7 @@ public sealed class StagedExecutionPipeline
             BudgetUsage = evidence.BudgetUsage,
             Baseline = baseline,
             RepositorySnapshot = repositorySnapshot,
+            CSharpSymbolGraph = symbolGraph,
             CandidateChangeSet = candidate,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,

@@ -11,6 +11,7 @@ public enum EvidenceGraphNodeKind
     AgentAttempt,
     Baseline,
     RepositorySnapshot,
+    CSharpSymbolGraph,
     Context,
     Candidate,
     Command,
