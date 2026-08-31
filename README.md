@@ -181,6 +181,23 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- replay `
 
 O resultado separa baseline ausente, divergência do candidato, divergência do ambiente e gate não reproduzível. Cada tentativa válida vira um evento de replay assinado e ligado à evidência original. Consulte [Replay de evidências](docs/evidence-replay.md).
 
+### Consultar o Evidence Graph
+
+As evidências autenticadas podem ser listadas, inspecionadas e rastreadas por causalidade sem um banco de grafo separado:
+
+```powershell
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- evidence list `
+  --repo C:\caminho\para\repositorio `
+  --decision Verified
+
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- evidence trace `
+  --repo C:\caminho\para\repositorio `
+  --evidence <evidence-id> `
+  --format dot
+```
+
+Filtros por task, run, candidato, baseline, decisão e promoção são combináveis. JSON e DOT podem ser redirecionados para arquivos; consultas ficam restritas ao caminho exato do repositório autenticado. Consulte [Evidence Graph](docs/evidence-graph.md).
+
 ### Fallback em nuvem
 
 O comando `run` e o modo `experiment` tentam o Ollama primeiro. Se a execução local falhar ou não produzir arquivos, podem recorrer a uma API com endpoint compatível com `POST /chat/completions` da OpenAI.
@@ -280,6 +297,7 @@ A referência de campos, padrões de escopo, valores padrão e regras de decisã
 | Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
 | Replay | `replay --repo <path> --evidence <id> --evidence-store <json\|postgres>` | Reproduz candidato e gates sem chamar o agente |
+| Evidence Graph | `evidence <show\|list\|trace> --repo <path> [--evidence <id>] [--format <text\|json\|dot>]` | Consulta e exporta causalidade autenticada |
 | Rotação de chave | `evidence-key rotate [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
 
 Comandos disponíveis dentro do Jarvis:
@@ -319,6 +337,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
 - [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
 - [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;
+- [Evidence Graph](docs/evidence-graph.md) — consultas, IDs/arestas estáveis, autorização e exportação JSON/DOT;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using AECS.Application.EvidenceGraph;
 using AECS.Domain.Enums;
 using AECS.Domain.Exceptions;
 using AECS.Domain.Models;
@@ -126,6 +127,65 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
         var load = () => fixture.Store.LoadAsync(evidence.Id, CancellationToken.None);
         await load.Should().ThrowAsync<EvidenceIntegrityException>()
             .WithMessage("*replay event 1 payload hash is invalid*");
+    }
+
+    [PostgreSqlFact]
+    public async Task EvidenceGraphQueries_FilterProjectAndEnforceRepositoryReadScope()
+    {
+        await using var fixture = PostgreSqlEvidenceFixture.Create();
+        var evidence = fixture.CreateEvidence();
+        Directory.CreateDirectory(evidence.Baseline.RepositoryPath);
+        await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+        var promotion = fixture.CreatePromotion(evidence, "graph-operator");
+        var replay = fixture.CreateReplay(evidence);
+        await fixture.Store.AppendPromotionAsync(
+            evidence.Id,
+            promotion,
+            CancellationToken.None);
+        await fixture.Store.AppendReplayAsync(evidence.Id, replay, CancellationToken.None);
+        var service = new EvidenceGraphService(fixture.Store);
+        var scope = new EvidenceReadScope
+        {
+            RepositoryPath = evidence.Baseline.RepositoryPath,
+            Principal = "postgresql-integration-test"
+        };
+
+        var list = await service.ListAsync(new EvidenceGraphQuery
+        {
+            TaskId = evidence.TaskContract.Id,
+            RunId = evidence.AgentRun.Id,
+            CandidateId = evidence.CandidateChangeSet.Id,
+            BaselineCommit = evidence.Baseline.Commit,
+            Decision = evidence.FinalDecision.Decision,
+            PromotionId = promotion.Id
+        }, scope, CancellationToken.None);
+        list.Items.Should().ContainSingle().Which.EvidenceId.Should().Be(evidence.Id);
+
+        var graph = await service.TraceAsync(evidence.Id, scope, CancellationToken.None);
+        graph!.Nodes.Should().Contain(item =>
+            item.Kind == EvidenceGraphNodeKind.Promotion &&
+            item.Id == $"promotion:{promotion.Id:N}");
+        graph.Nodes.Should().Contain(item =>
+            item.Kind == EvidenceGraphNodeKind.Replay &&
+            item.Id == $"replay:{replay.Id:N}");
+        graph.Edges.Count(item => item.Kind == "authenticated-next").Should().Be(2);
+
+        var otherRepository = Path.Combine(fixture.RootPath, "other-repository");
+        Directory.CreateDirectory(otherRepository);
+        var unauthorizedScope = new EvidenceReadScope
+        {
+            RepositoryPath = otherRepository,
+            Principal = scope.Principal
+        };
+        (await service.ListAsync(
+            new EvidenceGraphQuery(),
+            unauthorizedScope,
+            CancellationToken.None)).Items.Should().BeEmpty();
+        var unauthorized = () => service.ShowAsync(
+            evidence.Id,
+            unauthorizedScope,
+            CancellationToken.None);
+        await unauthorized.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
     private sealed class PostgreSqlEvidenceFixture : IAsyncDisposable
