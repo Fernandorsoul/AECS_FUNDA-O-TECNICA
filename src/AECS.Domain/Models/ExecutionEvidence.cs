@@ -1,4 +1,5 @@
 using AECS.Domain.Enums;
+using System.Text.Json.Serialization;
 
 namespace AECS.Domain.Models;
 
@@ -20,6 +21,8 @@ public class ExecutionEvidence
     public List<AgentAttemptEvidence> AgentAttempts { get; init; } = [];
     public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public BaselineSnapshot Baseline { get; init; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RepositorySnapshot? RepositorySnapshot { get; init; }
     public List<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public List<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
     public ContextManifest ContextManifest { get; init; } = new();

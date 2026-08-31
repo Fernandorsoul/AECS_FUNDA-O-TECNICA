@@ -18,7 +18,8 @@ flowchart TD
     A[TaskContract] --> B[RiskClassifier e ExecutionController]
     B --> C[Captura de commit, branch e status]
     C --> D[Worktree descartável de preflight]
-    D --> E{Build/testes da baseline}
+    D --> S[RepositorySnapshot da baseline]
+    S --> E{Build/testes da baseline}
     E -->|falha| X[Decisão Rejected]
     E -->|passa| F[Worktree descartável do candidato]
     F --> G[Contexto limitado e manifesto]
@@ -38,15 +39,16 @@ O pipeline executa as seguintes etapas:
 1. `TaskContractParser` converte o YAML, e `RiskClassifier` pode elevar o risco declarado.
 2. `ExecutionBudgetScope` inicia um wall clock compartilhado por preflight, agente, retries e verificações.
 3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada.
-4. Um worktree detached temporário executa build e a matriz de suites da baseline conforme o perfil do contrato. Somente falha de gate obrigatório impede a chamada do agente; gates opcionais permanecem na evidência.
-5. Depois de confirmar que o checkout original não mudou, um segundo worktree detached é criado no mesmo commit.
-6. `RepositoryContextCompiler` seleciona contexto dentro do escopo, aplica limites e entrega ao agente conteúdo e prompt acompanhados por um manifesto.
-7. `AgentExecutionCoordinator` chama o runtime e repete apenas falhas transitórias, rate limit e timeout enquanto ainda houver tentativas, tokens, custo e tempo.
-8. `FileApplicator` interpreta blocos `FILE:`, valida todos os destinos e somente então escreve no worktree isolado.
-9. Git adiciona o estado do worktree e deriva o `CandidateChangeSet`: arquivos adicionados, modificados ou removidos, diff binário e SHA-256. Alegações de arquivos feitas pelo agente não substituem essa leitura.
-10. Os verificadores avaliam os pré-requisitos da trust boundary e, quando habilitados, build, testes, regras semânticas e critérios de aceite.
-11. `DecisionEngine` exige exatamente um `Pass` para cada gate obrigatório. Resultado ausente, duplicado, `Skip`, `Fail` ou `Error` rejeita a execução.
-12. O worktree é removido, o checkout original é conferido novamente e o `IExecutionEvidenceStore` selecionado (`json` ou `postgres`) persiste o resultado autenticado.
+4. `RepositorySnapshotBuilder` lê exclusivamente a árvore Git do commit no worktree detached e produz o inventário versionado e endereçado por conteúdo da baseline.
+5. O mesmo worktree temporário executa build e a matriz de suites da baseline conforme o perfil do contrato. Somente falha de gate obrigatório impede a chamada do agente; gates opcionais permanecem na evidência.
+6. Depois de confirmar que o checkout original não mudou, um segundo worktree detached é criado no mesmo commit.
+7. `RepositoryContextCompiler` seleciona contexto dentro do escopo, aplica limites e entrega ao agente conteúdo e prompt acompanhados por um manifesto.
+8. `AgentExecutionCoordinator` chama o runtime e repete apenas falhas transitórias, rate limit e timeout enquanto ainda houver tentativas, tokens, custo e tempo.
+9. `FileApplicator` interpreta blocos `FILE:`, valida todos os destinos e somente então escreve no worktree isolado.
+10. Git adiciona o estado do worktree e deriva o `CandidateChangeSet`: arquivos adicionados, modificados ou removidos, diff binário e SHA-256. Alegações de arquivos feitas pelo agente não substituem essa leitura.
+11. Os verificadores avaliam os pré-requisitos da trust boundary e, quando habilitados, build, testes, regras semânticas e critérios de aceite.
+12. `DecisionEngine` exige exatamente um `Pass` para cada gate obrigatório. Resultado ausente, duplicado, `Skip`, `Fail` ou `Error` rejeita a execução.
+13. O worktree é removido, o checkout original é conferido novamente e o `IExecutionEvidenceStore` selecionado (`json` ou `postgres`) persiste o resultado autenticado.
 
 ## Invariantes da trust boundary
 
@@ -55,6 +57,7 @@ O pipeline executa as seguintes etapas:
 | Caminhos na resposta do agente | `FileApplicator` | rejeita caminho absoluto, traversal, `.git`, symlink/junction e destino duplicado; a validação é all-or-nothing antes da escrita |
 | Arquivos alterados | Git no worktree | `CandidateChangeSet.ChangedFiles` vem de `git diff --cached --name-status`, não de `AgentRunResult.FilesChanged` |
 | Conteúdo do candidato | diff Git persistido | o SHA-256 liga a evidência ao patch exato |
+| Estrutura da baseline | árvore Git do commit isolado | o snapshot usa caminhos relativos e IDs de blobs, sem confiar no filesystem não versionado |
 | Estado do original | commit, branch e status capturados | é revalidado após preflight, antes de publicar e antes de qualquer promoção |
 | Resultado de comandos | processo real | argumentos, working directory, duração, saída, exit code, timeout e cancelamento são preservados |
 | Critério de aceite | verificador ou teste declarado | texto sem evidência executável não é suficiente para um critério obrigatório |
@@ -72,6 +75,14 @@ O repositório informado à CLI precisa:
 - continuar no mesmo commit, branch e status durante toda a execução.
 
 Preflight e candidato usam worktrees separados em `%TEMP%`/`$TMPDIR`, ambos detached no commit da baseline. A limpeza usa token não cancelável para que timeout ou cancelamento não deixem worktrees do agente ativos. O AECS detecta mudanças concorrentes no checkout original e falha fechado; ele não bloqueia processos externos durante uma execução staged.
+
+## RepositorySnapshot da baseline
+
+Antes de build ou testes, `RepositorySnapshotBuilder` executa `git ls-tree` contra o commit autenticado. O resultado `aecs.repository-snapshot/v1` inventaria arquivos, soluções, projetos, linguagens, frameworks, manifests, pacotes, entrypoints, suites e relações de solução/projeto, sempre com caminhos relativos e sem persistir conteúdo-fonte.
+
+Arquivos usam o object ID do blob Git (`git:<oid>`). O `snapshotHash` SHA-256 cobre o inventário ordenado, as versões do schema/estratégia e a configuração de exclusões; o `configurationHash` cobre somente o perfil de descoberta. Commit, TaskContract e ambiente de ferramentas ficam associados ao snapshot e protegidos pelo envelope autenticado, mas não entram no endereço de conteúdo. Assim, conteúdo e configuração iguais mantêm o mesmo hash mesmo em outro runtime, enquanto divergências ambientais continuam explícitas.
+
+Diretórios de VCS, IDE, dependências, builds e artefatos são excluídos por padrão. O perfil pode acrescentar diretórios relativos; arquivos sensíveis, binários de build, symlinks Git e submodules não entram no inventário. Manifests reconhecidos são lidos com limite de 8 MiB, XML sem DTD e validação contra traversal/reparse points. Detalhes estão em [RepositorySnapshot determinístico](repository-snapshot.md).
 
 ## Perfil de build e suites
 
@@ -147,6 +158,7 @@ Cada documento preserva:
 - contrato, risco efetivo, execução do agente e cada tentativa;
 - consumo agregado de tokens, custo, tempo e motivo de exaustão;
 - baseline, comandos e verificações de preflight;
+- `RepositorySnapshot` da baseline, configuração de descoberta e proveniência das ferramentas;
 - manifesto de contexto;
 - `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
 - matriz de suites com descoberta/contagens, matriz de critérios de aceite, decisão final e transições de estado;
@@ -166,11 +178,11 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 ## Replay de evidência
 
-`ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; candidato idêntico com resultados diferentes é divergência do ambiente; gate ausente recebe classificação própria. O resultado é anexado à cadeia como evento assinado, e o checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).
+`ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, reconstrói e compara o `RepositorySnapshot`, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; snapshot ou ambiente divergente com candidato idêntico é divergência do ambiente; gate ausente recebe classificação própria. O evento assinado preserva os hashes esperado/observado e o diff de arquivos do snapshot. O checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).
 
 ## Evidence Graph
 
-`IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
+`IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. O snapshot é um nó próprio ligado à tarefa, baseline, execução e contexto. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
 
 ## Mapa de componentes
 

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="AgronomoPlus.Domain/AgronomoPlus.Domain.csproj" />
+  <Project Path="AgronomoPlus.Application/AgronomoPlus.Application.csproj" />
+  <Project Path="AgronomoPlus.Tests/AgronomoPlus.Tests.csproj" />
+</Solution>

@@ -1,5 +1,6 @@
 using AECS.Application.Staging;
 using AECS.Application.Verification;
+using AECS.Application.RepositorySnapshots;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -26,6 +27,7 @@ public sealed class ExecutionReplayService
     private readonly GitWorkspaceManager _workspaceManager;
     private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
     private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
+    private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
 
     public ExecutionReplayService(
         IProcessRunner processRunner,
@@ -41,6 +43,7 @@ public sealed class ExecutionReplayService
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
             new DefaultStagedProcessRunnerFactory(processRunner);
         _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
+        _repositorySnapshotBuilder = new RepositorySnapshotBuilder(processRunner);
     }
 
     public async Task<ExecutionReplayResult> ReplayAsync(
@@ -111,6 +114,9 @@ public sealed class ExecutionReplayService
             BaselineCommit = original.Baseline.Commit,
             ExpectedDiffHash = original.CandidateChangeSet.DiffHash,
             ActualDiffHash = run.ActualDiffHash,
+            ExpectedRepositorySnapshotHash = original.RepositorySnapshot?.SnapshotHash,
+            ActualRepositorySnapshotHash = run.ActualRepositorySnapshotHash,
+            RepositorySnapshotDiff = run.RepositorySnapshotDiff,
             Tools = run.Tools,
             Commands = run.Commands,
             Gates = run.Gates,
@@ -185,6 +191,20 @@ public sealed class ExecutionReplayService
             stagedProcessRunner,
             baselineContext,
             cancellationToken);
+        RepositorySnapshot? replaySnapshot = null;
+        RepositorySnapshotDiff? repositorySnapshotDiff = null;
+        if (original.RepositorySnapshot is not null)
+        {
+            replaySnapshot = await _repositorySnapshotBuilder.BuildAsync(
+                workspace.Path,
+                original.Baseline.Commit,
+                original.TaskContract,
+                baselineCommands,
+                cancellationToken);
+            repositorySnapshotDiff = RepositorySnapshotComparer.Compare(
+                original.RepositorySnapshot,
+                replaySnapshot);
+        }
         var baselineResults = await VerifyBaselineAsync(
             stagedProcessRunner,
             baselineContext,
@@ -211,7 +231,9 @@ public sealed class ExecutionReplayService
                     "baseline",
                     NonProbeCommands(original.BaselineCommands),
                     NonProbeCommands(baselineCommands)).ToList(),
-                Gates = baselineComparisons.ToList()
+                Gates = baselineComparisons.ToList(),
+                ActualRepositorySnapshotHash = replaySnapshot?.SnapshotHash,
+                RepositorySnapshotDiff = repositorySnapshotDiff
             };
         }
 
@@ -262,6 +284,11 @@ public sealed class ExecutionReplayService
         var acceptanceMatches = AcceptanceEquals(
             original.AcceptanceCriteriaResults,
             acceptanceCriteria);
+        var repositorySnapshotMatches = original.RepositorySnapshot is null ||
+            string.Equals(
+                original.RepositorySnapshot.SnapshotHash,
+                replaySnapshot?.SnapshotHash,
+                StringComparison.Ordinal);
 
         ExecutionReplayOutcome outcome;
         string message;
@@ -269,6 +296,11 @@ public sealed class ExecutionReplayService
         {
             outcome = ExecutionReplayOutcome.CandidateDivergence;
             message = "Reconstructed candidate differs from the authenticated candidate hash or file set.";
+        }
+        else if (!repositorySnapshotMatches)
+        {
+            outcome = ExecutionReplayOutcome.EnvironmentDivergence;
+            message = "The baseline repository snapshot diverged from the authenticated inventory.";
         }
         else if (tools.Any(item => item.Status == ReplayComparisonStatus.Missing) ||
                  gates.Any(item => item.Status is ReplayComparisonStatus.NotReproducible or
@@ -289,7 +321,8 @@ public sealed class ExecutionReplayService
         else
         {
             outcome = ExecutionReplayOutcome.Reproduced;
-            message = "Candidate, tool versions, commands, gates, and acceptance artifacts were reproduced.";
+            message = "Candidate, repository snapshot, tool versions, commands, gates, and " +
+                "acceptance artifacts were reproduced.";
         }
 
         return new ReplayRun
@@ -300,7 +333,9 @@ public sealed class ExecutionReplayService
             Tools = tools,
             Commands = commands,
             Gates = gates,
-            AcceptanceCriteria = acceptanceCriteria
+            AcceptanceCriteria = acceptanceCriteria,
+            ActualRepositorySnapshotHash = replaySnapshot?.SnapshotHash,
+            RepositorySnapshotDiff = repositorySnapshotDiff
         };
     }
 
@@ -346,6 +381,7 @@ public sealed class ExecutionReplayService
             Runtime = runtime,
             Sandbox = profile.Sandbox,
             TestSuites = profile.TestSuites,
+            RepositorySnapshot = profile.RepositorySnapshot,
             Capabilities = ExecutionCapabilityPolicy.LegacyCompatibility(
                 profile.Sandbox?.NetworkAccess == true)
         };
@@ -900,6 +936,8 @@ public sealed class ExecutionReplayService
         public List<ReplayCommandComparison> Commands { get; init; } = [];
         public List<ReplayGateComparison> Gates { get; init; } = [];
         public List<AcceptanceCriterionResult> AcceptanceCriteria { get; init; } = [];
+        public string? ActualRepositorySnapshotHash { get; init; }
+        public RepositorySnapshotDiff? RepositorySnapshotDiff { get; init; }
 
         public static ReplayRun Failed(ExecutionReplayOutcome outcome, string message) => new()
         {

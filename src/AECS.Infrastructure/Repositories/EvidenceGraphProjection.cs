@@ -105,6 +105,41 @@ internal static class EvidenceGraphProjection
         builder.Edge(executionNode, baselineNode, "uses-baseline", "execution-evidence",
             envelope.Seal.KeyId, evidence.Baseline.CapturedAt);
 
+        string? repositorySnapshotNode = null;
+        if (evidence.RepositorySnapshot is not null)
+        {
+            var snapshot = evidence.RepositorySnapshot;
+            repositorySnapshotNode = $"repository-snapshot:{snapshot.SnapshotHash[7..]}";
+            builder.Node(repositorySnapshotNode, EvidenceGraphNodeKind.RepositorySnapshot,
+                snapshot.SnapshotHash, snapshot.StrategyVersion, envelope.Seal.KeyId,
+                evidence.Baseline.CapturedAt,
+                hashes: new()
+                {
+                    ["snapshotSha256"] = snapshot.SnapshotHash,
+                    ["configurationSha256"] = snapshot.ConfigurationHash,
+                    ["gitCommit"] = snapshot.BaselineCommit
+                },
+                attributes: new()
+                {
+                    ["schemaVersion"] = snapshot.SchemaVersion,
+                    ["profileVersion"] = snapshot.ProfileVersion,
+                    ["strategyVersion"] = snapshot.StrategyVersion,
+                    ["files"] = snapshot.Files.Count.ToString(),
+                    ["projects"] = snapshot.Projects.Count.ToString(),
+                    ["solutions"] = snapshot.Solutions.Count.ToString(),
+                    ["languages"] = string.Join(";", snapshot.Languages.Select(item => item.Name)),
+                    ["frameworks"] = string.Join(";", snapshot.Frameworks),
+                    ["tools"] = string.Join(";", snapshot.Tools.Select(tool =>
+                        $"{tool.Name}={tool.Version}"))
+                });
+            builder.Edge(taskNode, repositorySnapshotNode, "configures-snapshot",
+                "task-contract", envelope.Seal.KeyId);
+            builder.Edge(baselineNode, repositorySnapshotNode, "described-by",
+                snapshot.StrategyVersion, envelope.Seal.KeyId, evidence.Baseline.CapturedAt);
+            builder.Edge(executionNode, repositorySnapshotNode, "records-snapshot",
+                "execution-evidence", envelope.Seal.KeyId, evidence.CreatedAt);
+        }
+
         var contextStatus = string.IsNullOrWhiteSpace(evidence.ContextManifest.Id)
             ? EvidenceGraphDataStatus.Missing
             : EvidenceGraphDataStatus.Valid;
@@ -135,6 +170,11 @@ internal static class EvidenceGraphProjection
         {
             builder.Edge(baselineNode, contextNode, "compiles-context", "context-manifest",
                 envelope.Seal.KeyId);
+            if (repositorySnapshotNode is not null)
+            {
+                builder.Edge(repositorySnapshotNode, contextNode, "informs-context",
+                    "repository-snapshot", envelope.Seal.KeyId);
+            }
         }
         else if (!string.IsNullOrWhiteSpace(evidence.ContextManifest.Id))
         {

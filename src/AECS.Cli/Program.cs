@@ -237,6 +237,20 @@ static async Task<int> RunReplay(string[] args)
         Console.WriteLine($"Replay evidence: {result.Evidence.Id:N}");
         Console.WriteLine($"Expected diff: {result.Evidence.ExpectedDiffHash}");
         Console.WriteLine($"Actual diff: {result.Evidence.ActualDiffHash}");
+        if (result.Evidence.ExpectedRepositorySnapshotHash is not null)
+        {
+            Console.WriteLine(
+                $"Expected repository snapshot: {result.Evidence.ExpectedRepositorySnapshotHash}");
+            Console.WriteLine(
+                $"Actual repository snapshot: {result.Evidence.ActualRepositorySnapshotHash ?? "missing"}");
+            if (result.Evidence.RepositorySnapshotDiff is not null)
+            {
+                Console.WriteLine(
+                    $"Repository snapshot diff: +{result.Evidence.RepositorySnapshotDiff.AddedFiles.Count} " +
+                    $"-{result.Evidence.RepositorySnapshotDiff.RemovedFiles.Count} " +
+                    $"~{result.Evidence.RepositorySnapshotDiff.ChangedFiles.Count}");
+            }
+        }
         foreach (var tool in result.Evidence.Tools)
             Console.WriteLine($"Tool {tool.Tool}: {tool.Status}");
         foreach (var gate in result.Evidence.Gates)
@@ -648,6 +662,12 @@ static async Task<int> RunSingle(string[] args)
     }
     if (execution.BaselineVerificationResults.Count == 0)
         Console.WriteLine("  (not required)");
+    Console.WriteLine($"Repository snapshot: {execution.RepositorySnapshot.SnapshotHash}");
+    Console.WriteLine(
+        $"Repository inventory: {execution.RepositorySnapshot.Files.Count} files, " +
+        $"{execution.RepositorySnapshot.Projects.Count} projects, " +
+        $"{execution.RepositorySnapshot.Solutions.Count} solutions, " +
+        $"{execution.RepositorySnapshot.TestSuites.Count} test suites");
     Console.WriteLine($"Context: {execution.ContextManifest.Id}");
     Console.WriteLine($"Context files: {execution.ContextManifest.Files.Count} " +
         $"({execution.ContextManifest.EstimatedTokens} estimated tokens)");

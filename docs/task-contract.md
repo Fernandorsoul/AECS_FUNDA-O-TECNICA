@@ -47,6 +47,9 @@ task:
     runtime: docker
     working_directory: .
     target: SampleProject.slnx
+    repository_snapshot:
+      version: aecs.repository-snapshot-profile/v1
+      excluded_directories: [vendor/generated]
     test_suites:
       version: aecs.test-suites/v1
       unit:
@@ -220,6 +223,7 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 | `execution.runtime` | `docker` ou `host` | `docker` | Runtime dos comandos que executam código/ferramentas do repositório staged |
 | `execution.working_directory` | caminho relativo | `.` | Diretório, dentro do worktree isolado, onde build e testes são executados |
 | `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado por build, gate legado de testes e inventário de dependências |
+| `execution.repository_snapshot` | objeto versionado | perfil v1 sem exclusões adicionais | Configura diretórios extras que não entram no inventário determinístico da baseline |
 | `execution.test_suites` | objeto versionado | ausente | Ativa os gates independentes `UnitTests`, `IntegrationTests` e `AcceptanceTests` |
 | `execution.sandbox.image` | referência OCI | SDK .NET 9 fixado | Imagem imutável; tags sem `@sha256:<digest>` são rejeitadas |
 | `execution.sandbox.cpu_limit` | decimal positivo | `1.0` | Limite de CPU passado ao Docker |
@@ -229,6 +233,22 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 | `execution.sandbox.network_access` | boolean | `false` | `false` usa `--network none`; acesso precisa ser declarado explicitamente |
 
 Quando build ou o gate legado de testes são obrigatórios, `execution.target` também é obrigatório. Em `test_suites/v1`, cada suite habilitada declara seu próprio target. O AECS falha fechado antes de chamar o agente se o perfil estiver ausente ou inválido, se o diretório/target não existir ou se algum caminho tentar atravessar a fronteira do worktree.
+
+#### Snapshot de repositório `aecs.repository-snapshot-profile/v1`
+
+Toda execução nova produz um `RepositorySnapshot` antes do build da baseline, mesmo quando `execution.repository_snapshot` é omitido. O bloco opcional permite somente acrescentar diretórios relativos à lista de exclusões:
+
+```yaml
+repository_snapshot:
+  version: aecs.repository-snapshot-profile/v1
+  excluded_directories:
+    - vendor/generated
+    - samples/large-assets
+```
+
+`version` deve ser exatamente `aecs.repository-snapshot-profile/v1`. Cada exclusão é relativa à raiz Git, normalizada com `/` e não pode ser vazia, absoluta, conter `.`/`..` nem atravessar `.git`. A ordem declarada não afeta os hashes.
+
+Os defaults excluem metadados de Git/IDE, outputs (`bin`, `obj`, `build`, `dist`, `artifacts`, `coverage`, `TestResults`), dependências materializadas (`node_modules`, `packages`) e arquivos sensíveis ou binários de build. Symlinks Git, submodules e reparse points também são recusados/excluídos. O snapshot registra somente metadados e hashes de blobs, nunca conteúdo-fonte ou valores de segredo. Consulte [RepositorySnapshot determinístico](repository-snapshot.md) para schema, hashing, inventário e replay.
 
 #### Matriz de suites `aecs.test-suites/v1`
 

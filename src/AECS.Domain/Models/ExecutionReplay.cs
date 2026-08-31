@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace AECS.Domain.Models;
 
 public enum ExecutionReplayOutcome
@@ -58,6 +60,12 @@ public sealed class ExecutionReplayEvidence
     public string BaselineCommit { get; init; } = string.Empty;
     public string ExpectedDiffHash { get; init; } = string.Empty;
     public string ActualDiffHash { get; init; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedRepositorySnapshotHash { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActualRepositorySnapshotHash { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RepositorySnapshotDiff? RepositorySnapshotDiff { get; init; }
     public List<ReplayToolComparison> Tools { get; init; } = [];
     public List<ReplayCommandComparison> Commands { get; init; } = [];
     public List<ReplayGateComparison> Gates { get; init; } = [];

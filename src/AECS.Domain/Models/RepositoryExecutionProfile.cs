@@ -26,6 +26,9 @@ public sealed class RepositoryExecutionProfile
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TestSuiteMatrix? TestSuites { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RepositorySnapshotProfile? RepositorySnapshot { get; init; }
+
     [JsonIgnore]
     public string EffectiveRuntime => string.IsNullOrWhiteSpace(Runtime)
         ? DockerRuntime
