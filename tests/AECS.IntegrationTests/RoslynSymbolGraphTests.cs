@@ -11,6 +11,7 @@ using FluentAssertions;
 
 namespace AECS.IntegrationTests;
 
+[Collection(RoslynMsBuildCollection.Name)]
 public sealed class RoslynSymbolGraphTests
 {
     [Fact]

@@ -14,6 +14,7 @@ namespace AECS.Application.SymbolGraphs;
 public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
 {
     private static readonly object RegistrationLock = new();
+    private static readonly SemaphoreSlim WorkspaceBuildLock = new(1, 1);
     private static string? _registeredMsBuildVersion;
     private static string? _registeredSdkVersion;
     private static readonly IDictionary<string, string> GlobalProperties =
@@ -47,14 +48,22 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         timeout.CancelAfter(TimeSpan.FromSeconds(limits.MaxDurationSeconds));
         var token = timeout.Token;
         token.ThrowIfCancellationRequested();
+        var lockTaken = false;
         try
         {
+            await WorkspaceBuildLock.WaitAsync(token);
+            lockTaken = true;
             return await BuildCoreAsync(root, repositorySnapshot, limits, token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException(
                 $"C# symbol graph exceeded its {limits.MaxDurationSeconds}-second limit.");
+        }
+        finally
+        {
+            if (lockTaken)
+                WorkspaceBuildLock.Release();
         }
     }
 
