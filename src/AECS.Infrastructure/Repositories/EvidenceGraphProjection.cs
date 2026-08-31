@@ -411,6 +411,23 @@ internal static class EvidenceGraphProjection
                 attributes["workspaceMount"] = command.Environment.WorkspaceMount;
                 attributes["developmentHostOverride"] =
                     command.Environment.DevelopmentHostOverride.ToString();
+                if (command.Environment.Capabilities is not null)
+                {
+                    attributes["capabilityPolicyVersion"] =
+                        command.Environment.Capabilities.PolicyVersion;
+                    attributes["capabilityAuthority"] =
+                        command.Environment.Capabilities.Authority;
+                    attributes["capabilityPolicyHash"] =
+                        command.Environment.Capabilities.PolicyHash;
+                    attributes["capabilityPhase"] =
+                        command.Environment.Capabilities.Phase;
+                    attributes["capabilityGranted"] =
+                        string.Join(";", command.Environment.Capabilities.Granted);
+                    attributes["capabilityDenied"] =
+                        string.Join(";", command.Environment.Capabilities.Denied);
+                    attributes["capabilityInjectedSecrets"] =
+                        string.Join(";", command.Environment.Capabilities.InjectedSecrets);
+                }
             }
 
             builder.Node(commandNode, EvidenceGraphNodeKind.Command,

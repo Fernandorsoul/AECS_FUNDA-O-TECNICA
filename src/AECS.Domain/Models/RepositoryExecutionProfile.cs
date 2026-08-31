@@ -18,10 +18,17 @@ public sealed class RepositoryExecutionProfile
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxExecutionProfile? Sandbox { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionCapabilityPolicy? Capabilities { get; init; }
+
     [JsonIgnore]
     public string EffectiveRuntime => string.IsNullOrWhiteSpace(Runtime)
         ? DockerRuntime
         : Runtime.Trim().ToLowerInvariant();
+
+    [JsonIgnore]
+    public ExecutionCapabilityPolicy EffectiveCapabilities =>
+        Capabilities ?? ExecutionCapabilityPolicy.RestrictiveDefault();
 }
 
 public sealed class SandboxExecutionProfile

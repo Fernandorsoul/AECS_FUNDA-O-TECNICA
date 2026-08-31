@@ -1,6 +1,7 @@
 using AECS.Application.Classification;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
+using AECS.Application.ControlKernel;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -80,6 +81,9 @@ public sealed class StagedExecutionPipeline
         var risk = _riskClassifier.Classify(inputContract);
         var contract = WithRisk(inputContract, risk);
         var plan = await _executionController.PlanAsync(contract, budgetScope.Token);
+        CapabilityPolicyGuard.EnsureNoExpansion(
+            contract.Execution.EffectiveCapabilities,
+            plan.Capabilities);
         stateMachine.TransitionTo(TaskState.Planned);
 
         var baseline = await _workspaceManager.CaptureBaselineAsync(
@@ -107,7 +111,8 @@ public sealed class StagedExecutionPipeline
                 AgentRunId = agentRunId,
                 RepoPath = preflightWorkspace.Path,
                 Contract = contract,
-                CommandEvidence = baselineCommands
+                CommandEvidence = baselineCommands,
+                Phase = "baseline"
             };
             await ToolVersionProbe.CaptureAsync(
                 stagedProcessRunner,
@@ -238,7 +243,8 @@ public sealed class StagedExecutionPipeline
                 Contract = contract,
                 AgentResult = agentResult,
                 CandidateChangeSet = candidate,
-                CommandEvidence = candidateCommands
+                CommandEvidence = candidateCommands,
+                Phase = "candidate"
             };
 
             verificationResults = await VerifyAsync(
@@ -649,6 +655,17 @@ public sealed class StagedExecutionPipeline
         {
             var environment = command.Environment ?? throw new InvalidOperationException(
                 "Staged command evidence is missing its execution environment.");
+            var capabilities = environment.Capabilities ?? throw new InvalidOperationException(
+                "Staged command evidence is missing its capability decision.");
+            var expectedCapabilities = profile.EffectiveCapabilities;
+            if (capabilities.PolicyVersion != expectedCapabilities.Version ||
+                capabilities.Authority != expectedCapabilities.Authority ||
+                capabilities.PolicyHash !=
+                    ExecutionCapabilityPolicyFingerprint.Create(expectedCapabilities))
+            {
+                throw new InvalidOperationException(
+                    "Staged command evidence does not match the authoritative capability policy.");
+            }
             if (profile.EffectiveRuntime == RepositoryExecutionProfile.DockerRuntime)
             {
                 var sandbox = profile.Sandbox ?? new SandboxExecutionProfile();

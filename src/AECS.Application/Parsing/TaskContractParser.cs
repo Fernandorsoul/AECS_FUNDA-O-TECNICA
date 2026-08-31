@@ -34,6 +34,8 @@ public class TaskContractParser
         var constraints = model.Constraints ?? model.constraints;
         var budget = model.Budget ?? model.budget;
         var execution = model.Execution ?? model.execution;
+        var capabilities = model.Capabilities ?? model.capabilities ??
+            execution?.Capabilities ?? execution?.capabilities;
         var verification = model.Verification ?? model.verification;
         var approval = model.Approval ?? model.approval;
         var acceptance = model.Acceptance ?? model.acceptance ?? [];
@@ -63,13 +65,40 @@ public class TaskContractParser
             : null;
         if (mappedSandbox is not null)
             ValidateSandbox(mappedSandbox);
+        var mappedCapabilities = MapCapabilities(capabilities);
+        if (mappedSandbox is not null)
+            ValidateCapabilityResources(mappedCapabilities, mappedSandbox);
+        var mappedAcceptance = MapAcceptanceCriteria(acceptance, acceptanceEvidence);
+        var mappedVerification = new VerificationProfile
+        {
+            Build = IsRequired(verification?.Build ?? verification?.build ?? "required"),
+            UnitTests = IsRequired(verification?.UnitTests ?? verification?.unit_tests ?? "required"),
+            IntegrationTests = IsRequired(
+                verification?.IntegrationTests ?? verification?.integration_tests ?? "optional"),
+            Scope = IsRequired(verification?.Scope ?? verification?.scope ?? "required"),
+            SecurityScan = IsRequired(
+                verification?.SecurityScan ?? verification?.security_scan ?? "optional"),
+            Architecture = IsRequired(
+                verification?.Architecture ?? verification?.architecture ?? "optional"),
+            BlockCriticalSemanticFailures = IsRequired(
+                verification?.CriticalSemanticFailures
+                ?? verification?.critical_semantic_failures
+                ?? "required"),
+            RequiredSemanticVerifiers = verification?.RequiredSemanticVerifiers
+                ?? verification?.required_semantic_verifiers
+                ?? []
+        };
+        ValidateRequiredProcessCapabilities(
+            mappedCapabilities,
+            mappedVerification,
+            mappedAcceptance);
 
         return new TaskContract
         {
             Id = model.Id ?? model.id ?? string.Empty,
             Objective = model.Objective ?? model.objective ?? string.Empty,
             AcceptanceCriteria = acceptance,
-            AcceptanceRequirements = MapAcceptanceCriteria(acceptance, acceptanceEvidence),
+            AcceptanceRequirements = mappedAcceptance,
             Scope = new ScopeDefinition
             {
                 Allowed = scope?.Allowed ?? scope?.allowed ?? [],
@@ -89,24 +118,10 @@ public class TaskContractParser
                     ?? ".",
                 Target = execution?.Target ?? execution?.target ?? string.Empty,
                 Runtime = executionRuntime,
-                Sandbox = mappedSandbox
+                Sandbox = mappedSandbox,
+                Capabilities = mappedCapabilities
             },
-            Verification = new VerificationProfile
-            {
-                Build = IsRequired(verification?.Build ?? verification?.build ?? "required"),
-                UnitTests = IsRequired(verification?.UnitTests ?? verification?.unit_tests ?? "required"),
-                IntegrationTests = IsRequired(verification?.IntegrationTests ?? verification?.integration_tests ?? "optional"),
-                Scope = IsRequired(verification?.Scope ?? verification?.scope ?? "required"),
-                SecurityScan = IsRequired(verification?.SecurityScan ?? verification?.security_scan ?? "optional"),
-                Architecture = IsRequired(verification?.Architecture ?? verification?.architecture ?? "optional"),
-                BlockCriticalSemanticFailures = IsRequired(
-                    verification?.CriticalSemanticFailures
-                    ?? verification?.critical_semantic_failures
-                    ?? "required"),
-                RequiredSemanticVerifiers = verification?.RequiredSemanticVerifiers
-                    ?? verification?.required_semantic_verifiers
-                    ?? []
-            },
+            Verification = mappedVerification,
             Approval = new ApprovalPolicy
             {
                 Production = ParseApprovalLevel(approval?.Production ?? approval?.production ?? "none")
@@ -173,6 +188,271 @@ public class TaskContractParser
             throw new InvalidOperationException("execution.sandbox.process_limit must be positive.");
         if (sandbox.WallClockSeconds <= 0)
             throw new InvalidOperationException("execution.sandbox.wall_clock_seconds must be positive.");
+    }
+
+    private static ExecutionCapabilityPolicy MapCapabilities(
+        CapabilitiesYamlModel? model)
+    {
+        if (model is null)
+            return ExecutionCapabilityPolicy.RestrictiveDefault();
+
+        var defaults = new ResourceCapabilities();
+        var fileSystem = model.FileSystem ?? model.file_system;
+        var network = model.Network ?? model.network;
+        var resources = model.Resources ?? model.resources;
+        var policy = new ExecutionCapabilityPolicy
+        {
+            Version = model.Version ?? model.version ?? ExecutionCapabilityPolicy.CurrentVersion,
+            Authority = ExecutionCapabilityPolicy.TaskContractAuthority,
+            FileSystem = new FileSystemCapabilities
+            {
+                Read = fileSystem?.Read ?? fileSystem?.read ?? [],
+                Write = fileSystem?.Write ?? fileSystem?.write ?? []
+            },
+            Processes = (model.Processes ?? model.processes ?? [])
+                .Select(rule => new ProcessCapabilityRule
+                {
+                    Executable = rule.Executable ?? rule.executable ?? string.Empty,
+                    ArgumentPrefix = rule.ArgumentPrefix ?? rule.argument_prefix ?? [],
+                    Phases = rule.Phases ?? rule.phases ?? []
+                }).ToList(),
+            Network = new NetworkCapabilities
+            {
+                Destinations = network?.Destinations ?? network?.destinations ?? [],
+                Phases = network?.Phases ?? network?.phases ?? []
+            },
+            Secrets = (model.Secrets ?? model.secrets ?? [])
+                .Select(secret => new SecretCapability
+                {
+                    Name = secret.Name ?? secret.name ?? string.Empty,
+                    Phases = secret.Phases ?? secret.phases ?? []
+                }).ToList(),
+            Resources = new ResourceCapabilities
+            {
+                CpuLimit = resources?.CpuLimit ?? resources?.cpu_limit ?? defaults.CpuLimit,
+                MemoryLimit = resources?.MemoryLimit ?? resources?.memory_limit ?? defaults.MemoryLimit,
+                ProcessLimit = resources?.ProcessLimit ?? resources?.process_limit ?? defaults.ProcessLimit,
+                WallClockSeconds = resources?.WallClockSeconds ??
+                    resources?.wall_clock_seconds ?? defaults.WallClockSeconds
+            }
+        };
+        ValidateCapabilities(policy);
+        return policy;
+    }
+
+    private static void ValidateCapabilities(ExecutionCapabilityPolicy policy)
+    {
+        if (policy.Version != ExecutionCapabilityPolicy.CurrentVersion)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported capabilities.version: '{policy.Version}'.");
+        }
+        if (policy.FileSystem.Read.Count != 1 || policy.FileSystem.Read[0] != "**")
+        {
+            throw new InvalidOperationException(
+                "capabilities.file_system.read v1 must grant only the staged workspace with '**'.");
+        }
+        foreach (var write in policy.FileSystem.Write)
+            ValidateCapabilityWritePath(write);
+
+        foreach (var rule in policy.Processes)
+        {
+            if (!Regex.IsMatch(rule.Executable, @"^[a-zA-Z0-9._+-]+$"))
+            {
+                throw new InvalidOperationException(
+                    $"Invalid capabilities.processes executable: '{rule.Executable}'.");
+            }
+            if (rule.ArgumentPrefix.Count == 0 ||
+                rule.ArgumentPrefix.Any(string.IsNullOrWhiteSpace))
+            {
+                throw new InvalidOperationException(
+                    $"Process capability '{rule.Executable}' requires a non-empty argument_prefix.");
+            }
+            ValidatePhases(rule.Phases, $"process capability '{rule.Executable}'");
+        }
+
+        if (policy.Network.Phases.Count > 0)
+            ValidatePhases(policy.Network.Phases, "network capabilities");
+        foreach (var destination in policy.Network.Destinations)
+        {
+            if (string.IsNullOrWhiteSpace(destination) ||
+                destination.Any(char.IsWhiteSpace) ||
+                destination.Contains('/') && !Uri.TryCreate(destination, UriKind.Absolute, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Invalid capabilities.network destination: '{destination}'.");
+            }
+        }
+        if (policy.Network.Destinations.Count == 0 != (policy.Network.Phases.Count == 0))
+        {
+            throw new InvalidOperationException(
+                "Network capabilities require both destinations and phases, or neither.");
+        }
+
+        var duplicateSecret = policy.Secrets.GroupBy(secret => secret.Name, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateSecret is not null)
+            throw new InvalidOperationException($"Duplicate secret capability: '{duplicateSecret.Key}'.");
+        foreach (var secret in policy.Secrets)
+        {
+            if (!Regex.IsMatch(secret.Name, @"^[A-Z_][A-Z0-9_]*$"))
+                throw new InvalidOperationException($"Invalid secret capability name: '{secret.Name}'.");
+            ValidatePhases(secret.Phases, $"secret capability '{secret.Name}'");
+        }
+
+        ValidatePositiveCpu(policy.Resources.CpuLimit, "capabilities.resources.cpu_limit");
+        ParseMemoryBytes(policy.Resources.MemoryLimit, "capabilities.resources.memory_limit");
+        if (policy.Resources.ProcessLimit <= 0)
+            throw new InvalidOperationException("capabilities.resources.process_limit must be positive.");
+        if (policy.Resources.WallClockSeconds <= 0)
+            throw new InvalidOperationException("capabilities.resources.wall_clock_seconds must be positive.");
+    }
+
+    private static void ValidateCapabilityResources(
+        ExecutionCapabilityPolicy policy,
+        SandboxExecutionProfile sandbox)
+    {
+        var requestedCpu = ValidatePositiveCpu(sandbox.CpuLimit, "execution.sandbox.cpu_limit");
+        var maximumCpu = ValidatePositiveCpu(
+            policy.Resources.CpuLimit,
+            "capabilities.resources.cpu_limit");
+        if (requestedCpu > maximumCpu ||
+            ParseMemoryBytes(sandbox.MemoryLimit, "execution.sandbox.memory_limit") >
+            ParseMemoryBytes(policy.Resources.MemoryLimit, "capabilities.resources.memory_limit") ||
+            sandbox.ProcessLimit > policy.Resources.ProcessLimit ||
+            sandbox.WallClockSeconds > policy.Resources.WallClockSeconds)
+        {
+            throw new InvalidOperationException(
+                "execution.sandbox resource limits exceed the authoritative capabilities.resources maxima.");
+        }
+
+        if (sandbox.NetworkAccess &&
+            (policy.Network.Destinations.Count == 0 || policy.Network.Phases.Count == 0))
+        {
+            throw new InvalidOperationException(
+                "execution.sandbox.network_access requires explicit network destinations and phases.");
+        }
+    }
+
+    private static void ValidateRequiredProcessCapabilities(
+        ExecutionCapabilityPolicy policy,
+        VerificationProfile verification,
+        IReadOnlyCollection<AcceptanceCriterion> acceptance)
+    {
+        RequireProcess(policy, "git", "--version", ExecutionCapabilityPhases.BaselineToolProbe);
+        RequireProcess(policy, "dotnet", "--version", ExecutionCapabilityPhases.BaselineToolProbe);
+        if (verification.Build)
+        {
+            RequireProcess(policy, "dotnet", "build", ExecutionCapabilityPhases.BaselineBuild);
+            RequireProcess(policy, "dotnet", "build", ExecutionCapabilityPhases.CandidateBuild);
+        }
+        if (verification.UnitTests || verification.IntegrationTests)
+        {
+            RequireProcess(policy, "dotnet", "test", ExecutionCapabilityPhases.BaselineTest);
+            RequireProcess(policy, "dotnet", "test", ExecutionCapabilityPhases.CandidateTest);
+        }
+        if (acceptance.Any(criterion => criterion.Evidence.Type == AcceptanceEvidenceType.Test))
+        {
+            RequireProcess(
+                policy,
+                "dotnet",
+                "test",
+                ExecutionCapabilityPhases.CandidateAcceptance);
+        }
+    }
+
+    private static void RequireProcess(
+        ExecutionCapabilityPolicy policy,
+        string executable,
+        string firstArgument,
+        string phase)
+    {
+        if (policy.Processes.Any(rule =>
+                rule.Executable.Equals(executable, StringComparison.OrdinalIgnoreCase) &&
+                rule.ArgumentPrefix.Count > 0 &&
+                rule.ArgumentPrefix[0] == firstArgument &&
+                rule.Phases.Contains(phase, StringComparer.Ordinal)))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Capabilities deny required preflight command '{phase}: {executable} {firstArgument}'.");
+    }
+
+    private static void ValidateCapabilityWritePath(string path)
+    {
+        var normalized = path.Trim().Replace('\\', '/');
+        if (normalized == "**")
+            return;
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            normalized.StartsWith('/') ||
+            Regex.IsMatch(normalized, @"^[a-zA-Z]:/") ||
+            normalized.Contains(',') ||
+            normalized.Contains(':') ||
+            normalized.Any(char.IsControl) ||
+            normalized.Split('/').Any(segment => segment is "." or ".." ||
+                segment.Equals(".git", StringComparison.OrdinalIgnoreCase)) ||
+            !normalized.EndsWith("/**", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Capability write path must be a safe workspace directory pattern ending in '/**': '{path}'.");
+        }
+        if (normalized.Contains('*') && normalized is not "**/bin/**" and not "**/obj/**")
+        {
+            throw new InvalidOperationException(
+                $"Unsupported wildcard capability write path: '{path}'.");
+        }
+    }
+
+    private static void ValidatePhases(IReadOnlyCollection<string> phases, string description)
+    {
+        var known = new HashSet<string>(
+        [
+            ExecutionCapabilityPhases.BaselineToolProbe,
+            ExecutionCapabilityPhases.BaselineBuild,
+            ExecutionCapabilityPhases.BaselineTest,
+            ExecutionCapabilityPhases.CandidateBuild,
+            ExecutionCapabilityPhases.CandidateTest,
+            ExecutionCapabilityPhases.CandidateAcceptance
+        ], StringComparer.Ordinal);
+        if (phases.Count == 0 || phases.Any(phase => !known.Contains(phase)))
+            throw new InvalidOperationException($"{description} contains an empty or unknown phase.");
+    }
+
+    private static decimal ValidatePositiveCpu(string value, string field)
+    {
+        if (!decimal.TryParse(
+                value,
+                NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out var cpu) || cpu <= 0)
+        {
+            throw new InvalidOperationException($"{field} must be a positive invariant decimal.");
+        }
+        return cpu;
+    }
+
+    private static long ParseMemoryBytes(string value, string field)
+    {
+        var match = Regex.Match(value, @"^([1-9][0-9]*)([kKmMgG]?)$");
+        if (!match.Success || !long.TryParse(match.Groups[1].Value, out var amount))
+            throw new InvalidOperationException($"{field} must be a positive Docker memory limit.");
+        var multiplier = match.Groups[2].Value.ToLowerInvariant() switch
+        {
+            "k" => 1024L,
+            "m" => 1024L * 1024,
+            "g" => 1024L * 1024 * 1024,
+            _ => 1L
+        };
+        try
+        {
+            return checked(amount * multiplier);
+        }
+        catch (OverflowException)
+        {
+            throw new InvalidOperationException($"{field} is too large.");
+        }
     }
 
     private static List<AcceptanceCriterion> MapAcceptanceCriteria(
@@ -297,6 +577,8 @@ public class TaskYamlModel
     public BudgetYamlModel? budget { get; set; }
     public ExecutionYamlModel? Execution { get; set; }
     public ExecutionYamlModel? execution { get; set; }
+    public CapabilitiesYamlModel? Capabilities { get; set; }
+    public CapabilitiesYamlModel? capabilities { get; set; }
     public VerificationYamlModel? Verification { get; set; }
     public VerificationYamlModel? verification { get; set; }
     public ApprovalYamlModel? Approval { get; set; }
@@ -345,6 +627,70 @@ public class ExecutionYamlModel
     public string? runtime { get; set; }
     public SandboxYamlModel? Sandbox { get; set; }
     public SandboxYamlModel? sandbox { get; set; }
+    public CapabilitiesYamlModel? Capabilities { get; set; }
+    public CapabilitiesYamlModel? capabilities { get; set; }
+}
+
+public class CapabilitiesYamlModel
+{
+    public string? Version { get; set; }
+    public string? version { get; set; }
+    public FileSystemCapabilitiesYamlModel? FileSystem { get; set; }
+    public FileSystemCapabilitiesYamlModel? file_system { get; set; }
+    public List<ProcessCapabilityYamlModel>? Processes { get; set; }
+    public List<ProcessCapabilityYamlModel>? processes { get; set; }
+    public NetworkCapabilitiesYamlModel? Network { get; set; }
+    public NetworkCapabilitiesYamlModel? network { get; set; }
+    public List<SecretCapabilityYamlModel>? Secrets { get; set; }
+    public List<SecretCapabilityYamlModel>? secrets { get; set; }
+    public ResourceCapabilitiesYamlModel? Resources { get; set; }
+    public ResourceCapabilitiesYamlModel? resources { get; set; }
+}
+
+public class FileSystemCapabilitiesYamlModel
+{
+    public List<string>? Read { get; set; }
+    public List<string>? read { get; set; }
+    public List<string>? Write { get; set; }
+    public List<string>? write { get; set; }
+}
+
+public class ProcessCapabilityYamlModel
+{
+    public string? Executable { get; set; }
+    public string? executable { get; set; }
+    public List<string>? ArgumentPrefix { get; set; }
+    public List<string>? argument_prefix { get; set; }
+    public List<string>? Phases { get; set; }
+    public List<string>? phases { get; set; }
+}
+
+public class NetworkCapabilitiesYamlModel
+{
+    public List<string>? Destinations { get; set; }
+    public List<string>? destinations { get; set; }
+    public List<string>? Phases { get; set; }
+    public List<string>? phases { get; set; }
+}
+
+public class SecretCapabilityYamlModel
+{
+    public string? Name { get; set; }
+    public string? name { get; set; }
+    public List<string>? Phases { get; set; }
+    public List<string>? phases { get; set; }
+}
+
+public class ResourceCapabilitiesYamlModel
+{
+    public string? CpuLimit { get; set; }
+    public string? cpu_limit { get; set; }
+    public string? MemoryLimit { get; set; }
+    public string? memory_limit { get; set; }
+    public int? ProcessLimit { get; set; }
+    public int? process_limit { get; set; }
+    public int? WallClockSeconds { get; set; }
+    public int? wall_clock_seconds { get; set; }
 }
 
 public class SandboxYamlModel

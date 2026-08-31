@@ -26,7 +26,8 @@ public class ExecutionController : IExecutionController
             Model = model,
             Budget = task.Budget,
             Risk = risk,
-            Verification = task.Verification
+            Verification = task.Verification,
+            Capabilities = task.Execution.EffectiveCapabilities
         };
 
         return Task.FromResult(plan);

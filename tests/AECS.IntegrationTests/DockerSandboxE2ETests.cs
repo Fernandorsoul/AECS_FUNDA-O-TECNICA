@@ -11,6 +11,8 @@ namespace AECS.IntegrationTests;
 
 public sealed class DockerSandboxE2ETests
 {
+    private const string AdversarialSecretName = "AECS_DOCKER_E2E_SECRET";
+
     private static bool Enabled => string.Equals(
         Environment.GetEnvironmentVariable("AECS_RUN_DOCKER_E2E"),
         "1",
@@ -102,6 +104,11 @@ public sealed class DockerSandboxE2ETests
                 command.Environment.Runtime == "docker" &&
                 command.Environment.ImageDigest.StartsWith("sha256:") &&
                 command.Environment.NetworkMode == "none" &&
+                command.Environment.WorkspaceMount == "/workspace:ro" &&
+                command.Environment.Capabilities != null &&
+                command.Environment.Capabilities.PolicyVersion ==
+                    ExecutionCapabilityPolicy.CurrentVersion &&
+                command.Environment.Capabilities.Authority == "task-contract" &&
                 !command.Environment.DevelopmentHostOverride);
         (await repository.StatusAsync()).Should().BeEmpty();
         (await SandboxContainersAsync(runner, repository.Path)).Should().BeEmpty();
@@ -122,6 +129,9 @@ public sealed class DockerSandboxE2ETests
         var marker = $"original-only-{Guid.NewGuid():N}.secret";
         await File.WriteAllTextAsync(Path.Combine(original, marker), "must not be mounted");
         var host = new SystemProcessRunner();
+        var previousSecret = Environment.GetEnvironmentVariable(AdversarialSecretName);
+        var secretValue = $"e2e-secret-{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable(AdversarialSecretName, secretValue);
 
         try
         {
@@ -135,7 +145,8 @@ public sealed class DockerSandboxE2ETests
                     ProcessLimit = 24,
                     WallClockSeconds = 10,
                     NetworkAccess = false
-                }
+                },
+                Capabilities = AdversarialTestCapabilities()
             };
             var runner = await new DockerStagedProcessRunnerFactory(host).CreateAsync(
                 workspace,
@@ -153,9 +164,44 @@ public sealed class DockerSandboxE2ETests
                 runner,
                 workspace,
                 "touch",
-                ["sandbox-created.txt"]);
+                [".aecs-verification/sandbox-created.txt"]);
             write.Succeeded.Should().BeTrue(write.StandardError);
-            File.Exists(Path.Combine(workspace, "sandbox-created.txt")).Should().BeTrue();
+            File.Exists(Path.Combine(
+                workspace,
+                ".aecs-verification",
+                "sandbox-created.txt")).Should().BeTrue();
+
+            var forbiddenWrite = await RunAsync(
+                runner,
+                workspace,
+                "touch",
+                ["forbidden.txt"]);
+            forbiddenWrite.Succeeded.Should().BeFalse();
+            File.Exists(Path.Combine(workspace, "forbidden.txt")).Should().BeFalse();
+
+            var forbiddenProcess = await RunAsync(
+                runner,
+                workspace,
+                "sh",
+                ["-c", "cat /etc/passwd"]);
+            forbiddenProcess.Succeeded.Should().BeFalse();
+            forbiddenProcess.Environment!.Capabilities!.Denied.Should().ContainSingle();
+
+            var secretAttempt = await runner.RunAsync(new ProcessExecutionRequest
+            {
+                FileName = "printenv",
+                Arguments = [AdversarialSecretName],
+                WorkingDirectory = workspace,
+                Timeout = TimeSpan.FromSeconds(10),
+                Phase = ExecutionCapabilityPhases.CandidateAcceptance
+            }, CancellationToken.None);
+            secretAttempt.Succeeded.Should().BeTrue(secretAttempt.StandardError);
+            secretAttempt.StandardOutput.Should().Be(
+                "[REDACTED: output suppressed for a secret-bearing phase]");
+            secretAttempt.Environment!.Capabilities!.InjectedSecrets.Should()
+                .Equal(AdversarialSecretName);
+            System.Text.Json.JsonSerializer.Serialize(secretAttempt).Should()
+                .NotContain(secretValue);
 
             var network = await RunAsync(
                 runner,
@@ -190,15 +236,33 @@ public sealed class DockerSandboxE2ETests
             (decimal.Parse(cpuParts[0]) / decimal.Parse(cpuParts[1]))
                 .Should().BeLessThanOrEqualTo(0.50m);
 
-            var failure = await RunAsync(runner, workspace, "false", []);
+            var failure = await RunAsync(
+                runner,
+                workspace,
+                "ls",
+                ["definitely-missing"]);
             failure.Succeeded.Should().BeFalse();
+
+            var symlink = Path.Combine(workspace, ".aecs-verification", "escape");
+            Directory.CreateSymbolicLink(symlink, original);
+            var symlinkAttempt = await RunAsync(
+                runner,
+                workspace,
+                "touch",
+                [".aecs-verification/escape/exfiltrated.txt"]);
+            symlinkAttempt.Succeeded.Should().BeFalse();
+            symlinkAttempt.Environment!.Capabilities!.Denied.Should().ContainSingle(item =>
+                item.Contains("symbolic link", StringComparison.Ordinal));
+            File.Exists(Path.Combine(original, "exfiltrated.txt")).Should().BeFalse();
+            Directory.Delete(symlink);
 
             var timeout = await runner.RunAsync(new ProcessExecutionRequest
             {
                 FileName = "sleep",
                 Arguments = ["30"],
                 WorkingDirectory = workspace,
-                Timeout = TimeSpan.FromSeconds(1)
+                Timeout = TimeSpan.FromSeconds(1),
+                Phase = ExecutionCapabilityPhases.CandidateTest
             }, CancellationToken.None);
             timeout.TimedOut.Should().BeTrue();
 
@@ -208,7 +272,8 @@ public sealed class DockerSandboxE2ETests
                 FileName = "sleep",
                 Arguments = ["30"],
                 WorkingDirectory = workspace,
-                Timeout = TimeSpan.FromSeconds(10)
+                Timeout = TimeSpan.FromSeconds(10),
+                Phase = ExecutionCapabilityPhases.CandidateTest
             }, cancellation.Token);
             cancelled.Cancelled.Should().BeTrue();
 
@@ -216,6 +281,7 @@ public sealed class DockerSandboxE2ETests
         }
         finally
         {
+            Environment.SetEnvironmentVariable(AdversarialSecretName, previousSecret);
             if (Directory.Exists(root))
             {
                 foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
@@ -234,8 +300,61 @@ public sealed class DockerSandboxE2ETests
             FileName = fileName,
             Arguments = arguments,
             WorkingDirectory = workspace,
-            Timeout = TimeSpan.FromSeconds(10)
+            Timeout = TimeSpan.FromSeconds(10),
+            Phase = ExecutionCapabilityPhases.CandidateTest
         }, CancellationToken.None);
+
+    private static ExecutionCapabilityPolicy AdversarialTestCapabilities() => new()
+    {
+        FileSystem = new FileSystemCapabilities
+        {
+            Read = ["**"],
+            Write = [".aecs-verification/**"]
+        },
+        Processes =
+        [
+            Rule("find", ["/"]),
+            Rule("touch", [".aecs-verification/sandbox-created.txt"]),
+            Rule("touch", ["forbidden.txt"]),
+            Rule("touch", [".aecs-verification/escape/exfiltrated.txt"]),
+            Rule("getent", ["hosts"]),
+            Rule("cat", ["/sys/fs/cgroup/memory.max"]),
+            Rule("cat", ["/sys/fs/cgroup/pids.max"]),
+            Rule("cat", ["/sys/fs/cgroup/cpu.max"]),
+            Rule("ls", ["definitely-missing"]),
+            Rule("sleep", ["30"]),
+            new ProcessCapabilityRule
+            {
+                Executable = "printenv",
+                ArgumentPrefix = [AdversarialSecretName],
+                Phases = [ExecutionCapabilityPhases.CandidateAcceptance]
+            }
+        ],
+        Secrets =
+        [
+            new SecretCapability
+            {
+                Name = AdversarialSecretName,
+                Phases = [ExecutionCapabilityPhases.CandidateAcceptance]
+            }
+        ],
+        Resources = new ResourceCapabilities
+        {
+            CpuLimit = "0.50",
+            MemoryLimit = "128m",
+            ProcessLimit = 24,
+            WallClockSeconds = 10
+        }
+    };
+
+    private static ProcessCapabilityRule Rule(
+        string executable,
+        List<string> argumentPrefix) => new()
+        {
+            Executable = executable,
+            ArgumentPrefix = argumentPrefix,
+            Phases = [ExecutionCapabilityPhases.CandidateTest]
+        };
 
     private static async Task<string> SandboxContainersAsync(
         IProcessRunner runner,

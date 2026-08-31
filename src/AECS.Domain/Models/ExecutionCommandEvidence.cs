@@ -33,4 +33,18 @@ public sealed class ExecutionEnvironmentEvidence
     public int WallClockLimitSeconds { get; init; }
     public string WorkspaceMount { get; init; } = string.Empty;
     public bool DevelopmentHostOverride { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionCapabilityEvidence? Capabilities { get; init; }
+}
+
+public sealed class ExecutionCapabilityEvidence
+{
+    public string PolicyVersion { get; init; } = string.Empty;
+    public string Authority { get; init; } = string.Empty;
+    public string PolicyHash { get; init; } = string.Empty;
+    public string Phase { get; init; } = string.Empty;
+    public List<string> Granted { get; init; } = [];
+    public List<string> Denied { get; init; } = [];
+    public List<string> InjectedSecrets { get; init; } = [];
 }

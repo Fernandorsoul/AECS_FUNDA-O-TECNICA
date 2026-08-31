@@ -172,7 +172,8 @@ public sealed class ExecutionReplayService
             original,
             workspace.Path,
             original.CandidateChangeSet,
-            baselineCommands);
+            baselineCommands,
+            "baseline");
         await ToolVersionProbe.CaptureAsync(
             stagedProcessRunner,
             baselineContext,
@@ -219,7 +220,8 @@ public sealed class ExecutionReplayService
             original,
             workspace.Path,
             candidate,
-            candidateCommands);
+            candidateCommands,
+            "candidate");
         var acceptanceCriteria = new List<AcceptanceCriterionResult>();
         var candidateResults = await VerifyCandidateAsync(
             stagedProcessRunner,
@@ -298,7 +300,8 @@ public sealed class ExecutionReplayService
         ExecutionEvidence original,
         string workspacePath,
         CandidateChangeSet candidate,
-        List<ExecutionCommandEvidence> commands) => new()
+        List<ExecutionCommandEvidence> commands,
+        string phase) => new()
         {
             TaskId = original.TaskContract.Id,
             AgentRunId = original.AgentRun.Id.ToString("N"),
@@ -306,27 +309,36 @@ public sealed class ExecutionReplayService
             Contract = original.TaskContract,
             AgentResult = original.AgentResult,
             CandidateChangeSet = candidate,
-            CommandEvidence = commands
+            CommandEvidence = commands,
+            Phase = phase
         };
 
     private static RepositoryExecutionProfile ReplayExecutionProfile(
         ExecutionEvidence original)
     {
         var profile = original.TaskContract.Execution;
-        if (profile.Runtime is not null ||
-            original.BaselineCommands.Concat(original.CandidateCommands)
-                .Any(command => command.Environment is not null))
+        var commands = original.BaselineCommands.Concat(original.CandidateCommands).ToList();
+        var capabilityAware = commands.Any(command =>
+            command.Environment?.Capabilities is not null);
+        if (capabilityAware)
         {
             return profile;
         }
 
-        // Evidence emitted before sandbox metadata existed necessarily ran staged
-        // commands on the host. The CLI still requires its explicit development opt-in.
+        var runtime = profile.Runtime;
+        if (runtime is null && commands.All(command => command.Environment is null))
+            runtime = RepositoryExecutionProfile.HostRuntime;
+
+        // Capability-unaware evidence is replayed under its authenticated legacy
+        // boundary; new executions can never select this compatibility policy.
         return new RepositoryExecutionProfile
         {
             WorkingDirectory = profile.WorkingDirectory,
             Target = profile.Target,
-            Runtime = RepositoryExecutionProfile.HostRuntime
+            Runtime = runtime,
+            Sandbox = profile.Sandbox,
+            Capabilities = ExecutionCapabilityPolicy.LegacyCompatibility(
+                profile.Sandbox?.NetworkAccess == true)
         };
     }
 
@@ -672,7 +684,24 @@ public sealed class ExecutionReplayService
             left.MemoryLimit == right.MemoryLimit &&
             left.ProcessLimit == right.ProcessLimit &&
             left.WorkspaceMount == right.WorkspaceMount &&
-            left.DevelopmentHostOverride == right.DevelopmentHostOverride;
+            left.DevelopmentHostOverride == right.DevelopmentHostOverride &&
+            CapabilityEnvironmentEquals(left.Capabilities, right.Capabilities);
+    }
+
+    private static bool CapabilityEnvironmentEquals(
+        ExecutionCapabilityEvidence? expected,
+        ExecutionCapabilityEvidence? actual)
+    {
+        if (expected is null)
+            return true;
+        return actual is not null &&
+            expected.PolicyVersion == actual.PolicyVersion &&
+            expected.Authority == actual.Authority &&
+            expected.PolicyHash == actual.PolicyHash &&
+            expected.Phase == actual.Phase &&
+            expected.Granted.SequenceEqual(actual.Granted, StringComparer.Ordinal) &&
+            expected.Denied.SequenceEqual(actual.Denied, StringComparer.Ordinal) &&
+            expected.InjectedSecrets.SequenceEqual(actual.InjectedSecrets, StringComparer.Ordinal);
     }
 
     private static bool CommandResultEquals(

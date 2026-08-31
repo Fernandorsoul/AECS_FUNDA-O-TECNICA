@@ -38,7 +38,8 @@ public class AdaptiveController : IExecutionController
             Model = model,
             Budget = budget,
             Risk = risk,
-            Verification = task.Verification
+            Verification = task.Verification,
+            Capabilities = task.Execution.EffectiveCapabilities
         };
 
         return Task.FromResult(plan);

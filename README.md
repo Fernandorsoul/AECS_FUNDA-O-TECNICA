@@ -278,6 +278,33 @@ task:
     runtime: docker
     working_directory: .
     target: CustomerSystem.slnx
+  capabilities:
+    version: aecs.capabilities/v1
+    file_system:
+      read: ["**"]
+      write: ["**/bin/**", "**/obj/**", ".aecs-verification/**"]
+    processes:
+      - executable: git
+        argument_prefix: ["--version"]
+        phases: [baseline.tool-probe]
+      - executable: dotnet
+        argument_prefix: ["--version"]
+        phases: [baseline.tool-probe]
+      - executable: dotnet
+        argument_prefix: [build]
+        phases: [baseline.build, candidate.build]
+      - executable: dotnet
+        argument_prefix: [test]
+        phases: [baseline.test, candidate.test, candidate.acceptance]
+    network:
+      destinations: []
+      phases: []
+    secrets: []
+    resources:
+      cpu_limit: "1.0"
+      memory_limit: 512m
+      process_limit: 128
+      wall_clock_seconds: 120
   verification:
     build: required
     unit_tests: required
@@ -286,7 +313,7 @@ task:
     production: none
 ```
 
-A referência de campos, padrões de escopo, valores padrão e regras de decisão está em [TaskContract](docs/task-contract.md). Os YAMLs em [`tasks/`](tasks/) são modelos de contrato; o exemplo realmente executado em CI fica no [fixture AgronomoPlus](tests/fixtures/real-world-demo/README.md).
+A referência de campos, capabilities preventivas, padrões de escopo, valores padrão e regras de decisão está em [TaskContract](docs/task-contract.md). Os YAMLs em [`tasks/`](tasks/) são modelos de contrato; o exemplo realmente executado em CI fica no [fixture AgronomoPlus](tests/fixtures/real-world-demo/README.md).
 
 ## Comandos da CLI
 

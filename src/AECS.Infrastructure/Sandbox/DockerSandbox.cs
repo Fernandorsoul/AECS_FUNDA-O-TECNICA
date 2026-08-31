@@ -45,7 +45,9 @@ public sealed partial class DockerStagedProcessRunnerFactory : IStagedProcessRun
                     "Host execution must be explicitly selected with execution.runtime: host.");
             }
 
-            return new HostDevelopmentProcessRunner(_hostProcessRunner);
+            return new HostDevelopmentProcessRunner(
+                _hostProcessRunner,
+                profile.EffectiveCapabilities);
         }
 
         if (runtime != RepositoryExecutionProfile.DockerRuntime)
@@ -56,6 +58,7 @@ public sealed partial class DockerStagedProcessRunnerFactory : IStagedProcessRun
 
         var sandbox = profile.Sandbox ?? new SandboxExecutionProfile();
         ValidateSandbox(sandbox);
+        DockerCapabilityPolicy.Validate(profile.EffectiveCapabilities, sandbox);
 
         ProcessExecutionResult probe;
         try
@@ -88,7 +91,8 @@ public sealed partial class DockerStagedProcessRunnerFactory : IStagedProcessRun
             workspace,
             sandbox,
             probe.StandardOutput.Trim(),
-            containerUser);
+            containerUser,
+            profile.EffectiveCapabilities);
     }
 
     private async Task<string?> ResolveContainerUserAsync(
@@ -126,7 +130,7 @@ public sealed partial class DockerStagedProcessRunnerFactory : IStagedProcessRun
         }
     }
 
-    private static string ValidateStagedWorkspace(string stagedWorkspacePath)
+    internal static string ValidateStagedWorkspace(string stagedWorkspacePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(stagedWorkspacePath);
         var workspace = Path.GetFullPath(stagedWorkspacePath)
@@ -138,6 +142,11 @@ public sealed partial class DockerStagedProcessRunnerFactory : IStagedProcessRun
             throw new InvalidOperationException(
                 "Docker execution accepts only an AECS disposable staged workspace; " +
                 "the original checkout cannot be mounted.");
+        }
+        if ((File.GetAttributes(workspace) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException(
+                "The staged workspace cannot be a symbolic link, junction, or reparse point.");
         }
         if (workspace.Contains(','))
         {
@@ -194,21 +203,28 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
     private readonly SandboxExecutionProfile _sandbox;
     private readonly string _dockerVersion;
     private readonly string? _containerUser;
+    private readonly DockerCapabilityPolicy _capabilityPolicy;
 
     public DockerSandboxProcessRunner(
         IProcessRunner dockerCliRunner,
         string stagedWorkspacePath,
         SandboxExecutionProfile sandbox,
         string dockerVersion,
-        string? containerUser = null)
+        string? containerUser = null,
+        ExecutionCapabilityPolicy? capabilities = null)
     {
         _dockerCliRunner = dockerCliRunner;
-        _workspace = Path.GetFullPath(stagedWorkspacePath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        _workspace = DockerStagedProcessRunnerFactory.ValidateStagedWorkspace(
+            stagedWorkspacePath);
         _sandbox = sandbox;
         _dockerVersion = dockerVersion;
         _containerUser = containerUser;
         DockerStagedProcessRunnerFactory.ValidateSandbox(sandbox);
+        _capabilityPolicy = new DockerCapabilityPolicy(
+            _workspace,
+            sandbox,
+            capabilities ?? ExecutionCapabilityPolicy.LegacyCompatibility(
+                sandbox.NetworkAccess));
     }
 
     public async Task<ProcessExecutionResult> RunAsync(
@@ -216,18 +232,29 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.FileName);
-        var containerWorkingDirectory = MapWorkingDirectory(request.WorkingDirectory);
         var timeout = request.Timeout < TimeSpan.FromSeconds(_sandbox.WallClockSeconds)
             ? request.Timeout
             : TimeSpan.FromSeconds(_sandbox.WallClockSeconds);
         if (timeout <= TimeSpan.Zero)
             throw new InvalidOperationException("Sandbox command timeout must be positive.");
+        var capabilityDecision = _capabilityPolicy.Authorize(request);
+        if (!capabilityDecision.IsAllowed)
+        {
+            return CopyWithEnvironment(new ProcessExecutionResult
+            {
+                ExitCode = -1,
+                StandardError = "Sandbox capability policy denied the structured command request."
+            }, timeout, capabilityDecision);
+        }
+
+        var containerWorkingDirectory = MapWorkingDirectory(request.WorkingDirectory);
 
         var containerName = $"aecs-sandbox-{Guid.NewGuid():N}";
         var arguments = BuildDockerArguments(
             request,
             containerName,
-            containerWorkingDirectory);
+            containerWorkingDirectory,
+            capabilityDecision);
         ProcessExecutionResult result;
         try
         {
@@ -252,13 +279,14 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
             await RemoveContainerAsync(containerName);
         }
 
-        return CopyWithEnvironment(result, timeout);
+        return CopyWithEnvironment(result, timeout, capabilityDecision);
     }
 
     private IReadOnlyList<string> BuildDockerArguments(
         ProcessExecutionRequest request,
         string containerName,
-        string containerWorkingDirectory)
+        string containerWorkingDirectory,
+        DockerCapabilityDecision capabilityDecision)
     {
         var arguments = new List<string>
         {
@@ -271,12 +299,13 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
             "--read-only",
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
-            "--network", _sandbox.NetworkAccess ? "bridge" : "none",
+            "--network", capabilityDecision.NetworkMode,
             "--cpus", _sandbox.CpuLimit,
             "--memory", _sandbox.MemoryLimit,
             "--pids-limit", _sandbox.ProcessLimit.ToString(CultureInfo.InvariantCulture),
             "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
-            "--mount", $"type=bind,source={_workspace},target=/workspace",
+            "--mount", $"type=bind,source={_workspace},target=/workspace" +
+                (capabilityDecision.RootWritable ? string.Empty : ",readonly"),
             "--workdir", containerWorkingDirectory,
             "--env", "HOME=/tmp/aecs",
             "--env", "DOTNET_CLI_HOME=/tmp/aecs",
@@ -284,6 +313,19 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
             "--env", "DOTNET_NOLOGO=1",
             "--env", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"
         };
+
+        foreach (var mount in capabilityDecision.WritableMounts)
+        {
+            arguments.Add("--mount");
+            arguments.Add(
+                $"type=bind,source={mount.HostPath},target={mount.ContainerPath}");
+        }
+
+        foreach (var secret in capabilityDecision.Secrets.Keys.Order(StringComparer.Ordinal))
+        {
+            arguments.Add("--env");
+            arguments.Add(secret);
+        }
 
         if (!string.IsNullOrWhiteSpace(_containerUser))
         {
@@ -385,14 +427,20 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
 
     private ProcessExecutionResult CopyWithEnvironment(
         ProcessExecutionResult result,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        DockerCapabilityDecision capabilityDecision)
     {
         var digestSeparator = _sandbox.Image.LastIndexOf('@');
+        var suppressOutput = capabilityDecision.Secrets.Count > 0;
         return new ProcessExecutionResult
         {
             ExitCode = result.ExitCode,
-            StandardOutput = result.StandardOutput,
-            StandardError = result.StandardError,
+            StandardOutput = suppressOutput && !string.IsNullOrEmpty(result.StandardOutput)
+                ? "[REDACTED: output suppressed for a secret-bearing phase]"
+                : result.StandardOutput,
+            StandardError = suppressOutput && !string.IsNullOrEmpty(result.StandardError)
+                ? "[REDACTED: error output suppressed for a secret-bearing phase]"
+                : result.StandardError,
             Duration = result.Duration,
             TimedOut = result.TimedOut,
             Cancelled = result.Cancelled,
@@ -402,13 +450,16 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
                 RuntimeVersion = _dockerVersion,
                 Image = _sandbox.Image[..digestSeparator],
                 ImageDigest = _sandbox.Image[(digestSeparator + 1)..].ToLowerInvariant(),
-                NetworkMode = _sandbox.NetworkAccess ? "bridge" : "none",
+                NetworkMode = capabilityDecision.NetworkMode,
                 CpuLimit = _sandbox.CpuLimit,
                 MemoryLimit = _sandbox.MemoryLimit,
                 ProcessLimit = _sandbox.ProcessLimit,
                 WallClockLimitSeconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)),
-                WorkspaceMount = "/workspace:rw",
-                DevelopmentHostOverride = false
+                WorkspaceMount = capabilityDecision.RootWritable
+                    ? "/workspace:rw"
+                    : "/workspace:ro",
+                DevelopmentHostOverride = false,
+                Capabilities = _capabilityPolicy.Evidence(capabilityDecision)
             }
         };
     }
@@ -417,10 +468,14 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
 internal sealed class HostDevelopmentProcessRunner : IProcessRunner
 {
     private readonly IProcessRunner _inner;
+    private readonly ExecutionCapabilityPolicy _capabilities;
 
-    public HostDevelopmentProcessRunner(IProcessRunner inner)
+    public HostDevelopmentProcessRunner(
+        IProcessRunner inner,
+        ExecutionCapabilityPolicy capabilities)
     {
         _inner = inner;
+        _capabilities = capabilities;
     }
 
     public async Task<ProcessExecutionResult> RunAsync(
@@ -447,7 +502,15 @@ internal sealed class HostDevelopmentProcessRunner : IProcessRunner
                     1,
                     (int)Math.Ceiling(request.Timeout.TotalSeconds)),
                 WorkspaceMount = "host-direct",
-                DevelopmentHostOverride = true
+                DevelopmentHostOverride = true,
+                Capabilities = new ExecutionCapabilityEvidence
+                {
+                    PolicyVersion = _capabilities.Version,
+                    Authority = _capabilities.Authority,
+                    PolicyHash = ExecutionCapabilityPolicyFingerprint.Create(_capabilities),
+                    Phase = request.Phase,
+                    Granted = ["host-development-override:unrestricted"]
+                }
             }
         };
     }

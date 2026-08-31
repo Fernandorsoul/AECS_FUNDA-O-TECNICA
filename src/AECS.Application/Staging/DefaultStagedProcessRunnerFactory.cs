@@ -30,17 +30,23 @@ internal sealed class DefaultStagedProcessRunnerFactory : IStagedProcessRunnerFa
         }
 
         return Task.FromResult<IProcessRunner>(
-            new DevelopmentHostProcessRunner(_hostProcessRunner));
+            new DevelopmentHostProcessRunner(
+                _hostProcessRunner,
+                profile.EffectiveCapabilities));
     }
 }
 
 internal sealed class DevelopmentHostProcessRunner : IProcessRunner
 {
     private readonly IProcessRunner _inner;
+    private readonly ExecutionCapabilityPolicy _capabilities;
 
-    public DevelopmentHostProcessRunner(IProcessRunner inner)
+    public DevelopmentHostProcessRunner(
+        IProcessRunner inner,
+        ExecutionCapabilityPolicy capabilities)
     {
         _inner = inner;
+        _capabilities = capabilities;
     }
 
     public async Task<ProcessExecutionResult> RunAsync(
@@ -66,7 +72,15 @@ internal sealed class DevelopmentHostProcessRunner : IProcessRunner
                 ProcessLimit = 0,
                 WallClockLimitSeconds = CeilingSeconds(request.Timeout),
                 WorkspaceMount = "host-direct",
-                DevelopmentHostOverride = true
+                DevelopmentHostOverride = true,
+                Capabilities = new ExecutionCapabilityEvidence
+                {
+                    PolicyVersion = _capabilities.Version,
+                    Authority = _capabilities.Authority,
+                    PolicyHash = ExecutionCapabilityPolicyFingerprint.Create(_capabilities),
+                    Phase = request.Phase,
+                    Granted = ["host-development-override:unrestricted"]
+                }
             }
         };
     }

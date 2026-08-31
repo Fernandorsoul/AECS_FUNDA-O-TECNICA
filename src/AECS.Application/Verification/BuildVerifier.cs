@@ -37,7 +37,8 @@ public class BuildVerifier : IVerifier
                 FileName = "dotnet",
                 Arguments = execution.BuildArguments,
                 WorkingDirectory = execution.WorkingDirectory,
-                Timeout = timeout
+                Timeout = timeout,
+                Phase = $"{context.Phase}.build"
             };
             var result = await _processRunner.RunAsync(request, cancellationToken);
             context.CommandEvidence.Add(

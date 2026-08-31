@@ -174,6 +174,13 @@ public class TaskContractParserTests
         result.Execution.Runtime.Should().Be(RepositoryExecutionProfile.DockerRuntime);
         result.Execution.Sandbox.Should().NotBeNull();
         result.Execution.Sandbox!.Image.Should().Contain("@sha256:");
+        result.Execution.Capabilities!.Version.Should()
+            .Be(ExecutionCapabilityPolicy.CurrentVersion);
+        result.Execution.Capabilities.FileSystem.Read.Should().Equal("**");
+        result.Execution.Capabilities.Processes.Should().Contain(rule =>
+            rule.Executable == "dotnet" &&
+            rule.ArgumentPrefix.Count == 1 &&
+            rule.ArgumentPrefix[0] == "build");
     }
 
     [Fact]
@@ -268,6 +275,132 @@ public class TaskContractParserTests
 
         action.Should().Throw<InvalidOperationException>()
             .WithMessage($"*{expectedMessage}*");
+    }
+
+    [Fact]
+    public void Parse_VersionedCapabilities_MapsEveryLeastPrivilegeDimension()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-CAPABILITIES
+              objective: Run one authenticated build
+              execution:
+                target: Fixture.csproj
+                sandbox:
+                  cpu_limit: "0.5"
+                  memory_limit: 256m
+                  process_limit: 32
+                  wall_clock_seconds: 60
+                  network_access: true
+              capabilities:
+                version: aecs.capabilities/v1
+                file_system:
+                  read: ["**"]
+                  write: ["**/bin/**", "**/obj/**"]
+                processes:
+                  - executable: git
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["build"]
+                    phases: ["baseline.build", "candidate.build"]
+                network:
+                  destinations: ["*"]
+                  phases: ["baseline.build"]
+                secrets:
+                  - name: NUGET_AUTH_TOKEN
+                    phases: ["baseline.build"]
+                resources:
+                  cpu_limit: "0.75"
+                  memory_limit: 384m
+                  process_limit: 64
+                  wall_clock_seconds: 90
+              verification:
+                unit_tests: optional
+            """);
+
+        var capabilities = result.Execution.Capabilities!;
+        capabilities.Version.Should().Be("aecs.capabilities/v1");
+        capabilities.Authority.Should().Be("task-contract");
+        capabilities.FileSystem.Write.Should().Equal("**/bin/**", "**/obj/**");
+        capabilities.Processes.Should().HaveCount(3);
+        capabilities.Network.Destinations.Should().Equal("*");
+        capabilities.Secrets.Should().ContainSingle(secret =>
+            secret.Name == "NUGET_AUTH_TOKEN");
+        capabilities.Resources.MemoryLimit.Should().Be("384m");
+    }
+
+    [Theory]
+    [InlineData("version: future/v9", "Unsupported capabilities.version")]
+    [InlineData("file_system:\n      read: [\"../outside\"]", "file_system.read")]
+    [InlineData("file_system:\n      read: [\"**\"]\n      write: [\"../outside/**\"]", "safe workspace")]
+    [InlineData("file_system:\n      read: [\"**\"]\n      write: [\"artifacts,readonly/**\"]", "safe workspace")]
+    [InlineData("file_system:\n  read: [\"**\"]\nprocesses:\n  - executable: /bin/sh\n    argument_prefix: [\"-c\"]\n    phases: [\"candidate.build\"]", "executable")]
+    [InlineData("file_system:\n  read: [\"**\"]\nsecrets:\n  - name: bad-secret\n    phases: [\"candidate.build\"]", "secret capability name")]
+    public void Parse_InvalidCapabilities_FailClosed(string fragment, string expected)
+    {
+        var indented = fragment.Replace("\n", "\n    ");
+        var yaml = $"""
+            task:
+              id: TASK-BAD-CAP
+              objective: Reject invalid capabilities
+              capabilities:
+                {indented}
+            """;
+
+        var action = () => _parser.Parse(yaml);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Fact]
+    public void Parse_SandboxResourcesAboveCapabilityMaximum_FailsClosed()
+    {
+        var action = () => _parser.Parse("""
+            task:
+              id: TASK-RESOURCE-EXPANSION
+              objective: Reject resource expansion
+              execution:
+                sandbox:
+                  memory_limit: 1g
+              capabilities:
+                file_system:
+                  read: ["**"]
+                resources:
+                  memory_limit: 256m
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*resource limits exceed*capabilities.resources maxima*");
+    }
+
+    [Fact]
+    public void Parse_MissingProcessCapabilityRequiredByGate_FailsBeforeExecution()
+    {
+        var action = () => _parser.Parse("""
+            task:
+              id: TASK-MISSING-PROCESS
+              objective: Reject a policy that cannot execute the required test gate
+              capabilities:
+                file_system:
+                  read: ["**"]
+                processes:
+                  - executable: git
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["build"]
+                    phases: ["baseline.build", "candidate.build"]
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Capabilities deny required preflight command*baseline.test: dotnet test*");
     }
 
     [Fact]
