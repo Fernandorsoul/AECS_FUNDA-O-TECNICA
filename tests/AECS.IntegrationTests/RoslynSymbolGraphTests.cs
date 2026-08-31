@@ -94,6 +94,42 @@ public sealed class RoslynSymbolGraphTests
     }
 
     [Fact]
+    public async Task Build_RestoresTheInheritedMsBuildEnvironment()
+    {
+        await using var fixture = await SymbolGraphFixture.CreateAsync();
+        var snapshot = await fixture.SnapshotAsync();
+        var variables = new[]
+        {
+            "MSBUILD_EXE_PATH",
+            "MSBuildExtensionsPath",
+            "MSBuildSDKsPath"
+        };
+        var original = variables.ToDictionary(
+            variable => variable,
+            Environment.GetEnvironmentVariable,
+            StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (var variable in variables)
+                Environment.SetEnvironmentVariable(variable, $"aecs-inherited-{variable}");
+
+            await new RoslynSymbolGraphBuilder().BuildAsync(
+                fixture.Path,
+                snapshot,
+                cancellationToken: default);
+
+            variables.Should().OnlyContain(variable =>
+                Environment.GetEnvironmentVariable(variable) == $"aecs-inherited-{variable}");
+        }
+        finally
+        {
+            foreach (var variable in variables)
+                Environment.SetEnvironmentVariable(variable, original[variable]);
+        }
+    }
+
+    [Fact]
     public async Task ContextCompiler_UsesOnlyTheAuthenticatedRoslynGraphAsSemanticAuthority()
     {
         await using var fixture = await SymbolGraphFixture.CreateAsync();

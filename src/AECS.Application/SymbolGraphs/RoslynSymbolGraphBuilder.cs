@@ -17,6 +17,13 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
     private static readonly SemaphoreSlim WorkspaceBuildLock = new(1, 1);
     private static string? _registeredMsBuildVersion;
     private static string? _registeredSdkVersion;
+    private static string? _registeredMsBuildPath;
+    private static readonly string[] MsBuildEnvironmentVariables =
+    [
+        "MSBUILD_EXE_PATH",
+        "MSBuildExtensionsPath",
+        "MSBuildSDKsPath"
+    ];
     private static readonly IDictionary<string, string> GlobalProperties =
         new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
@@ -50,10 +57,12 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         var token = timeout.Token;
         token.ThrowIfCancellationRequested();
         var lockTaken = false;
+        IReadOnlyDictionary<string, string?>? inheritedEnvironment = null;
         try
         {
             await WorkspaceBuildLock.WaitAsync(token);
             lockTaken = true;
+            inheritedEnvironment = CaptureMsBuildEnvironment();
             return await BuildCoreAsync(root, repositorySnapshot, limits, token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -63,6 +72,8 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         }
         finally
         {
+            if (inheritedEnvironment is not null)
+                RestoreMsBuildEnvironment(inheritedEnvironment);
             if (lockTaken)
                 WorkspaceBuildLock.Release();
         }
@@ -704,6 +715,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                         "No compatible .NET SDK/MSBuild instance could be detected for the baseline.");
                 }
                 MSBuildLocator.RegisterInstance(instance);
+                _registeredMsBuildPath = instance.MSBuildPath;
                 _registeredMsBuildVersion = ReadMsBuildVersion(instance);
                 _registeredSdkVersion = ReadSdkVersion(instance);
                 return new MsBuildRegistration(
@@ -711,6 +723,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                     _registeredSdkVersion,
                     diagnostic);
             }
+            ApplyRegisteredMsBuildEnvironment();
             string? registeredDiagnostic = null;
             try
             {
@@ -743,6 +756,32 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 _registeredSdkVersion ?? "registered",
                 registeredDiagnostic);
         }
+    }
+
+    private static IReadOnlyDictionary<string, string?> CaptureMsBuildEnvironment() =>
+        MsBuildEnvironmentVariables.ToDictionary(
+            variable => variable,
+            Environment.GetEnvironmentVariable,
+            StringComparer.OrdinalIgnoreCase);
+
+    private static void RestoreMsBuildEnvironment(
+        IReadOnlyDictionary<string, string?> environment)
+    {
+        foreach (var variable in MsBuildEnvironmentVariables)
+            Environment.SetEnvironmentVariable(variable, environment[variable]);
+    }
+
+    private static void ApplyRegisteredMsBuildEnvironment()
+    {
+        if (string.IsNullOrWhiteSpace(_registeredMsBuildPath))
+            return;
+        Environment.SetEnvironmentVariable(
+            "MSBUILD_EXE_PATH",
+            Path.Combine(_registeredMsBuildPath, "MSBuild.dll"));
+        Environment.SetEnvironmentVariable("MSBuildExtensionsPath", _registeredMsBuildPath);
+        Environment.SetEnvironmentVariable(
+            "MSBuildSDKsPath",
+            Path.Combine(_registeredMsBuildPath, "Sdks"));
     }
 
     private static string ReadMsBuildVersion(VisualStudioInstance instance)
