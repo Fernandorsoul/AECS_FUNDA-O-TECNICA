@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using AECS.Application;
 using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
@@ -11,6 +12,7 @@ using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
+using AECS.Infrastructure.Cryptography;
 using AECS.Infrastructure.Processes;
 using AECS.Infrastructure.Repositories;
 
@@ -28,6 +30,8 @@ else if (command == "promote")
     return await RunPromotion(args[1..]);
 else if (command == "export-patch")
     return await RunPatchExport(args[1..]);
+else if (command == "evidence-key")
+    return RunEvidenceKey(args[1..]);
 else
     return await RunSingle(args);
 
@@ -165,6 +169,41 @@ static void PrintPromotionResult(CandidatePromotionResult result)
         Console.WriteLine($"Output: {result.OutputPath}");
 }
 
+static int RunEvidenceKey(string[] args)
+{
+    if (args.Length == 0 || !string.Equals(args[0], "rotate", StringComparison.Ordinal))
+    {
+        Console.WriteLine("Usage: aecs evidence-key rotate [--key-directory <path>]");
+        return 1;
+    }
+
+    string? keyDirectory = null;
+    for (var index = 1; index < args.Length; index++)
+    {
+        if (args[index] == "--key-directory" && index + 1 < args.Length)
+            keyDirectory = args[++index];
+        else
+        {
+            Console.WriteLine("Usage: aecs evidence-key rotate [--key-directory <path>]");
+            return 1;
+        }
+    }
+
+    keyDirectory ??= JsonExecutionEvidenceStore.GetDefaultKeyDirectoryPath();
+    try
+    {
+        var newKeyId = RsaEvidenceSignatureService.RotateKey(keyDirectory);
+        Console.WriteLine($"Evidence signing key rotated: {newKeyId}");
+        Console.WriteLine($"Trusted public keys retained in: {Path.GetFullPath(keyDirectory)}");
+        return 0;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+    {
+        Console.WriteLine($"ERROR: evidence key rotation failed: {ex.Message}");
+        return 1;
+    }
+}
+
 static async Task<int> RunExperiment(string[] args)
 {
     string? repoPath = null;
@@ -249,6 +288,7 @@ static async Task<int> RunSingle(string[] args)
         Console.WriteLine("       aecs experiment --repo <path> --tasks <dir> [--mock] [--cloud-key <key>] [--cloud-model <model>]");
         Console.WriteLine("       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> --actor <actor> --confirm");
         Console.WriteLine("       aecs export-patch --evidence <id> --diff-hash <sha256> --output <path> --actor <actor>");
+        Console.WriteLine("       aecs evidence-key rotate [--key-directory <path>]");
         return 1;
     }
 

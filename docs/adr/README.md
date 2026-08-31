@@ -11,6 +11,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-005](ADR-005-local-llm-via-ollama.md) | Accepted | Priorizar modelos locais via Ollama |
 | [ADR-006](ADR-006-verification-before-learning.md) | Accepted | Aprender apenas com execuções verificadas |
 | [ADR-007](ADR-007-staged-trust-boundary-and-controlled-promotion.md) | Accepted | Isolar descoberta/verificação em worktrees e promover somente por uma ação controlada |
+| [ADR-008](ADR-008-authenticated-evidence-envelope.md) | Accepted | Autenticar a evidência e encadear eventos de promoção assinados |
 
 ## Convenção para novos ADRs
 

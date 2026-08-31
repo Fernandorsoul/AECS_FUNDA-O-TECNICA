@@ -28,7 +28,7 @@ flowchart TD
     J --> K{Gates determinísticos}
     K -->|falha| X
     K -->|passa| L[Verified ou HumanReviewRequired]
-    X --> M[Evidência JSON fora do repositório]
+    X --> M[Envelope JSON assinado fora do repositório]
     L --> M
     M -->|ação explícita posterior| N[Exportar patch ou promover]
 ```
@@ -133,9 +133,9 @@ Cancelamento, wall clock esgotado, orçamento excedido ou falha permanente do ag
 
 `Verified` prova somente o contrato e a matriz de evidências declarados. Não é uma prova formal de correção nem cobre requisitos ausentes do contrato.
 
-## Evidência JSON
+## Evidência JSON autenticada
 
-A CLI usa `JsonExecutionEvidenceStore`. O diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windows e o equivalente retornado por `LocalApplicationData` nas demais plataformas; `AECS_EVIDENCE_PATH` pode sobrescrevê-lo. O store recusa um diretório de evidência localizado dentro do repositório-alvo.
+A CLI usa `JsonExecutionEvidenceStore`. O diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windows e o equivalente retornado por `LocalApplicationData` nas demais plataformas; `AECS_EVIDENCE_PATH` pode sobrescrevê-lo. O keyring fica separadamente em `%LOCALAPPDATA%/AECS/keys` e pode ser configurado por `AECS_EVIDENCE_KEY_DIRECTORY`. O store recusa evidências ou chaves localizadas dentro do repositório-alvo.
 
 Cada documento preserva:
 
@@ -147,7 +147,9 @@ Cada documento preserva:
 - matriz de critérios de aceite, decisão final e transições de estado;
 - exportações e promoções posteriores.
 
-A criação inicial não sobrescreve uma evidência existente. Acréscimos de promoção usam locks em processo e em arquivo, escrita temporária e substituição atômica. O backend PostgreSQL existe como fundação, mas não compõe o fluxo da CLI.
+A criação inicial produz um envelope `aecs.execution-evidence/v1`: JSON canônico, SHA-256 e assinatura RSA-PSS/SHA-256 identificada pelo hash da chave pública. Promoções e exportações são eventos assinados ligados à assinatura anterior, e uma cabeça também assinada cobre a quantidade de eventos e a última assinatura. A leitura rejeita schema legado, campo desconhecido ou duplicado, hash divergente, chave não confiável e cadeia inválida antes de entregar `ExecutionEvidence` ao consumidor.
+
+A criação inicial não sobrescreve uma evidência existente. Acréscimos de promoção usam locks em processo e em arquivo, escrita temporária e substituição atômica. Chaves públicas anteriores permanecem confiáveis depois da rotação; JSON legado sem assinatura falha fechado. O backend PostgreSQL existe como fundação, mas não compõe o fluxo da CLI. Detalhes operacionais e limites estão em [Integridade das evidências](evidence-integrity.md).
 
 ## Promoção controlada
 
@@ -171,7 +173,7 @@ A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-mon
 ## Limitações atuais
 
 - o agente e os verificadores executam no host; o sandbox Docker ainda não envolve a CLI padrão;
-- a evidência JSON não possui assinatura criptográfica nem armazenamento imutável externo;
+- a evidência JSON é assinada, mas o keyring local não é um HSM/KMS e ainda não existe âncora externa imutável capaz de detectar rollback integral para uma versão antiga válida;
 - o compilador de contexto indexa apenas C# e usa tokenização aproximada;
 - unit e integration tests compartilham um único comando/verificador;
 - `SecurityScan` não foi implementado;

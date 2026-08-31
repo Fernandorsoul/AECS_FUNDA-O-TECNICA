@@ -1,0 +1,53 @@
+# Integridade e autenticidade das evidências
+
+O backend JSON persiste cada execução em um envelope `aecs.execution-evidence/v1`. O payload base é serializado de forma canônica, recebe SHA-256 e é assinado com RSA-PSS/SHA-256. `promote` e `export-patch` validam schema, hash, assinatura e isolamento do store antes de usar qualquer campo da evidência.
+
+## Envelope e cadeia de eventos
+
+O documento separa três elementos:
+
+- `evidence`: registro imutável da execução staged, sempre com a lista interna de promoções vazia;
+- `promotionEvents`: exportações e promoções assinadas individualmente, com sequência e assinatura anterior;
+- `chainSeal`: cabeça assinada que cobre a quantidade de eventos e a última assinatura.
+
+A serialização canônica ordena propriedades JSON por nome ordinal e preserva a ordem dos arrays. Propriedades duplicadas, campos desconhecidos, comentários, trailing commas e schemas não reconhecidos são recusados. Alterar em conjunto diff, `DiffHash`, decisão ou aprovação não restaura a validade: o hash e a assinatura cobrem o payload completo.
+
+O `chainSeal` detecta remoção simples do último evento. Uma cópia integral de um estado antigo ainda é um rollback criptograficamente válido; detectar esse ataque exige uma âncora monotônica ou store externo append-only, planejado na issue #19.
+
+## Chaves
+
+Por padrão:
+
+- evidências: `%LOCALAPPDATA%/AECS/evidence`;
+- chaves: `%LOCALAPPDATA%/AECS/keys`;
+- chave ativa: `current-private.pem`;
+- chaves públicas confiáveis: `<key-id>.public.pem`.
+
+Em outros sistemas operacionais, `LocalApplicationData` define a raiz equivalente. `AECS_EVIDENCE_PATH` e `AECS_EVIDENCE_KEY_DIRECTORY` sobrescrevem os diretórios. Ambos precisam ficar fora do repositório-alvo. A chave privada nunca entra no envelope nem no repositório; em Unix, o arquivo criado pelo AECS recebe permissão somente para o usuário.
+
+O `keyId` é o SHA-256 da chave pública no formato SubjectPublicKeyInfo. Uma chave ausente, desconhecida, fraca, inválida ou uma assinatura incompatível interrompe a operação de forma fechada.
+
+### Rotação
+
+Pare processos escritores antes da rotação e execute:
+
+```powershell
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- evidence-key rotate
+```
+
+Para um keyring fora do diretório padrão:
+
+```powershell
+dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- evidence-key rotate `
+  --key-directory C:\aecs-secrets\evidence-keys
+```
+
+A rotação substitui atomicamente apenas `current-private.pem` e preserva as chaves públicas anteriores. Assim, evidências antigas continuam verificáveis e novos eventos usam o novo `keyId`. Não remova uma chave pública enquanto houver evidência assinada por ela. Backup e ACLs do keyring são responsabilidade operacional; em produção, o diretório deve ser protegido separadamente do store.
+
+## Evidência legada
+
+JSONs sem envelope e assinatura são recusados. Não existe fallback silencioso nem migração que declare dados legados como autênticos. Uma futura importação deverá tratá-los como material não confiável, criar um registro explícito de provenance e nunca torná-los elegíveis para promoção automaticamente.
+
+## Limites da garantia
+
+A assinatura prova que o documento foi produzido por uma chave confiável e não foi modificado desde então. Ela não prova que o código está correto, não compensa um contrato incompleto e não protege contra um invasor que obtenha a chave privada. O keyring local também não substitui HSM, KMS, transparência externa ou armazenamento imutável.

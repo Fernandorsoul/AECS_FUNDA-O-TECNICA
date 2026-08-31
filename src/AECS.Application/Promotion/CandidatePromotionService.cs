@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using AECS.Domain.Enums;
+using AECS.Domain.Exceptions;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 
@@ -32,7 +33,27 @@ public sealed class CandidatePromotionService
     {
         ArgumentNullException.ThrowIfNull(request);
         var startedAt = DateTime.UtcNow;
-        var evidence = await LoadEvidenceAsync(request.EvidenceId, cancellationToken);
+        ExecutionEvidence? evidence;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(request.RepositoryPath))
+                _evidenceStore.EnsureRepositoryIsolation(request.RepositoryPath);
+            evidence = await LoadEvidenceAsync(request.EvidenceId, cancellationToken);
+        }
+        catch (Exception ex) when (IsEvidenceValidationFailure(ex))
+        {
+            return Unpersisted(
+                request.EvidenceId,
+                CandidatePromotionAction.Promote,
+                CandidatePromotionStatus.Rejected,
+                request.Actor,
+                request.Approval,
+                request.RepositoryPath,
+                string.Empty,
+                $"Execution evidence failed integrity or isolation validation: {ex.Message}",
+                startedAt);
+        }
+
         if (evidence is null)
         {
             return Unpersisted(
@@ -383,7 +404,27 @@ public sealed class CandidatePromotionService
     {
         ArgumentNullException.ThrowIfNull(request);
         var startedAt = DateTime.UtcNow;
-        var evidence = await LoadEvidenceAsync(request.EvidenceId, cancellationToken);
+        ExecutionEvidence? evidence;
+        try
+        {
+            evidence = await LoadEvidenceAsync(request.EvidenceId, cancellationToken);
+            if (evidence is not null)
+                _evidenceStore.EnsureRepositoryIsolation(evidence.Baseline.RepositoryPath);
+        }
+        catch (Exception ex) when (IsEvidenceValidationFailure(ex))
+        {
+            return Unpersisted(
+                request.EvidenceId,
+                CandidatePromotionAction.ExportPatch,
+                CandidatePromotionStatus.Rejected,
+                request.Actor,
+                new PromotionApproval(),
+                string.Empty,
+                request.DestinationPath,
+                $"Execution evidence failed integrity or isolation validation: {ex.Message}",
+                startedAt);
+        }
+
         if (evidence is null)
         {
             return Unpersisted(
@@ -522,6 +563,12 @@ public sealed class CandidatePromotionService
             return null;
         return await _evidenceStore.LoadAsync(evidenceId, cancellationToken);
     }
+
+    private static bool IsEvidenceValidationFailure(Exception exception) =>
+        exception is EvidenceIntegrityException or
+            IOException or
+            InvalidOperationException or
+            UnauthorizedAccessException;
 
     private static string? ValidatePromotionRequest(
         CandidatePromotionRequest request,

@@ -26,7 +26,7 @@ flowchart LR
     G --> H{Gates determinísticos}
     H -->|falha| R
     H -->|passa| I[Verified ou HumanReviewRequired]
-    I --> J[Evidência JSON fora do repositório]
+    I --> J[Envelope JSON assinado fora do repositório]
     J -->|confirmação explícita| K[Promoção atômica opcional]
 ```
 
@@ -41,7 +41,7 @@ O protótipo já inclui:
 - critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
 - verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
 - compilação seletiva e limitada de contexto em toda execução staged;
-- `CandidateChangeSet` e evidência JSON derivados do estado real do Git;
+- `CandidateChangeSet` derivado do Git e evidência JSON canônica assinada;
 - promoção controlada ou exportação do patch como operações separadas;
 - execução em lote com métricas como taxa de verificação e CPVC;
 - REPL interativo, chamado Jarvis.
@@ -127,7 +127,7 @@ ollama serve
 
 ### Promover ou exportar um candidato
 
-O comando `run` informa o `Evidence ID` e o `Diff hash`. Para aplicar um candidato `Verified` no mesmo repositório em que a evidência foi produzida:
+O comando `run` informa o `Evidence ID` e o `Diff hash`. A evidência é selada com RSA-PSS/SHA-256; qualquer alteração no envelope ou em sua cadeia de promoções bloqueia as operações seguintes. Para aplicar um candidato `Verified` no mesmo repositório em que a evidência foi produzida:
 
 ```powershell
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- promote `
@@ -150,7 +150,7 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- export-patch `
   --actor operador@example.com
 ```
 
-O destino precisa estar fora do repositório-alvo e não pode existir. Ambas as ações acrescentam à evidência o ator, a confirmação, a baseline, o hash e o resultado. Consulte [Promoção controlada](docs/controlled-promotion.md) para as garantias e os casos de recusa.
+O destino precisa estar fora do repositório-alvo e não pode existir. Ambas as ações acrescentam um evento assinado e encadeado com ator, confirmação, baseline, hash e resultado. Consulte [Promoção controlada](docs/controlled-promotion.md) para as garantias e os casos de recusa e [Integridade das evidências](docs/evidence-integrity.md) para envelope, chaves e rotação.
 
 ### Fallback em nuvem
 
@@ -246,6 +246,7 @@ A referência de campos, padrões de escopo, valores padrão e regras de decisã
 | Jarvis | `jarvis --repo <path>` | Abre o REPL interativo |
 | Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
+| Rotação de chave | `evidence-key rotate [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
 
 Comandos disponíveis dentro do Jarvis:
 
@@ -282,6 +283,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Arquitetura atual](docs/architecture.md) — fluxo, componentes, fronteiras e limitações;
 - [Referência do TaskContract](docs/task-contract.md) — schema YAML e semântica dos campos;
 - [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
+- [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
 
@@ -290,6 +292,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - a promoção é deliberadamente manual ou autorizada por uma referência de política e deixa as mudanças staged, sem criar commit;
 - a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
 - a persistência de evidências em PostgreSQL ainda não está conectada à CLI;
+- o keyring RSA local não substitui KMS/HSM nem detecta rollback integral para uma versão antiga validamente assinada;
 - o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
 - `security_scan: required` falha fechado porque ainda não existe implementação do verificador `SecurityScan`;
 - o indexador de contexto atual é específico para arquivos C# e usa estimativa aproximada de quatro caracteres por token;
