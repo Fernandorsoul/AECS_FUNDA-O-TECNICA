@@ -22,7 +22,9 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         {
             ["BuildProjectReferences"] = "false",
             ["Configuration"] = "Release",
+            ["DefaultItemExcludes"] = "**/bin/**;**/obj/**",
             ["DesignTimeBuild"] = "true",
+            ["MSBuildProjectExtensionsPath"] = "$(MSBuildProjectDirectory)/obj/",
             ["Platform"] = "AnyCPU",
             ["ProvideCommandLineArgs"] = "true",
             ["RestoreIgnoreFailedSources"] = "true",
@@ -553,7 +555,6 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
             intermediateRoot,
             "$(MSBuildProjectName)") + Path.DirectorySeparatorChar;
         properties["BaseIntermediateOutputPath"] = projectIntermediateRoot;
-        properties["MSBuildProjectExtensionsPath"] = projectIntermediateRoot;
         return properties;
     }
 
