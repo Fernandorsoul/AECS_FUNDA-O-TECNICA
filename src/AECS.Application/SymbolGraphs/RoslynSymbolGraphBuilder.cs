@@ -24,7 +24,6 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
             ["Configuration"] = "Release",
             ["DefaultItemExcludes"] = "**/bin/**;**/obj/**",
             ["DesignTimeBuild"] = "true",
-            ["MSBuildProjectExtensionsPath"] = "$(MSBuildProjectDirectory)/obj/",
             ["Platform"] = "AnyCPU",
             ["ProvideCommandLineArgs"] = "true",
             ["RestoreIgnoreFailedSources"] = "true",
@@ -77,7 +76,12 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
     {
         var compilerVersion = typeof(CSharpCompilation).Assembly.GetName().Version?.ToString()
             ?? "unknown";
-        var collector = new GraphCollector(root, snapshot, limits, cancellationToken);
+        using var isolatedWorkspace = CreateIsolatedWorkspace(
+            root,
+            snapshot,
+            cancellationToken);
+        var analysisRoot = isolatedWorkspace.Path;
+        var collector = new GraphCollector(analysisRoot, snapshot, limits, cancellationToken);
         string msBuildVersion;
         var sdkVersion = "unavailable";
         try
@@ -121,11 +125,9 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
             collector.CheckLimits();
-            var intermediateRoot = CreateIntermediateRoot();
             try
             {
-                using var workspace = MSBuildWorkspace.Create(
-                    CreateWorkspaceProperties(intermediateRoot));
+                using var workspace = MSBuildWorkspace.Create(GlobalProperties);
                 workspace.SkipUnrecognizedProjects = false;
                 workspace.LoadMetadataForReferencedProjects = false;
                 workspace.RegisterWorkspaceFailedHandler(eventArgs =>
@@ -135,7 +137,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                         loadRoot.Path,
                         eventArgs.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure));
 
-                var fullPath = ResolveSnapshotPath(root, loadRoot.Path, snapshot);
+                var fullPath = ResolveSnapshotPath(analysisRoot, loadRoot.Path, snapshot);
                 Solution solution;
                 if (loadRoot.Kind == "solution")
                 {
@@ -151,14 +153,16 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                     solution = openedProject.Solution;
                 }
 
-                var projectMaps = CreateProjectMaps(root, solution, snapshot);
+                var projectMaps = CreateProjectMaps(analysisRoot, solution, snapshot);
                 foreach (var project in solution.Projects
                              .Where(project => project.Language == LanguageNames.CSharp)
-                             .OrderBy(project => RelativeProjectPath(root, project), StringComparer.Ordinal))
+                             .OrderBy(
+                                 project => RelativeProjectPath(analysisRoot, project),
+                                 StringComparer.Ordinal))
                 {
                     var projectPath = SnapshotProjectPath(
                         snapshot,
-                        RelativeProjectPath(root, project));
+                        RelativeProjectPath(analysisRoot, project));
                     if (string.IsNullOrWhiteSpace(projectPath) ||
                         !processedProjects.Add(projectPath))
                     {
@@ -166,7 +170,7 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                     }
 
                     await ProcessProjectAsync(
-                        root,
+                        analysisRoot,
                         project,
                         projectPath,
                         snapshot,
@@ -187,10 +191,6 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                     loadRoot.Path,
                     isFailure: true,
                     code: "AECSROS001");
-            }
-            finally
-            {
-                DeleteIntermediateRoot(intermediateRoot);
             }
         }
 
@@ -535,46 +535,138 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         return roots;
     }
 
-    private static string CreateIntermediateRoot()
+    private static IsolatedWorkspace CreateIsolatedWorkspace(
+        string sourceRoot,
+        RepositorySnapshot snapshot,
+        CancellationToken cancellationToken)
     {
-        var root = Path.Combine(
+        var isolatedRoot = Path.Combine(
             Path.GetTempPath(),
-            "aecs-roslyn-msbuild",
+            "aecs-roslyn-workspaces",
             Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
-        Directory.CreateDirectory(root);
-        return root;
+        Directory.CreateDirectory(isolatedRoot);
+        try
+        {
+            foreach (var file in snapshot.Files.OrderBy(
+                         file => file.Path,
+                         StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sourcePath = ResolveContainedFile(sourceRoot, file.Path);
+                var targetPath = ResolveContainedPath(isolatedRoot, file.Path);
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                File.Copy(sourcePath, targetPath, overwrite: false);
+            }
+
+            CopyRestoreArtifacts(sourceRoot, isolatedRoot, snapshot, cancellationToken);
+            return new IsolatedWorkspace(isolatedRoot);
+        }
+        catch
+        {
+            DeleteIsolatedWorkspace(isolatedRoot);
+            throw;
+        }
     }
 
-    private static IDictionary<string, string> CreateWorkspaceProperties(
-        string intermediateRoot)
+    private static void CopyRestoreArtifacts(
+        string sourceRoot,
+        string isolatedRoot,
+        RepositorySnapshot snapshot,
+        CancellationToken cancellationToken)
     {
-        var properties = new SortedDictionary<string, string>(
-            GlobalProperties,
-            StringComparer.Ordinal);
-        var projectIntermediateRoot = Path.Combine(
-            intermediateRoot,
-            "$(MSBuildProjectName)") + Path.DirectorySeparatorChar;
-        properties["BaseIntermediateOutputPath"] = projectIntermediateRoot;
-        return properties;
+        foreach (var project in snapshot.Projects
+                     .Where(project => project.Language == "C#")
+                     .OrderBy(project => project.Path, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var projectPath = ResolveContainedFile(sourceRoot, project.Path);
+            var sourceDirectory = Path.Combine(Path.GetDirectoryName(projectPath)!, "obj");
+            if (!Directory.Exists(sourceDirectory) ||
+                (File.GetAttributes(sourceDirectory) & FileAttributes.ReparsePoint) != 0)
+            {
+                continue;
+            }
+
+            var relativeProjectDirectory = Path.GetDirectoryName(project.Path.Replace(
+                '/',
+                Path.DirectorySeparatorChar)) ?? string.Empty;
+            var targetDirectory = ResolveContainedPath(
+                isolatedRoot,
+                Path.Combine(relativeProjectDirectory, "obj"));
+            foreach (var sourcePath in Directory.EnumerateFiles(
+                         sourceDirectory,
+                         "*",
+                         SearchOption.TopDirectoryOnly)
+                     .Where(path => IsRestoreArtifact(path) &&
+                         (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
+                     .OrderBy(path => path, StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var targetPath = Path.Combine(targetDirectory, Path.GetFileName(sourcePath));
+                Directory.CreateDirectory(targetDirectory);
+                File.Copy(sourcePath, targetPath, overwrite: false);
+            }
+        }
     }
 
-    private static void DeleteIntermediateRoot(string intermediateRoot)
+    private static bool IsRestoreArtifact(string path)
+    {
+        var name = Path.GetFileName(path);
+        return name.Equals("project.assets.json", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("project.nuget.cache", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".nuget.g.props", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".nuget.g.targets", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".nuget.dgspec.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveContainedFile(string root, string relativePath)
+    {
+        var fullPath = ResolveContainedPath(root, relativePath);
+        if (!File.Exists(fullPath) ||
+            (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException(
+                $"Symbol graph input is unsafe or unavailable: '{relativePath}'.");
+        }
+        return fullPath;
+    }
+
+    private static string ResolveContainedPath(string root, string relativePath)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(
+            root,
+            relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        var rootPrefix = Path.GetFullPath(root).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!fullPath.StartsWith(rootPrefix, comparison))
+        {
+            throw new InvalidOperationException(
+                $"Symbol graph path escapes its workspace: '{relativePath}'.");
+        }
+        return fullPath;
+    }
+
+    private static void DeleteIsolatedWorkspace(string isolatedRoot)
     {
         try
         {
             var temporaryParent = Path.GetFullPath(Path.Combine(
                 Path.GetTempPath(),
-                "aecs-roslyn-msbuild"))
+                "aecs-roslyn-workspaces"))
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
                 Path.DirectorySeparatorChar;
-            var fullPath = Path.GetFullPath(intermediateRoot);
+            var fullPath = Path.GetFullPath(isolatedRoot);
             var comparison = OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal;
             if (!fullPath.StartsWith(temporaryParent, comparison))
             {
                 throw new InvalidOperationException(
-                    $"Refusing to delete unexpected Roslyn intermediate path: {fullPath}");
+                    $"Refusing to delete unexpected Roslyn workspace path: {fullPath}");
             }
             if (Directory.Exists(fullPath))
                 Directory.Delete(fullPath, recursive: true);
@@ -771,6 +863,13 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
     };
 
     private sealed record LoadRoot(string Kind, string Path);
+
+    private sealed class IsolatedWorkspace(string path) : IDisposable
+    {
+        public string Path { get; } = path;
+
+        public void Dispose() => DeleteIsolatedWorkspace(Path);
+    }
 
     private sealed record MsBuildRegistration(
         string MsBuildVersion,
