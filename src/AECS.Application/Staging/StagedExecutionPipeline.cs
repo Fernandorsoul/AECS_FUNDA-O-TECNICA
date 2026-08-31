@@ -2,6 +2,7 @@ using AECS.Application.Classification;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
 using AECS.Application.ControlKernel;
+using AECS.Application.RepositorySnapshots;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -19,6 +20,7 @@ public sealed class StagedExecutionResult
     public IReadOnlyList<AgentAttemptEvidence> AgentAttempts { get; init; } = [];
     public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public BaselineSnapshot Baseline { get; init; } = new();
+    public RepositorySnapshot RepositorySnapshot { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public IReadOnlyList<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public IReadOnlyList<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
@@ -46,6 +48,7 @@ public sealed class StagedExecutionPipeline
     private readonly FileApplicator _fileApplicator = new();
     private readonly AgentExecutionCoordinator _agentExecutionCoordinator;
     private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
+    private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -55,7 +58,8 @@ public sealed class StagedExecutionPipeline
         Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
         TimeSpan? maximumRetryBackoff = null,
         IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
-        IReadOnlyList<ISecurityScanner>? securityScanners = null)
+        IReadOnlyList<ISecurityScanner>? securityScanners = null,
+        RepositorySnapshotBuilder? repositorySnapshotBuilder = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -64,6 +68,8 @@ public sealed class StagedExecutionPipeline
         _workspaceManager = new GitWorkspaceManager(processRunner);
         _contextCompiler = contextCompiler ?? new RepositoryContextCompiler();
         _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
+        _repositorySnapshotBuilder = repositorySnapshotBuilder ??
+            new RepositorySnapshotBuilder(processRunner);
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -100,6 +106,7 @@ public sealed class StagedExecutionPipeline
 
         var baselineCommands = new List<ExecutionCommandEvidence>();
         List<VerificationResult> baselineVerificationResults;
+        RepositorySnapshot repositorySnapshot;
         await using (var preflightWorkspace = await _workspaceManager.CreateWorkspaceAsync(
             baseline,
             budgetScope.Token))
@@ -122,6 +129,12 @@ public sealed class StagedExecutionPipeline
                 baselineContext,
                 budgetScope.Token,
                 () => budgetScope.RemainingDuration);
+            repositorySnapshot = await _repositorySnapshotBuilder.BuildAsync(
+                preflightWorkspace.Path,
+                baseline.Commit,
+                contract,
+                baselineCommands,
+                budgetScope.Token);
             baselineVerificationResults = await VerifyBaselineAsync(
                 stagedProcessRunner,
                 baselineContext,
@@ -159,6 +172,7 @@ public sealed class StagedExecutionPipeline
                 risk,
                 plan.Model,
                 baseline,
+                repositorySnapshot,
                 agentRunId,
                 startedAt,
                 baselineAgentResult,
@@ -273,6 +287,7 @@ public sealed class StagedExecutionPipeline
             risk,
             plan.Model,
             baseline,
+            repositorySnapshot,
             agentRunId,
             startedAt,
             agentResult,
@@ -295,6 +310,7 @@ public sealed class StagedExecutionPipeline
         RiskLevel risk,
         string model,
         BaselineSnapshot baseline,
+        RepositorySnapshot repositorySnapshot,
         string agentRunId,
         DateTime startedAt,
         AgentRunResult agentResult,
@@ -351,6 +367,7 @@ public sealed class StagedExecutionPipeline
                 agentAttempts,
                 budgetExhaustionReason),
             Baseline = baseline,
+            RepositorySnapshot = repositorySnapshot,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,
             ContextManifest = contextManifest,
@@ -390,6 +407,7 @@ public sealed class StagedExecutionPipeline
             AgentAttempts = agentAttempts,
             BudgetUsage = evidence.BudgetUsage,
             Baseline = baseline,
+            RepositorySnapshot = repositorySnapshot,
             CandidateChangeSet = candidate,
             BaselineVerificationResults = baselineVerificationResults,
             BaselineCommands = baselineCommands,

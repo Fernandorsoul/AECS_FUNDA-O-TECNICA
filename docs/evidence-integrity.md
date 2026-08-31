@@ -15,6 +15,8 @@ Promoções e replays usam uma única sequência global. Intercalar os dois tipo
 
 A serialização canônica ordena propriedades JSON por nome ordinal e preserva a ordem dos arrays. Propriedades duplicadas, campos desconhecidos, comentários, trailing commas e schemas não reconhecidos são recusados. Alterar em conjunto diff, `DiffHash`, decisão ou aprovação não restaura a validade: o hash e a assinatura cobrem o payload completo.
 
+Quando presente, `repositorySnapshot` também é validado estruturalmente antes do uso: schema e estratégia precisam ser as versões suportadas, os vínculos com baseline e TaskContract devem coincidir, caminhos/hashes não podem ser inseguros ou duplicados e `configurationHash`/`snapshotHash` são recalculados. O envelope assina ainda a proveniência de Git/.NET, o commit e o contrato associados. Evidências autenticadas anteriores ao campo continuam legíveis; elas não ganham retrospectivamente uma prova de snapshot.
+
 O `chainSeal` detecta remoção simples do último evento. PostgreSQL persiste os eventos em linhas relacionadas e transacionais, melhorando concorrência, backup e recuperação. Uma restauração coordenada de banco e keyring para um estado antigo ainda é um rollback criptograficamente válido; detectar esse ataque exige uma âncora monotônica independente.
 
 ## Chaves

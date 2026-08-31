@@ -26,6 +26,10 @@ public sealed class StagedExecutionPipelineTests
         result.CandidateChangeSet.ChangedFiles.Should().NotContain("claimed/not-real.txt");
         result.CandidateChangeSet.Diff.Should().Contain("new file mode");
         result.CandidateChangeSet.DiffHash.Should().StartWith("sha256:");
+        result.RepositorySnapshot.SnapshotHash.Should().StartWith("sha256:");
+        result.RepositorySnapshot.BaselineCommit.Should().Be(result.Baseline.Commit);
+        result.RepositorySnapshot.TaskContractId.Should().Be(result.Contract.Id);
+        result.RepositorySnapshot.Files.Should().ContainSingle(file => file.Path == "README.md");
         result.OriginalRepositoryUnchanged.Should().BeTrue();
         File.Exists(System.IO.Path.Combine(repository.Path, "src", "new-file.txt")).Should().BeFalse();
         (await repository.StatusAsync()).Should().BeEmpty();
@@ -33,6 +37,8 @@ public sealed class StagedExecutionPipelineTests
         var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
         evidence.Should().NotBeNull();
         evidence!.CandidateChangeSet.DiffHash.Should().Be(result.CandidateChangeSet.DiffHash);
+        evidence.RepositorySnapshot.Should().NotBeNull();
+        evidence.RepositorySnapshot!.SnapshotHash.Should().Be(result.RepositorySnapshot.SnapshotHash);
         evidence.FinalDecision.Decision.Should().Be(TaskDecision.Verified);
         evidence.VerificationResults.Should().OnlyContain(item =>
             !evidence.FinalDecision.RequiredVerifiers.Contains(item.Verifier) ||

@@ -25,6 +25,12 @@ public sealed class ExecutionReplayTests
 
         replay.Outcome.Should().Be(ExecutionReplayOutcome.Reproduced);
         replay.Evidence.ActualDiffHash.Should().Be(execution.CandidateChangeSet.DiffHash);
+        replay.Evidence.ExpectedRepositorySnapshotHash.Should()
+            .Be(execution.RepositorySnapshot.SnapshotHash);
+        replay.Evidence.ActualRepositorySnapshotHash.Should()
+            .Be(execution.RepositorySnapshot.SnapshotHash);
+        replay.Evidence.RepositorySnapshotDiff.Should().NotBeNull();
+        replay.Evidence.RepositorySnapshotDiff!.HasChanges.Should().BeFalse();
         replay.Evidence.Tools.Should().OnlyContain(item =>
             item.Status == ReplayComparisonStatus.Match);
         replay.Evidence.Commands.Should().OnlyContain(item =>
@@ -71,6 +77,11 @@ public sealed class ExecutionReplayTests
         replay.Evidence.ActualDiffHash.Should().Be(execution.CandidateChangeSet.DiffHash);
         replay.Evidence.Tools.Should().ContainSingle(item =>
             item.Tool == "dotnet" && item.Status == ReplayComparisonStatus.Diverged);
+        replay.Evidence.ActualRepositorySnapshotHash.Should()
+            .Be(replay.Evidence.ExpectedRepositorySnapshotHash,
+                "tool provenance is authenticated separately from repository content addressing");
+        replay.Evidence.RepositorySnapshotDiff!.HasChanges.Should().BeFalse(
+            "the inventory files match even though the authenticated tool environment changed");
     }
 
     [Fact]

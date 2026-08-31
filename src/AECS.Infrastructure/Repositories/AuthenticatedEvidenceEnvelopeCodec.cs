@@ -414,6 +414,80 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new EvidenceIntegrityException(
                 "Test suite evidence is incomplete, inconsistent, or has an unsupported schema.");
         }
+
+        var snapshot = evidence.RepositorySnapshot;
+        if (snapshot is not null &&
+            (snapshot.SchemaVersion != RepositorySnapshotSchema.SnapshotVersion ||
+             snapshot.StrategyVersion != RepositorySnapshotSchema.DiscoveryStrategy ||
+             snapshot.ProfileVersion != RepositorySnapshotSchema.ProfileVersion ||
+             !string.Equals(snapshot.BaselineCommit, evidence.Baseline.Commit, StringComparison.Ordinal) ||
+             !string.Equals(snapshot.TaskContractId, evidence.TaskContract.Id, StringComparison.Ordinal) ||
+             snapshot.ExcludedEntryCount < 0 ||
+             snapshot.ExcludedDirectories is null ||
+             snapshot.Tools is null ||
+             snapshot.Files is null ||
+             snapshot.Solutions is null ||
+             snapshot.Projects is null ||
+             snapshot.Languages is null ||
+             snapshot.Frameworks is null ||
+             snapshot.Manifests is null ||
+             snapshot.Packages is null ||
+             snapshot.Entrypoints is null ||
+             snapshot.TestSuites is null ||
+             snapshot.Relationships is null ||
+             !IsSha256(snapshot.SnapshotHash) ||
+             !IsSha256(snapshot.ConfigurationHash) ||
+             !FixedTimeTextEquals(
+                 snapshot.ConfigurationHash,
+                 RepositorySnapshotFingerprint.CreateConfiguration(
+                     snapshot.ProfileVersion,
+                     snapshot.ExcludedDirectories)) ||
+             !FixedTimeTextEquals(
+                 snapshot.SnapshotHash,
+                 RepositorySnapshotFingerprint.Create(snapshot)) ||
+             snapshot.Files.Any(file =>
+                 !IsSafeRepositoryPath(file.Path) ||
+                 !IsGitHash(file.Hash) ||
+                 file.Size < 0) ||
+             snapshot.Files.Select(file => file.Path).Distinct(StringComparer.Ordinal).Count() !=
+                 snapshot.Files.Count ||
+             snapshot.Solutions.Any(solution =>
+                 !IsSafeRepositoryPath(solution.Path) ||
+                 !IsGitHash(solution.Hash) ||
+                 solution.Projects is null ||
+                 solution.Projects.Any(project => !IsSafeRepositoryPath(project))) ||
+             snapshot.Projects.Any(project =>
+                 !IsSafeRepositoryPath(project.Path) ||
+                 !IsGitHash(project.Hash) ||
+                 project.Frameworks is null ||
+                 project.ProjectReferences is null ||
+                 project.PackageReferences is null ||
+                 project.ProjectReferences.Any(reference => !IsSafeRepositoryPath(reference))) ||
+             snapshot.Languages.Any(language =>
+                 string.IsNullOrWhiteSpace(language.Name) || language.FileCount <= 0) ||
+             snapshot.Frameworks.Any(string.IsNullOrWhiteSpace) ||
+             snapshot.Manifests.Any(manifest =>
+                 !IsSafeRepositoryPath(manifest.Path) || !IsGitHash(manifest.Hash)) ||
+             snapshot.Packages.Any(package =>
+                 string.IsNullOrWhiteSpace(package.Ecosystem) ||
+                 string.IsNullOrWhiteSpace(package.Name) ||
+                 !IsSafeRepositoryPath(package.SourcePath)) ||
+             snapshot.Entrypoints.Any(entrypoint =>
+                 !IsSafeRepositoryPath(entrypoint.Path) ||
+                 !string.IsNullOrEmpty(entrypoint.ProjectPath) &&
+                 !IsSafeRepositoryPath(entrypoint.ProjectPath)) ||
+             snapshot.TestSuites.Any(suite =>
+                 string.IsNullOrWhiteSpace(suite.Name) ||
+                 string.IsNullOrWhiteSpace(suite.Category) ||
+                 !string.IsNullOrEmpty(suite.Target) && !IsSafeRepositoryPath(suite.Target)) ||
+             snapshot.Relationships.Any(relationship =>
+                 !IsSafeRepositoryPath(relationship.From) ||
+                 !IsSafeRepositoryPath(relationship.To) ||
+                 string.IsNullOrWhiteSpace(relationship.Kind))))
+        {
+            throw new EvidenceIntegrityException(
+                "Repository snapshot is incomplete, inconsistent, or has an unsupported schema.");
+        }
     }
 
     private void VerifySeal(EvidenceSeal seal, object payload, string description)
@@ -555,6 +629,26 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 "Successful replay event does not reproduce the expected diff hash.");
         }
 
+        var expectedSnapshot = envelope.Evidence.RepositorySnapshot;
+        if (expectedSnapshot is not null &&
+            !FixedTimeTextEquals(
+                replay.ExpectedRepositorySnapshotHash ?? string.Empty,
+                expectedSnapshot.SnapshotHash))
+        {
+            throw new EvidenceIntegrityException(
+                "Replay event references a different repository snapshot.");
+        }
+        if (replay.Outcome == ExecutionReplayOutcome.Reproduced &&
+            expectedSnapshot is not null &&
+            (!FixedTimeTextEquals(
+                 replay.ActualRepositorySnapshotHash ?? string.Empty,
+                 expectedSnapshot.SnapshotHash) ||
+             replay.RepositorySnapshotDiff?.HasChanges != false))
+        {
+            throw new EvidenceIntegrityException(
+                "Successful replay event does not reproduce the repository snapshot.");
+        }
+
         if (validateDuplicate && envelope.ReplayEvents.Any(item => item.Replay.Id == replay.Id))
             throw new InvalidOperationException("Replay evidence has already been recorded.");
     }
@@ -645,6 +739,28 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         var rightBytes = System.Text.Encoding.UTF8.GetBytes(right ?? string.Empty);
         return leftBytes.Length == rightBytes.Length &&
             CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    private static bool IsSha256(string value) =>
+        value.Length == 71 &&
+        value.StartsWith("sha256:", StringComparison.Ordinal) &&
+        value[7..].All(character => Uri.IsHexDigit(character) && !char.IsUpper(character));
+
+    private static bool IsGitHash(string value) =>
+        value.StartsWith("git:", StringComparison.Ordinal) &&
+        value.Length is 44 or 68 &&
+        value[4..].All(Uri.IsHexDigit);
+
+    private static bool IsSafeRepositoryPath(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value) ||
+            value.StartsWith('/') || value.Contains('\\'))
+        {
+            return false;
+        }
+        var segments = value.Split('/');
+        return segments.All(segment => segment is not ("" or "." or "..")) &&
+            !segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsStrictlyIncreasing(IEnumerable<int> values)

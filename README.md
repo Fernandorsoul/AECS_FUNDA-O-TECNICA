@@ -18,7 +18,8 @@ Modelos podem descobrir padrões, selecionar contexto e propor alterações. Bui
 flowchart LR
     A[TaskContract YAML] --> B[Baseline Git limpa]
     B --> C[Worktree de preflight]
-    C --> D{Build + matriz de suites da baseline}
+    C --> S[RepositorySnapshot determinístico]
+    S --> D{Build + matriz de suites da baseline}
     D -->|falha| R[Rejected + evidência]
     D -->|passa| E[Worktree do candidato]
     E --> F[Contexto limitado + agente]
@@ -37,6 +38,7 @@ O protótipo já inclui:
 - seleção de modelos locais por risco;
 - execução via Ollama e fallback para APIs compatíveis com OpenAI;
 - limites de tokens, custo, duração, tentativas e arquivos alterados;
+- `RepositorySnapshot` versionado e endereçado por conteúdo, com inventário da baseline e relações entre soluções e projetos;
 - preflight da baseline e gates versionados independentes para unitários, integração e aceite, com modos required/optional/disabled e contagem TRX;
 - critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
 - verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
@@ -170,7 +172,7 @@ O destino precisa estar fora do repositório-alvo e não pode existir. Ambas as 
 
 ### Reproduzir uma evidência
 
-O replay reconstrói o candidato e repete ferramentas, comandos, gates e evidências de aceite num worktree descartável, sem chamar o agente nem alterar o checkout original:
+O replay reconstrói o snapshot da baseline e o candidato, compara o inventário e repete ferramentas, comandos, gates e evidências de aceite num worktree descartável, sem chamar o agente nem alterar o checkout original:
 
 ```powershell
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- replay `
@@ -278,6 +280,9 @@ task:
     runtime: docker
     working_directory: .
     target: CustomerSystem.slnx
+    repository_snapshot:
+      version: aecs.repository-snapshot-profile/v1
+      excluded_directories: [vendor/generated]
     test_suites:
       version: aecs.test-suites/v1
       unit:
@@ -385,6 +390,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 
 - [Arquitetura atual](docs/architecture.md) — fluxo, componentes, fronteiras e limitações;
 - [Referência do TaskContract](docs/task-contract.md) — schema YAML e semântica dos campos;
+- [RepositorySnapshot determinístico](docs/repository-snapshot.md) — inventário da baseline, hashing, exclusões e diff;
 - [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
 - [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
 - [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;

@@ -40,6 +40,7 @@ public sealed class EvidenceGraphTests
             EvidenceGraphNodeKind.AgentRun,
             EvidenceGraphNodeKind.AgentAttempt,
             EvidenceGraphNodeKind.Baseline,
+            EvidenceGraphNodeKind.RepositorySnapshot,
             EvidenceGraphNodeKind.Context,
             EvidenceGraphNodeKind.Candidate,
             EvidenceGraphNodeKind.Command,
@@ -59,6 +60,8 @@ public sealed class EvidenceGraphTests
         first.Nodes.Single(item => item.Kind == EvidenceGraphNodeKind.Candidate)
             .Hashes["diffSha256"].Should().Be(evidence.CandidateChangeSet.DiffHash);
         first.Edges.Count(item => item.Kind == "authenticated-next").Should().Be(2);
+        first.Edges.Should().Contain(item => item.Kind == "described-by");
+        first.Edges.Should().Contain(item => item.Kind == "informs-context");
         first.Diagnostics.Should().BeEmpty();
 
         var filters = new EvidenceGraphQuery[]
@@ -234,6 +237,7 @@ public sealed class EvidenceGraphTests
                     RepositoryPath = repositoryPath,
                     CapturedAt = now
                 },
+                RepositorySnapshot = Snapshot(taskId, baseline),
                 BaselineCommands =
                 [
                     new ExecutionCommandEvidence
@@ -340,6 +344,15 @@ public sealed class EvidenceGraphTests
             BaselineCommit = evidence.Baseline.Commit,
             ExpectedDiffHash = evidence.CandidateChangeSet.DiffHash,
             ActualDiffHash = evidence.CandidateChangeSet.DiffHash,
+            ExpectedRepositorySnapshotHash = evidence.RepositorySnapshot?.SnapshotHash,
+            ActualRepositorySnapshotHash = evidence.RepositorySnapshot?.SnapshotHash,
+            RepositorySnapshotDiff = evidence.RepositorySnapshot is null
+                ? null
+                : new RepositorySnapshotDiff
+                {
+                    FromSnapshotHash = evidence.RepositorySnapshot.SnapshotHash,
+                    ToSnapshotHash = evidence.RepositorySnapshot.SnapshotHash
+                },
             StartedAt = DateTime.UtcNow.AddSeconds(-1),
             FinishedAt = DateTime.UtcNow
         };
@@ -373,6 +386,26 @@ public sealed class EvidenceGraphTests
                 Message = "passed",
                 CreatedAt = at
             };
+
+        private static RepositorySnapshot Snapshot(string taskId, string baseline)
+        {
+            var configurationHash = RepositorySnapshotFingerprint.CreateConfiguration(
+                RepositorySnapshotSchema.ProfileVersion,
+                []);
+            var draft = new RepositorySnapshot
+            {
+                ConfigurationHash = configurationHash,
+                BaselineCommit = baseline,
+                TaskContractId = taskId
+            };
+            return new RepositorySnapshot
+            {
+                SnapshotHash = RepositorySnapshotFingerprint.Create(draft),
+                ConfigurationHash = configurationHash,
+                BaselineCommit = baseline,
+                TaskContractId = taskId
+            };
+        }
 
         private static string Hash(string value)
         {

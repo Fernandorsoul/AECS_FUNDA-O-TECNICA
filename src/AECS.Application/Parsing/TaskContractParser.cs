@@ -36,6 +36,7 @@ public class TaskContractParser
         var budget = model.Budget ?? model.budget;
         var execution = model.Execution ?? model.execution;
         var testSuitesYaml = execution?.TestSuites ?? execution?.test_suites;
+        var repositorySnapshotYaml = execution?.RepositorySnapshot ?? execution?.repository_snapshot;
         var capabilities = model.Capabilities ?? model.capabilities ??
             execution?.Capabilities ?? execution?.capabilities;
         var verification = model.Verification ?? model.verification;
@@ -72,6 +73,9 @@ public class TaskContractParser
         var mappedTestSuites = testSuitesYaml is null
             ? null
             : MapTestSuites(testSuitesYaml, executionTarget, mappedAcceptance);
+        var mappedRepositorySnapshot = repositorySnapshotYaml is null
+            ? null
+            : MapRepositorySnapshot(repositorySnapshotYaml);
         var mappedCapabilities = MapCapabilities(
             capabilities,
             mappedTestSuites);
@@ -137,7 +141,8 @@ public class TaskContractParser
                 Runtime = executionRuntime,
                 Sandbox = mappedSandbox,
                 Capabilities = mappedCapabilities,
-                TestSuites = mappedTestSuites
+                TestSuites = mappedTestSuites,
+                RepositorySnapshot = mappedRepositorySnapshot
             },
             Verification = mappedVerification,
             Approval = new ApprovalPolicy
@@ -588,6 +593,43 @@ public class TaskContractParser
                 $"Unknown test suite mode: '{value}'. Expected required, optional, or disabled.")
         };
 
+    private static RepositorySnapshotProfile MapRepositorySnapshot(
+        RepositorySnapshotYamlModel model)
+    {
+        var version = model.Version ?? model.version ?? RepositorySnapshotSchema.ProfileVersion;
+        if (version != RepositorySnapshotSchema.ProfileVersion)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported execution.repository_snapshot version: '{version}'.");
+        }
+        var exclusions = (model.ExcludedDirectories ?? model.excluded_directories ?? [])
+            .Select(NormalizeSnapshotExclusion)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        return new RepositorySnapshotProfile
+        {
+            Version = version,
+            ExcludedDirectories = exclusions
+        };
+    }
+
+    private static string NormalizeSnapshotExclusion(string path)
+    {
+        var normalized = path.Trim().Replace('\\', '/').TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            normalized.StartsWith('/') ||
+            Regex.IsMatch(normalized, @"^[a-zA-Z]:/") ||
+            normalized.Split('/').Any(segment => segment is "" or "." or ".." ||
+                segment.Equals(".git", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                $"Repository snapshot exclusion must be a safe relative directory: '{path}'.");
+        }
+        return normalized;
+    }
+
     private static void ValidateTestSuiteTarget(string target, TestSuiteCategory category)
     {
         var normalized = target.Trim().Replace('\\', '/');
@@ -850,6 +892,16 @@ public class ExecutionYamlModel
     public CapabilitiesYamlModel? capabilities { get; set; }
     public TestSuiteMatrixYamlModel? TestSuites { get; set; }
     public TestSuiteMatrixYamlModel? test_suites { get; set; }
+    public RepositorySnapshotYamlModel? RepositorySnapshot { get; set; }
+    public RepositorySnapshotYamlModel? repository_snapshot { get; set; }
+}
+
+public class RepositorySnapshotYamlModel
+{
+    public string? Version { get; set; }
+    public string? version { get; set; }
+    public List<string>? ExcludedDirectories { get; set; }
+    public List<string>? excluded_directories { get; set; }
 }
 
 public class TestSuiteMatrixYamlModel

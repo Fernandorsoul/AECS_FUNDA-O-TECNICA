@@ -643,6 +643,49 @@ public class TaskContractParserTests
     }
 
     [Fact]
+    public void Parse_RepositorySnapshotProfile_MapsVersionAndSafeExclusions()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-REPOSITORY-SNAPSHOT
+              objective: Configure deterministic repository discovery
+              execution:
+                repository_snapshot:
+                  version: aecs.repository-snapshot-profile/v1
+                  excluded_directories:
+                    - vendor/generated/
+                    - docs/archive
+            """);
+
+        result.Execution.RepositorySnapshot.Should().NotBeNull();
+        result.Execution.RepositorySnapshot!.Version.Should()
+            .Be(RepositorySnapshotSchema.ProfileVersion);
+        result.Execution.RepositorySnapshot.ExcludedDirectories.Should()
+            .Equal("docs/archive", "vendor/generated");
+    }
+
+    [Theory]
+    [InlineData("version: future/v2", "Unsupported execution.repository_snapshot version")]
+    [InlineData("excluded_directories: [\"../outside\"]", "safe relative directory")]
+    [InlineData("excluded_directories: [\"C:/outside\"]", "safe relative directory")]
+    [InlineData("excluded_directories: [\"nested/.git/objects\"]", "safe relative directory")]
+    public void Parse_InvalidRepositorySnapshotProfile_FailsClosed(
+        string fragment,
+        string expected)
+    {
+        var action = () => _parser.Parse($"""
+            task:
+              id: TASK-BAD-REPOSITORY-SNAPSHOT
+              objective: Reject unsafe snapshot configuration
+              execution:
+                repository_snapshot:
+                  {fragment}
+            """);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Fact]
     public void Parse_MissingTaskKey_ThrowsYamlException()
     {
         var yaml = "not_a_task: true";

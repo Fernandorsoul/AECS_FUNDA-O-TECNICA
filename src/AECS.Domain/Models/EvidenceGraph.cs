@@ -10,6 +10,7 @@ public enum EvidenceGraphNodeKind
     AgentRun,
     AgentAttempt,
     Baseline,
+    RepositorySnapshot,
     Context,
     Candidate,
     Command,
