@@ -45,6 +45,7 @@ public sealed class StagedExecutionPipeline
     private readonly DecisionEngine _decisionEngine = new();
     private readonly FileApplicator _fileApplicator = new();
     private readonly AgentExecutionCoordinator _agentExecutionCoordinator;
+    private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -53,7 +54,8 @@ public sealed class StagedExecutionPipeline
         RepositoryContextCompiler? contextCompiler = null,
         Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
         TimeSpan? maximumRetryBackoff = null,
-        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null)
+        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
+        IReadOnlyList<ISecurityScanner>? securityScanners = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -61,6 +63,7 @@ public sealed class StagedExecutionPipeline
         _evidenceStore = evidenceStore;
         _workspaceManager = new GitWorkspaceManager(processRunner);
         _contextCompiler = contextCompiler ?? new RepositoryContextCompiler();
+        _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -251,6 +254,7 @@ public sealed class StagedExecutionPipeline
                 stagedProcessRunner,
                 verificationContext,
                 applicationResult,
+                BaselineSecurityFingerprints(baselineVerificationResults),
                 acceptanceCriteriaResults,
                 agentResult.FailureKind is AgentFailureKind.Cancelled or AgentFailureKind.BudgetExceeded
                     ? CancellationToken.None
@@ -431,6 +435,23 @@ public sealed class StagedExecutionPipeline
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
         }
 
+        if (context.Contract.Verification.SecurityScan)
+        {
+            results.Add(buildPassed
+                ? await RunVerifierAsync(
+                    new SecurityScanVerifier(
+                        stagedProcessRunner,
+                        _securityScanners,
+                        isBaseline: true,
+                        remainingDuration: remainingDuration),
+                    context,
+                    cancellationToken)
+                : Skipped(
+                    context.AgentRunId,
+                    SecurityScanVerifier.VerifierName,
+                    "Baseline build prerequisite failed"));
+        }
+
         return results;
     }
 
@@ -441,6 +462,8 @@ public sealed class StagedExecutionPipeline
             required.Add("Build");
         if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
             required.Add("Tests");
+        if (contract.Verification.SecurityScan)
+            required.Add(SecurityScanVerifier.VerifierName);
         return required;
     }
 
@@ -459,6 +482,7 @@ public sealed class StagedExecutionPipeline
         IProcessRunner stagedProcessRunner,
         VerificationContext context,
         FileApplicatorResult applicationResult,
+        IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteriaResults,
         CancellationToken cancellationToken,
         Func<TimeSpan> remainingDuration)
@@ -500,6 +524,23 @@ public sealed class StagedExecutionPipeline
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
+        }
+
+        if (context.Contract.Verification.SecurityScan)
+        {
+            results.Add(prerequisitesPassed && buildPassed
+                ? await RunVerifierAsync(
+                    new SecurityScanVerifier(
+                        stagedProcessRunner,
+                        _securityScanners,
+                        baselineSecurityFingerprints,
+                        remainingDuration: remainingDuration),
+                    context,
+                    cancellationToken)
+                : Skipped(
+                    context.AgentRunId,
+                    SecurityScanVerifier.VerifierName,
+                    "Trust-boundary or build prerequisite failed"));
         }
 
         if (prerequisitesPassed && buildPassed)
@@ -566,6 +607,14 @@ public sealed class StagedExecutionPipeline
             Severity = Severity.Warning,
             Message = reason
         };
+
+    private static IReadOnlySet<string> BaselineSecurityFingerprints(
+        IEnumerable<VerificationResult> results) => results
+        .Where(result => result.Verifier == SecurityScanVerifier.VerifierName)
+        .SelectMany(result => result.SecurityScan?.Findings ?? [])
+        .Where(finding => finding.Disposition != SecurityFindingDisposition.Suppressed)
+        .Select(finding => finding.Fingerprint)
+        .ToHashSet(StringComparer.Ordinal);
 
     private static DecisionResult ApplyTerminalExecutionState(
         DecisionResult decision,

@@ -452,17 +452,28 @@ internal static class EvidenceGraphProjection
         foreach (var verification in verifications)
         {
             var verificationNode = $"verification:{verification.Id:N}";
+            var attributes = new Dictionary<string, string>
+            {
+                ["phase"] = phase,
+                ["verifier"] = verification.Verifier,
+                ["status"] = verification.Status.ToString(),
+                ["severity"] = verification.Severity.ToString(),
+                ["message"] = verification.Message
+            };
+            if (verification.SecurityScan is not null)
+            {
+                attributes["securityScanSchema"] = verification.SecurityScan.SchemaVersion;
+                attributes["securityPolicyHash"] = verification.SecurityScan.PolicyHash;
+                attributes["vulnerabilityDatabase"] =
+                    verification.SecurityScan.VulnerabilityDatabaseVersion;
+                attributes["securityFindings"] = string.Join(";", verification.SecurityScan.Findings
+                    .Select(finding =>
+                        $"{finding.Rule}@{finding.Path}:{finding.Line}:{finding.Severity}:{finding.Disposition}"));
+            }
             builder.Node(verificationNode, EvidenceGraphNodeKind.Verification,
                 verification.Verifier, $"{phase}-verification", authority,
                 verification.CreatedAt,
-                attributes: new()
-                {
-                    ["phase"] = phase,
-                    ["verifier"] = verification.Verifier,
-                    ["status"] = verification.Status.ToString(),
-                    ["severity"] = verification.Severity.ToString(),
-                    ["message"] = verification.Message
-                });
+                attributes: attributes);
             verificationNodes[verification.Id] = verificationNode;
             if (string.Equals(verification.AgentRunId, runId.ToString("N"),
                     StringComparison.OrdinalIgnoreCase))

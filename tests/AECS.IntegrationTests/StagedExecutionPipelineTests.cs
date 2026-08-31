@@ -223,7 +223,7 @@ public sealed class StagedExecutionPipelineTests
     }
 
     [Fact]
-    public async Task RequiredVerifierMissing_IsRejectedFailClosed()
+    public async Task RequiredSecurityScannerWithoutValidToolProfile_FailsClosedBeforeAgent()
     {
         await using var repository = await TemporaryGitRepository.CreateAsync();
         var contract = Contract();
@@ -248,7 +248,66 @@ public sealed class StagedExecutionPipelineTests
 
         result.Decision.Decision.Should().Be(TaskDecision.Rejected);
         result.Decision.Failures.Should().Contain(failure =>
-            failure.Contains("SecurityScan") && failure.Contains("missing"));
+            failure.Contains("SecurityScan") && failure.Contains("Error"));
+        result.BaselineVerificationResults.Single(item => item.Verifier == "SecurityScan")
+            .Message.Should().Contain("inconclusive");
+        result.AgentAttempts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SecurityScan_BlocksOnlyNewCandidateFindingsAndPersistsNormalizedEvidence()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var contract = Contract();
+        contract = new TaskContract
+        {
+            Id = contract.Id,
+            Objective = contract.Objective,
+            Scope = contract.Scope,
+            Budget = contract.Budget,
+            Execution = contract.Execution,
+            Verification = new VerificationProfile
+            {
+                Build = false,
+                UnitTests = false,
+                SecurityScan = true,
+                SecurityPolicy = new SecurityScanPolicy
+                {
+                    Scanners = [SecurityScannerIds.Secrets]
+                }
+            },
+            Approval = contract.Approval
+        };
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var scanner = new BaselineAndCandidateScanner();
+        var pipeline = new StagedExecutionPipeline(
+            Agent.Success(Response("src/new.txt")),
+            repository.ProcessRunner,
+            store,
+            securityScanners: [scanner]);
+
+        var result = await pipeline.RunAsync(
+            repository.Path,
+            contract,
+            CancellationToken.None);
+
+        result.BaselineVerificationResults.Single(item => item.Verifier == "SecurityScan")
+            .Status.Should().Be(VerificationStatus.Pass);
+        var security = result.VerificationResults.Single(item =>
+            item.Verifier == "SecurityScan");
+        security.Status.Should().Be(VerificationStatus.Fail);
+        security.SecurityScan!.Findings.Should().Contain(finding =>
+            finding.Path == "src/legacy.txt" &&
+            finding.Disposition == SecurityFindingDisposition.Baseline);
+        security.SecurityScan.Findings.Should().Contain(finding =>
+            finding.Path == "src/new.txt" &&
+            finding.Disposition == SecurityFindingDisposition.New);
+        result.Decision.Decision.Should().Be(TaskDecision.Rejected);
+
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence!.VerificationResults.Single(item => item.Verifier == "SecurityScan")
+            .SecurityScan!.PolicyHash.Should().StartWith("sha256:");
+        (await repository.StatusAsync()).Should().BeEmpty();
     }
 
     [Fact]
@@ -797,6 +856,47 @@ public sealed class StagedExecutionPipelineTests
                 Duration = TimeSpan.FromMilliseconds(1)
             });
         }
+    }
+
+    private sealed class BaselineAndCandidateScanner : ISecurityScanner
+    {
+        public string Id => SecurityScannerIds.Secrets;
+
+        public Task<SecurityScannerResult> ScanAsync(
+            SecurityScannerContext context,
+            CancellationToken cancellationToken)
+        {
+            var findings = new List<SecurityFinding>
+            {
+                Finding("src/legacy.txt", "legacy")
+            };
+            if (!context.IsBaseline)
+                findings.Add(Finding("src/new.txt", "candidate"));
+            return Task.FromResult(new SecurityScannerResult
+            {
+                Scanner = Id,
+                Category = "secret",
+                Version = "fixture/1",
+                ConfigurationVersion = "fixture/1",
+                Conclusive = true,
+                Message = "Fixture scan completed.",
+                Findings = findings
+            });
+        }
+
+        private static SecurityFinding Finding(string path, string identity) => new()
+        {
+            Scanner = SecurityScannerIds.Secrets,
+            Category = "secret",
+            Rule = "FIXTURE-SECRET",
+            Severity = Severity.Error,
+            Path = path,
+            Fingerprint = SecurityFindingFingerprint.Create(
+                "FIXTURE-SECRET",
+                path,
+                identity),
+            Message = "Synthetic normalized finding."
+        };
     }
 
     private sealed class TemporaryGitRepository : IAsyncDisposable

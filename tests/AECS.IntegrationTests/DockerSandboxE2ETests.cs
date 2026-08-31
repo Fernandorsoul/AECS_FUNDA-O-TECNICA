@@ -71,6 +71,7 @@ public sealed class DockerSandboxE2ETests
             {
                 Build = true,
                 UnitTests = true,
+                SecurityScan = true,
                 Scope = true,
                 Budget = true
             },
@@ -96,6 +97,14 @@ public sealed class DockerSandboxE2ETests
             item.Verifier == "Build" && item.Status == VerificationStatus.Pass);
         result.VerificationResults.Should().Contain(item =>
             item.Verifier == "Tests" && item.Status == VerificationStatus.Pass);
+        result.BaselineVerificationResults.Should().Contain(item =>
+            item.Verifier == "SecurityScan" &&
+            item.Status == VerificationStatus.Pass &&
+            item.SecurityScan != null);
+        result.VerificationResults.Should().Contain(item =>
+            item.Verifier == "SecurityScan" &&
+            item.Status == VerificationStatus.Pass &&
+            item.SecurityScan != null);
         result.AcceptanceCriteriaResults.Should().ContainSingle(item =>
             item.Status == VerificationStatus.Pass);
         result.BaselineCommands.Concat(result.CandidateCommands).Should().NotBeEmpty()
@@ -110,6 +119,11 @@ public sealed class DockerSandboxE2ETests
                     ExecutionCapabilityPolicy.CurrentVersion &&
                 command.Environment.Capabilities.Authority == "task-contract" &&
                 !command.Environment.DevelopmentHostOverride);
+        result.BaselineCommands.Concat(result.CandidateCommands).Should().Contain(command =>
+            command.Arguments.FirstOrDefault() == "list" &&
+            command.Environment!.Capabilities!.Phase.EndsWith(
+                ".security-scan",
+                StringComparison.Ordinal));
         (await repository.StatusAsync()).Should().BeEmpty();
         (await SandboxContainersAsync(runner, repository.Path)).Should().BeEmpty();
     }

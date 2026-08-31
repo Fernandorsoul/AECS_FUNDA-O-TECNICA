@@ -108,6 +108,23 @@ public sealed class ExecutionReplayTests
             item.Status == ReplayComparisonStatus.NotReproducible);
     }
 
+    [Fact]
+    public async Task Replay_ReproducesNormalizedSecurityScanEvidence()
+    {
+        await using var fixture = await ReplayFixture.CreateAsync();
+        var execution = await fixture.ExecuteAsync(securityScan: true);
+
+        var replay = await fixture.ReplayAsync(execution.EvidenceId);
+
+        replay.Outcome.Should().Be(ExecutionReplayOutcome.Reproduced);
+        replay.Evidence.Gates.Should().Contain(item =>
+            item.Gate == "baseline:SecurityScan" &&
+            item.Status == ReplayComparisonStatus.Match);
+        replay.Evidence.Gates.Should().Contain(item =>
+            item.Gate == "candidate:SecurityScan" &&
+            item.Status == ReplayComparisonStatus.Match);
+    }
+
     private sealed class ReplayFixture : IAsyncDisposable
     {
         private const string RootPrefix = "aecs-replay-tests-";
@@ -123,6 +140,7 @@ public sealed class ExecutionReplayTests
         public string RepositoryPath { get; }
         public ReplayProcessRunner Runner { get; } = new();
         public CountingAgent Agent { get; } = new();
+        public DeterministicSecurityScanner SecurityScanner { get; } = new();
         public JsonExecutionEvidenceStore Store { get; }
 
         public static async Task<ReplayFixture> CreateAsync()
@@ -142,7 +160,9 @@ public sealed class ExecutionReplayTests
             return fixture;
         }
 
-        public Task<StagedExecutionResult> ExecuteAsync(string? requiredGate = null)
+        public Task<StagedExecutionResult> ExecuteAsync(
+            string? requiredGate = null,
+            bool securityScan = false)
         {
             var required = requiredGate is null ? new List<string>() : [requiredGate];
             var contract = new TaskContract
@@ -159,6 +179,10 @@ public sealed class ExecutionReplayTests
                 {
                     Build = true,
                     UnitTests = true,
+                    SecurityScan = securityScan,
+                    SecurityPolicy = securityScan
+                        ? new SecurityScanPolicy { Scanners = [SecurityScannerIds.Secrets] }
+                        : null,
                     RequiredSemanticVerifiers = required
                 },
                 AcceptanceRequirements =
@@ -175,14 +199,21 @@ public sealed class ExecutionReplayTests
                     }
                 ]
             };
-            return new StagedExecutionPipeline(Agent, Runner, Store).RunAsync(
+            return new StagedExecutionPipeline(
+                Agent,
+                Runner,
+                Store,
+                securityScanners: securityScan ? [SecurityScanner] : null).RunAsync(
                 RepositoryPath,
                 contract,
                 CancellationToken.None);
         }
 
         public Task<ExecutionReplayResult> ReplayAsync(Guid evidenceId) =>
-            new ExecutionReplayService(Runner, Store).ReplayAsync(
+            new ExecutionReplayService(
+                Runner,
+                Store,
+                securityScanners: [SecurityScanner]).ReplayAsync(
                 new ExecutionReplayRequest
                 {
                     EvidenceId = evidenceId,
@@ -259,6 +290,23 @@ public sealed class ExecutionReplayTests
                 FilesChanged = ["feature.txt"]
             });
         }
+    }
+
+    private sealed class DeterministicSecurityScanner : ISecurityScanner
+    {
+        public string Id => SecurityScannerIds.Secrets;
+
+        public Task<SecurityScannerResult> ScanAsync(
+            SecurityScannerContext context,
+            CancellationToken cancellationToken) => Task.FromResult(new SecurityScannerResult
+            {
+                Scanner = Id,
+                Category = "secret",
+                Version = "replay-fixture/1",
+                ConfigurationVersion = "replay-fixture/1",
+                Conclusive = true,
+                Message = "Deterministic replay scanner completed."
+            });
     }
 
     private sealed class ReplayProcessRunner : IProcessRunner

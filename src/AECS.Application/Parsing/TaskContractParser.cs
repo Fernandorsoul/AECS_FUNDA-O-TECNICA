@@ -69,6 +69,9 @@ public class TaskContractParser
         if (mappedSandbox is not null)
             ValidateCapabilityResources(mappedCapabilities, mappedSandbox);
         var mappedAcceptance = MapAcceptanceCriteria(acceptance, acceptanceEvidence);
+        var securityScanRequired = IsRequired(
+            verification?.SecurityScan ?? verification?.security_scan ?? "optional");
+        var securityPolicyYaml = verification?.SecurityPolicy ?? verification?.security_policy;
         var mappedVerification = new VerificationProfile
         {
             Build = IsRequired(verification?.Build ?? verification?.build ?? "required"),
@@ -76,8 +79,7 @@ public class TaskContractParser
             IntegrationTests = IsRequired(
                 verification?.IntegrationTests ?? verification?.integration_tests ?? "optional"),
             Scope = IsRequired(verification?.Scope ?? verification?.scope ?? "required"),
-            SecurityScan = IsRequired(
-                verification?.SecurityScan ?? verification?.security_scan ?? "optional"),
+            SecurityScan = securityScanRequired,
             Architecture = IsRequired(
                 verification?.Architecture ?? verification?.architecture ?? "optional"),
             BlockCriticalSemanticFailures = IsRequired(
@@ -86,7 +88,10 @@ public class TaskContractParser
                 ?? "required"),
             RequiredSemanticVerifiers = verification?.RequiredSemanticVerifiers
                 ?? verification?.required_semantic_verifiers
-                ?? []
+                ?? [],
+            SecurityPolicy = securityScanRequired || securityPolicyYaml is not null
+                ? MapSecurityScanPolicy(securityPolicyYaml)
+                : null
         };
         ValidateRequiredProcessCapabilities(
             mappedCapabilities,
@@ -359,6 +364,22 @@ public class TaskContractParser
                 "test",
                 ExecutionCapabilityPhases.CandidateAcceptance);
         }
+        if (verification.SecurityScan &&
+            verification.EffectiveSecurityPolicy.Scanners.Contains(
+                SecurityScannerIds.Dependencies,
+                StringComparer.Ordinal))
+        {
+            RequireProcess(
+                policy,
+                "dotnet",
+                "list",
+                ExecutionCapabilityPhases.BaselineSecurityScan);
+            RequireProcess(
+                policy,
+                "dotnet",
+                "list",
+                ExecutionCapabilityPhases.CandidateSecurityScan);
+        }
     }
 
     private static void RequireProcess(
@@ -412,8 +433,10 @@ public class TaskContractParser
             ExecutionCapabilityPhases.BaselineToolProbe,
             ExecutionCapabilityPhases.BaselineBuild,
             ExecutionCapabilityPhases.BaselineTest,
+            ExecutionCapabilityPhases.BaselineSecurityScan,
             ExecutionCapabilityPhases.CandidateBuild,
             ExecutionCapabilityPhases.CandidateTest,
+            ExecutionCapabilityPhases.CandidateSecurityScan,
             ExecutionCapabilityPhases.CandidateAcceptance
         ], StringComparer.Ordinal);
         if (phases.Count == 0 || phases.Any(phase => !known.Contains(phase)))
@@ -454,6 +477,76 @@ public class TaskContractParser
             throw new InvalidOperationException($"{field} is too large.");
         }
     }
+
+    private static SecurityScanPolicy MapSecurityScanPolicy(SecurityScanPolicyYamlModel? model)
+    {
+        var policy = new SecurityScanPolicy
+        {
+            Version = model?.Version ?? model?.version ?? SecurityScanSchema.PolicyVersion,
+            Scanners = model?.Scanners ?? model?.scanners ??
+                [SecurityScannerIds.Secrets, SecurityScannerIds.Dependencies, SecurityScannerIds.Patterns],
+            BlockAtOrAbove = ParseSecuritySeverity(
+                model?.BlockAtOrAbove ?? model?.block_at_or_above ?? "error"),
+            VulnerabilityDatabaseVersion = model?.VulnerabilityDatabaseVersion ??
+                model?.vulnerability_database_version ??
+                SecurityScanSchema.VulnerabilityDatabaseVersion,
+            Suppressions = (model?.Suppressions ?? model?.suppressions ?? [])
+                .Select(suppression => new SecurityScanSuppression
+                {
+                    Rule = suppression.Rule ?? suppression.rule ?? string.Empty,
+                    Path = suppression.Path ?? suppression.path ?? string.Empty,
+                    Fingerprint = suppression.Fingerprint ?? suppression.fingerprint ?? string.Empty,
+                    Justification = suppression.Justification ??
+                        suppression.justification ?? string.Empty
+                }).ToList()
+        };
+        ValidateSecurityScanPolicy(policy);
+        return policy;
+    }
+
+    private static void ValidateSecurityScanPolicy(SecurityScanPolicy policy)
+    {
+        if (policy.Version != SecurityScanSchema.PolicyVersion)
+            throw new InvalidOperationException($"Unsupported security scan policy version: '{policy.Version}'.");
+        if (policy.VulnerabilityDatabaseVersion != SecurityScanSchema.VulnerabilityDatabaseVersion)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported security scan vulnerability database: '{policy.VulnerabilityDatabaseVersion}'.");
+        }
+        if (policy.Scanners.Count == 0 ||
+            policy.Scanners.Distinct(StringComparer.Ordinal).Count() != policy.Scanners.Count ||
+            policy.Scanners.Any(scanner => !SecurityScannerIds.All.Contains(scanner)))
+        {
+            throw new InvalidOperationException(
+                "security_policy.scanners must contain unique supported scanner IDs.");
+        }
+
+        foreach (var suppression in policy.Suppressions)
+        {
+            var path = suppression.Path.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(suppression.Rule) ||
+                string.IsNullOrWhiteSpace(path) ||
+                path.StartsWith('/') ||
+                Regex.IsMatch(path, @"^[a-zA-Z]:/") ||
+                path.Split('/').Any(segment => segment is "." or "..") ||
+                suppression.Justification.Trim().Length < 10 ||
+                !string.IsNullOrEmpty(suppression.Fingerprint) &&
+                !Regex.IsMatch(suppression.Fingerprint, @"^sha256:[a-f0-9]{64}$"))
+            {
+                throw new InvalidOperationException(
+                    "Security scan suppressions require a rule, safe relative path, optional sha256 fingerprint, and justification of at least 10 characters.");
+            }
+        }
+    }
+
+    private static Severity ParseSecuritySeverity(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "info" => Severity.Info,
+        "warning" => Severity.Warning,
+        "error" or "high" => Severity.Error,
+        "critical" => Severity.Critical,
+        _ => throw new InvalidOperationException($"Unknown security scan severity: '{value}'.")
+    };
 
     private static List<AcceptanceCriterion> MapAcceptanceCriteria(
         IReadOnlyList<string> criteria,
@@ -727,6 +820,34 @@ public class VerificationYamlModel
     public string? critical_semantic_failures { get; set; }
     public List<string>? RequiredSemanticVerifiers { get; set; }
     public List<string>? required_semantic_verifiers { get; set; }
+    public SecurityScanPolicyYamlModel? SecurityPolicy { get; set; }
+    public SecurityScanPolicyYamlModel? security_policy { get; set; }
+}
+
+public class SecurityScanPolicyYamlModel
+{
+    public string? Version { get; set; }
+    public string? version { get; set; }
+    public List<string>? Scanners { get; set; }
+    public List<string>? scanners { get; set; }
+    public string? BlockAtOrAbove { get; set; }
+    public string? block_at_or_above { get; set; }
+    public string? VulnerabilityDatabaseVersion { get; set; }
+    public string? vulnerability_database_version { get; set; }
+    public List<SecurityScanSuppressionYamlModel>? Suppressions { get; set; }
+    public List<SecurityScanSuppressionYamlModel>? suppressions { get; set; }
+}
+
+public class SecurityScanSuppressionYamlModel
+{
+    public string? Rule { get; set; }
+    public string? rule { get; set; }
+    public string? Path { get; set; }
+    public string? path { get; set; }
+    public string? Fingerprint { get; set; }
+    public string? fingerprint { get; set; }
+    public string? Justification { get; set; }
+    public string? justification { get; set; }
 }
 
 public class AcceptanceEvidenceYamlModel

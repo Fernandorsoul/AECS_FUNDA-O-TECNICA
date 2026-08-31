@@ -56,4 +56,4 @@ E execute a CLI com `--allow-host-execution`. As duas escolhas são necessárias
 
 ## Verificação em CI
 
-A CI baixa previamente a imagem pelo digest e executa uma suíte Docker real. Ela comprova o pipeline build/test/aceite, root do workspace read-only, escrita no submount autorizado, bloqueio preventivo de processo, rede e symlink de exfiltração, limites cgroup e ausência de containers residuais após sucesso, falha, timeout e cancelamento.
+A CI baixa previamente a imagem pelo digest e executa uma suíte Docker real. Ela comprova o pipeline build/test/`SecurityScan`/aceite, root do workspace read-only, escrita no submount autorizado, inventário estruturado de dependências, bloqueio preventivo de processo, rede e symlink de exfiltração, limites cgroup e ausência de containers residuais após sucesso, falha, timeout e cancelamento.

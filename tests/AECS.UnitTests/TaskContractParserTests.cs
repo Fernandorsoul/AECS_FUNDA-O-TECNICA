@@ -404,6 +404,131 @@ public class TaskContractParserTests
     }
 
     [Fact]
+    public void Parse_RequiredSecurityScan_MapsVersionedPolicyAndSuppression()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-SECURITY-SCAN
+              objective: Apply a deterministic security gate
+              execution:
+                target: Fixture.csproj
+              verification:
+                security_scan: required
+                security_policy:
+                  version: aecs.security-scan/v1
+                  scanners: [secrets, dependencies, patterns]
+                  block_at_or_above: critical
+                  vulnerability_database_version: aecs.nuget-advisories/2026-08-31
+                  suppressions:
+                    - rule: AECS-PATTERN-WEAK-HASH
+                      path: src/LegacyHash.cs
+                      justification: Legacy checksum is not used for a security decision.
+            """);
+
+        result.Verification.SecurityScan.Should().BeTrue();
+        var policy = result.Verification.SecurityPolicy!;
+        policy.Version.Should().Be(SecurityScanSchema.PolicyVersion);
+        policy.Scanners.Should().Equal("secrets", "dependencies", "patterns");
+        policy.BlockAtOrAbove.Should().Be(Severity.Critical);
+        policy.Suppressions.Should().ContainSingle(suppression =>
+            suppression.Rule == "AECS-PATTERN-WEAK-HASH" &&
+            suppression.Path == "src/LegacyHash.cs");
+        result.Execution.EffectiveCapabilities.Processes.Should().Contain(rule =>
+            rule.Executable == "dotnet" &&
+            rule.ArgumentPrefix.Count == 1 &&
+            rule.ArgumentPrefix[0] == "list" &&
+            rule.Phases.Contains(ExecutionCapabilityPhases.BaselineSecurityScan) &&
+            rule.Phases.Contains(ExecutionCapabilityPhases.CandidateSecurityScan));
+    }
+
+    [Theory]
+    [InlineData("version: future/v2", "Unsupported security scan policy version")]
+    [InlineData("scanners: [secrets, unknown]", "supported scanner IDs")]
+    [InlineData("vulnerability_database_version: moving-latest", "vulnerability database")]
+    [InlineData("suppressions:\n  - rule: RULE\n    path: ../outside\n    justification: justified false positive", "suppressions require")]
+    [InlineData("suppressions:\n  - rule: RULE\n    path: src/File.cs\n    justification: short", "suppressions require")]
+    public void Parse_InvalidSecurityScanPolicy_FailsClosed(string fragment, string expected)
+    {
+        var indented = fragment.Replace("\n", "\n        ");
+        var action = () => _parser.Parse($"""
+            task:
+              id: TASK-BAD-SECURITY-POLICY
+              objective: Reject an invalid security scan policy
+              verification:
+                security_scan: required
+                security_policy:
+                  {indented}
+            """);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Fact]
+    public void Parse_SecurityScanWithoutDotNetListCapability_FailsPreflight()
+    {
+        var action = () => _parser.Parse("""
+            task:
+              id: TASK-MISSING-SCAN-CAPABILITY
+              objective: Reject missing scanner capability
+              capabilities:
+                file_system:
+                  read: ["**"]
+                processes:
+                  - executable: git
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["build"]
+                    phases: ["baseline.build", "candidate.build"]
+                  - executable: dotnet
+                    argument_prefix: ["test"]
+                    phases: ["baseline.test", "candidate.test"]
+              verification:
+                security_scan: required
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*required preflight command*baseline.security-scan: dotnet list*");
+    }
+
+    [Fact]
+    public void Parse_SecurityScanWithoutDependencyScanner_DoesNotRequireDotNetListCapability()
+    {
+        var result = _parser.Parse("""
+            task:
+              id: TASK-SECRET-SCAN-ONLY
+              objective: Run only the built-in secret scanner
+              capabilities:
+                file_system:
+                  read: ["**"]
+                processes:
+                  - executable: git
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["--version"]
+                    phases: ["baseline.tool-probe"]
+                  - executable: dotnet
+                    argument_prefix: ["build"]
+                    phases: ["baseline.build", "candidate.build"]
+                  - executable: dotnet
+                    argument_prefix: ["test"]
+                    phases: ["baseline.test", "candidate.test"]
+              verification:
+                security_scan: required
+                security_policy:
+                  scanners: [secrets]
+            """);
+
+        result.Verification.EffectiveSecurityPolicy.Scanners.Should().Equal("secrets");
+        result.Execution.EffectiveCapabilities.Processes.Should().NotContain(rule =>
+            rule.Executable == "dotnet" && rule.ArgumentPrefix.Contains("list"));
+    }
+
+    [Fact]
     public void Parse_MissingTaskKey_ThrowsYamlException()
     {
         var yaml = "not_a_task: true";

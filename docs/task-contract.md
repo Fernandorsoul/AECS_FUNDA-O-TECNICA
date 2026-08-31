@@ -76,6 +76,9 @@ task:
       - executable: dotnet
         argument_prefix: [test]
         phases: [baseline.test, candidate.test, candidate.acceptance]
+      - executable: dotnet
+        argument_prefix: [list]
+        phases: [baseline.security-scan, candidate.security-scan]
     network:
       destinations: []
       phases: []
@@ -90,7 +93,13 @@ task:
     unit_tests: required
     integration_tests: optional
     scope: required
-    security_scan: optional
+    security_scan: required
+    security_policy:
+      version: aecs.security-scan/v1
+      scanners: [secrets, dependencies, patterns]
+      block_at_or_above: error
+      vulnerability_database_version: aecs.nuget-advisories/2026-08-31
+      suppressions: []
     architecture: optional
     critical_semantic_failures: required
     required_semantic_verifiers:
@@ -190,7 +199,7 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 | --- | --- | --- | --- |
 | `execution.runtime` | `docker` ou `host` | `docker` | Runtime dos comandos que executam código/ferramentas do repositório staged |
 | `execution.working_directory` | caminho relativo | `.` | Diretório, dentro do worktree isolado, onde build e testes são executados |
-| `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado pelos comandos `dotnet build` e `dotnet test` |
+| `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado por build, testes e inventário de dependências |
 | `execution.sandbox.image` | referência OCI | SDK .NET 9 fixado | Imagem imutável; tags sem `@sha256:<digest>` são rejeitadas |
 | `execution.sandbox.cpu_limit` | decimal positivo | `1.0` | Limite de CPU passado ao Docker |
 | `execution.sandbox.memory_limit` | limite Docker | `512m` | Limite de memória do container |
@@ -210,7 +219,7 @@ Detalhes operacionais e o modelo de ameaça estão em [Sandbox Docker staged](do
 
 ### Capabilities preventivas
 
-`capabilities.version: aecs.capabilities/v1` é a autoridade preventiva dos comandos staged. O bloco pode ficar diretamente sob `task` ou dentro de `task.execution`; em novos contratos, prefira a primeira forma. Quando ele é omitido, o parser materializa exatamente a política restritiva mostrada no exemplo: leitura somente do worktree, escrita apenas em `bin`, `obj` e `.aecs-verification`, comandos `git --version`, `dotnet --version`, `dotnet build` e `dotnet test`, rede e segredos vazios e recursos limitados a `1.0` CPU, `512m`, 128 PIDs e 120 segundos.
+`capabilities.version: aecs.capabilities/v1` é a autoridade preventiva dos comandos staged. O bloco pode ficar diretamente sob `task` ou dentro de `task.execution`; em novos contratos, prefira a primeira forma. Quando ele é omitido, o parser materializa exatamente a política restritiva mostrada no exemplo: leitura somente do worktree, escrita apenas em `bin`, `obj` e `.aecs-verification`, comandos `git --version`, `dotnet --version`, `dotnet build`, `dotnet test` e `dotnet list`, rede e segredos vazios e recursos limitados a `1.0` CPU, `512m`, 128 PIDs e 120 segundos.
 
 Se o bloco for declarado, campos ausentes não herdam permissões de filesystem, processos, rede ou segredos. Uma versão desconhecida, regra incompleta, fase desconhecida, caminho inseguro ou ausência de um comando exigido pelos gates faz o parse/preflight falhar antes do agente. A autoridade é definida pelo contrato (`task-contract`), não pode ser substituída no YAML, e qualquer plano adaptativo é comparado com ela para impedir expansão.
 
@@ -225,7 +234,7 @@ Se o bloco for declarado, campos ausentes não herdam permissões de filesystem,
 | `secrets[].name` | Nome de variável de ambiente em maiúsculas; o valor vem do ambiente do controlador somente nas fases declaradas |
 | `resources` | Tetos de CPU, memória, PIDs e wall clock; os limites de `execution.sandbox` não podem excedê-los |
 
-Fases reconhecidas: `baseline.tool-probe`, `baseline.build`, `baseline.test`, `candidate.build`, `candidate.test` e `candidate.acceptance`. Build/test obrigatórios e aceite baseado em teste exigem antecipadamente as regras correspondentes. O processo recebe argv estruturado, portanto o prefixo não é reinterpretado por um shell.
+Fases reconhecidas: `baseline.tool-probe`, `baseline.build`, `baseline.test`, `baseline.security-scan`, `candidate.build`, `candidate.test`, `candidate.security-scan` e `candidate.acceptance`. Build/test, scan de dependências e aceite baseado em teste exigem antecipadamente as regras de processo correspondentes. O processo recebe argv estruturado, portanto o prefixo não é reinterpretado por um shell.
 
 No Docker, `/workspace` é read-only e cada diretório autorizado recebe um bind mount gravável separado. Caminhos absolutos, traversal, `.git`, wildcards não suportados, symlinks, junctions/reparse points e escapes por mount são recusados. A implementação atual consegue aplicar egress somente como `none` ou Docker `bridge`: uma lista contendo explicitamente `"*"` autoriza `bridge` nas fases indicadas; destinos mais estreitos falham fechados até existir um enforcer de egress por destino.
 
@@ -247,7 +256,7 @@ Os limites padrão são 12 mil tokens estimados, 48 mil caracteres totais e 16 m
 | `verification.unit_tests` | `required` | Testes participam da decisão |
 | `verification.integration_tests` | `optional` | Quando required, ativa o mesmo gate/comando `Tests` usado por unit tests |
 | `verification.scope` | `required` | Campo aceito, mas `Scope` é sempre um gate estrutural obrigatório na trust boundary atual |
-| `verification.security_scan` | `optional` | Quando required, exige `SecurityScan`; como não há implementação, a decisão falha fechada por resultado ausente |
+| `verification.security_scan` | `optional` | Quando required, inventaria a baseline e bloqueia achados novos do candidato conforme `security_policy` |
 | `verification.architecture` | `optional` | Quando required, exige `EB001-Architecture` em `Pass` |
 | `verification.critical_semantic_failures` | `required` | Falhas semânticas de severidade crítica bloqueiam a decisão |
 | `verification.required_semantic_verifiers` | lista vazia | Nomes de verificadores EB que devem produzir exatamente um resultado `Pass` |
@@ -259,6 +268,26 @@ A verificação de orçamento permanece habilitada pelo padrão do modelo. Embor
 `AgentSuccess`, `Application`, `NonEmptyChange`, `Scope` e `Budget` são sempre obrigatórios, mesmo que um campo opcional tente enfraquecê-los. Build e testes só executam depois desses pré-requisitos; uma falha estrutural deixa os comandos posteriores em `Skip`, que não é aceito como sucesso.
 
 Os verificadores EB001–EB005 executam depois dos pré-requisitos e de um eventual build aprovado. Por padrão, uma falha EB com severidade crítica bloqueia a decisão. Outros verificadores semânticos só viram gates quando declarados em `required_semantic_verifiers` ou ativados por um campo específico, como `architecture`. Exceção de verificador, resultado ausente ou duplicado também falha fechado.
+
+#### Gate SecurityScan
+
+`security_scan: required` ativa uma política versionada `aecs.security-scan/v1`. Sem `security_policy`, os defaults executam `secrets`, `dependencies` e `patterns`, bloqueiam severidade `error` ou `critical` e usam a base fixa `aecs.nuget-advisories/2026-08-31`.
+
+| Campo de `verification.security_policy` | Regra |
+| --- | --- |
+| `version` | Deve ser `aecs.security-scan/v1` |
+| `scanners` | IDs únicos entre `secrets`, `dependencies` e `patterns`; ao menos um é obrigatório |
+| `block_at_or_above` | `info`, `warning`, `error`/`high` ou `critical` |
+| `vulnerability_database_version` | Deve selecionar a snapshot suportada, nunca um alias móvel como `latest` |
+| `suppressions` | Cada item exige `rule`, `path` relativo seguro, justificativa de ao menos 10 caracteres e, opcionalmente, fingerprint SHA-256 exato |
+
+Os scanners de segredos e padrões leem apenas extensões textuais conhecidas no worktree staged, sem seguir links e sem carregar código. O inventário de dependências executa `dotnet list <target> package --include-transitive --format json --no-restore` por argv estruturado no mesmo runner Docker dos demais gates, nas fases `baseline.security-scan` e `candidate.security-scan`. `execution.target` e os artefatos de restore/build precisam existir; ferramenta ausente, exit code não zero, timeout, cancelamento ou JSON inválido tornam o gate inconclusivo e resultam em `Error` crítico.
+
+A base embutida é deliberadamente pequena e reproduzível. A versão atual cobre [GHSA-5crp-9r3c-p9vr](https://github.com/advisories/GHSA-5crp-9r3c-p9vr) para `Newtonsoft.Json < 13.0.1` e [GHSA-ghhp-997w-qr28](https://github.com/advisories/GHSA-ghhp-997w-qr28) para as faixas afetadas de `System.Text.Encodings.Web`. Alterar regras ou advisories exige uma nova versão da snapshot e testes correspondentes.
+
+A baseline é sempre inventariada primeiro. Achados conclusivos nela recebem disposição `Baseline` e não bloqueiam por si só; no candidato, o mesmo fingerprint continua como dívida existente, enquanto fingerprints inéditos recebem `New`. Supressões exatas e justificadas recebem `Suppressed`. Somente achados `New`, não suprimidos e iguais ou superiores ao limiar bloqueiam.
+
+Cada finding persiste scanner, categoria, arquivo, linha, regra, severidade, advisory, disposição e fingerprint — nunca o trecho correspondente. Saída de ferramenta tem caminhos do staging normalizados, credenciais em URL/tokens sanitizadas e limite de tamanho antes de entrar em `ExecutionCommandEvidence`. A evidência registra ainda schema, hash da política, versões dos scanners/configurações e da base, resultado conclusivo e contagens. O replay repete o scan e exige igualdade dessa evidência, não apenas do status do gate. Implementações podem substituir scanners por ID através de `ISecurityScanner`, sem alterar a política autoritativa.
 
 ### Aprovação
 

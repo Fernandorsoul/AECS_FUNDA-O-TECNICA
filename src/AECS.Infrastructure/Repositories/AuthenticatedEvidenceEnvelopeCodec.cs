@@ -368,6 +368,23 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new EvidenceIntegrityException(
                 "Execution evidence is incomplete and cannot be trusted.");
         }
+
+        var securityScans = evidence.BaselineVerificationResults
+            .Concat(evidence.VerificationResults)
+            .Where(result => result.SecurityScan is not null)
+            .Select(result => result.SecurityScan!);
+        if (securityScans.Any(scan =>
+                scan.SchemaVersion != SecurityScanSchema.EvidenceVersion ||
+                string.IsNullOrWhiteSpace(scan.PolicyVersion) ||
+                string.IsNullOrWhiteSpace(scan.PolicyHash) ||
+                string.IsNullOrWhiteSpace(scan.ScannerVersion) ||
+                string.IsNullOrWhiteSpace(scan.VulnerabilityDatabaseVersion) ||
+                scan.Scanners is null ||
+                scan.Findings is null))
+        {
+            throw new EvidenceIntegrityException(
+                "Security scan evidence is incomplete or has an unsupported schema.");
+        }
     }
 
     private void VerifySeal(EvidenceSeal seal, object payload, string description)

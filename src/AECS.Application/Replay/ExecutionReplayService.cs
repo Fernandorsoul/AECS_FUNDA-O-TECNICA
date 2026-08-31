@@ -3,6 +3,7 @@ using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
+using System.Text.Json;
 
 namespace AECS.Application.Replay;
 
@@ -13,7 +14,8 @@ public sealed class ExecutionReplayService
             "AgentSuccess", "Application", "NonEmptyChange", "Scope", "Budget",
             "Build", "Tests", "EB001-Architecture", "EB002-Pattern",
             "EB003-BreakingChange", "EB004-MissingChange",
-            "EB005-HistoricalConflict", AcceptanceCriteriaVerifier.Name
+            "EB005-HistoricalConflict", SecurityScanVerifier.VerifierName,
+            AcceptanceCriteriaVerifier.Name
         ],
         StringComparer.OrdinalIgnoreCase);
 
@@ -21,11 +23,13 @@ public sealed class ExecutionReplayService
     private readonly IExecutionEvidenceStore _evidenceStore;
     private readonly GitWorkspaceManager _workspaceManager;
     private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
+    private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
 
     public ExecutionReplayService(
         IProcessRunner processRunner,
         IExecutionEvidenceStore evidenceStore,
-        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null)
+        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
+        IReadOnlyList<ISecurityScanner>? securityScanners = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(evidenceStore);
@@ -34,6 +38,7 @@ public sealed class ExecutionReplayService
         _workspaceManager = new GitWorkspaceManager(processRunner);
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
             new DefaultStagedProcessRunnerFactory(processRunner);
+        _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
     }
 
     public async Task<ExecutionReplayResult> ReplayAsync(
@@ -193,7 +198,7 @@ public sealed class ExecutionReplayService
                 "baseline",
                 original.BaselineVerificationResults,
                 baselineResults,
-                new HashSet<string>(["Build", "Tests"], StringComparer.OrdinalIgnoreCase));
+                SupportedBaselineGates(original.TaskContract));
             return new ReplayRun
             {
                 Outcome = ExecutionReplayOutcome.CandidateDivergence,
@@ -226,6 +231,7 @@ public sealed class ExecutionReplayService
         var candidateResults = await VerifyCandidateAsync(
             stagedProcessRunner,
             candidateContext,
+            BaselineSecurityFingerprints(baselineResults),
             acceptanceCriteria,
             cancellationToken);
 
@@ -243,7 +249,7 @@ public sealed class ExecutionReplayService
                 "baseline",
                 original.BaselineVerificationResults,
                 baselineResults,
-                new HashSet<string>(["Build", "Tests"], StringComparer.OrdinalIgnoreCase))
+                SupportedBaselineGates(original.TaskContract))
             .Concat(CompareGates(
                 "candidate",
                 original.VerificationResults,
@@ -370,12 +376,29 @@ public sealed class ExecutionReplayService
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
         }
 
+        if (context.Contract.Verification.SecurityScan)
+        {
+            results.Add(buildPassed
+                ? await RunVerifierAsync(
+                    new SecurityScanVerifier(
+                        stagedProcessRunner,
+                        _securityScanners,
+                        isBaseline: true),
+                    context,
+                    cancellationToken)
+                : Skipped(
+                    context.AgentRunId,
+                    SecurityScanVerifier.VerifierName,
+                    "Baseline build prerequisite failed"));
+        }
+
         return results;
     }
 
     private async Task<List<VerificationResult>> VerifyCandidateAsync(
         IProcessRunner stagedProcessRunner,
         VerificationContext context,
+        IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteria,
         CancellationToken cancellationToken)
     {
@@ -414,6 +437,22 @@ public sealed class ExecutionReplayService
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
+        }
+
+        if (context.Contract.Verification.SecurityScan)
+        {
+            results.Add(prerequisitesPassed && buildPassed
+                ? await RunVerifierAsync(
+                    new SecurityScanVerifier(
+                        stagedProcessRunner,
+                        _securityScanners,
+                        baselineSecurityFingerprints),
+                    context,
+                    cancellationToken)
+                : Skipped(
+                    context.AgentRunId,
+                    SecurityScanVerifier.VerifierName,
+                    "Trust-boundary or build prerequisite failed"));
         }
 
         if (prerequisitesPassed && buildPassed)
@@ -591,7 +630,7 @@ public sealed class ExecutionReplayService
             else if (expectedMatches.Count != 1 || actualMatches.Count != 1)
                 status = ReplayComparisonStatus.Missing;
             else
-                status = expectedMatches[0].Status == actualMatches[0].Status
+                status = GateResultsEqual(expectedMatches[0], actualMatches[0])
                     ? ReplayComparisonStatus.Match
                     : ReplayComparisonStatus.Diverged;
 
@@ -615,6 +654,33 @@ public sealed class ExecutionReplayService
             };
         }
     }
+
+    private static bool GateResultsEqual(VerificationResult expected, VerificationResult actual)
+    {
+        if (expected.Status != actual.Status)
+            return false;
+        if (expected.SecurityScan is null)
+            return true;
+        return actual.SecurityScan is not null &&
+            JsonSerializer.Serialize(expected.SecurityScan) ==
+            JsonSerializer.Serialize(actual.SecurityScan);
+    }
+
+    private static IReadOnlySet<string> SupportedBaselineGates(TaskContract contract)
+    {
+        var gates = new HashSet<string>(["Build", "Tests"], StringComparer.OrdinalIgnoreCase);
+        if (contract.Verification.SecurityScan)
+            gates.Add(SecurityScanVerifier.VerifierName);
+        return gates;
+    }
+
+    private static IReadOnlySet<string> BaselineSecurityFingerprints(
+        IEnumerable<VerificationResult> results) => results
+        .Where(result => result.Verifier == SecurityScanVerifier.VerifierName)
+        .SelectMany(result => result.SecurityScan?.Findings ?? [])
+        .Where(finding => finding.Disposition != SecurityFindingDisposition.Suppressed)
+        .Select(finding => finding.Fingerprint)
+        .ToHashSet(StringComparer.Ordinal);
 
     private static bool AcceptanceEquals(
         IReadOnlyList<AcceptanceCriterionResult> expected,
