@@ -119,17 +119,20 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
             collector.CheckLimits();
-            using var workspace = MSBuildWorkspace.Create(GlobalProperties);
-            workspace.SkipUnrecognizedProjects = false;
-            workspace.LoadMetadataForReferencedProjects = false;
-            workspace.RegisterWorkspaceFailedHandler(eventArgs => collector.AddWorkspaceDiagnostic(
-                eventArgs.Diagnostic.Kind.ToString(),
-                eventArgs.Diagnostic.Message,
-                loadRoot.Path,
-                eventArgs.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure));
-
+            var intermediateRoot = CreateIntermediateRoot();
             try
             {
+                using var workspace = MSBuildWorkspace.Create(
+                    CreateWorkspaceProperties(intermediateRoot));
+                workspace.SkipUnrecognizedProjects = false;
+                workspace.LoadMetadataForReferencedProjects = false;
+                workspace.RegisterWorkspaceFailedHandler(eventArgs =>
+                    collector.AddWorkspaceDiagnostic(
+                        eventArgs.Diagnostic.Kind.ToString(),
+                        eventArgs.Diagnostic.Message,
+                        loadRoot.Path,
+                        eventArgs.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure));
+
                 var fullPath = ResolveSnapshotPath(root, loadRoot.Path, snapshot);
                 Solution solution;
                 if (loadRoot.Kind == "solution")
@@ -182,6 +185,10 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                     loadRoot.Path,
                     isFailure: true,
                     code: "AECSROS001");
+            }
+            finally
+            {
+                DeleteIntermediateRoot(intermediateRoot);
             }
         }
 
@@ -524,6 +531,61 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => new LoadRoot("project", path)));
         return roots;
+    }
+
+    private static string CreateIntermediateRoot()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "aecs-roslyn-msbuild",
+            Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static IDictionary<string, string> CreateWorkspaceProperties(
+        string intermediateRoot)
+    {
+        var properties = new SortedDictionary<string, string>(
+            GlobalProperties,
+            StringComparer.Ordinal);
+        var projectIntermediateRoot = Path.Combine(
+            intermediateRoot,
+            "$(MSBuildProjectName)") + Path.DirectorySeparatorChar;
+        properties["BaseIntermediateOutputPath"] = projectIntermediateRoot;
+        properties["MSBuildProjectExtensionsPath"] = projectIntermediateRoot;
+        return properties;
+    }
+
+    private static void DeleteIntermediateRoot(string intermediateRoot)
+    {
+        try
+        {
+            var temporaryParent = Path.GetFullPath(Path.Combine(
+                Path.GetTempPath(),
+                "aecs-roslyn-msbuild"))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            var fullPath = Path.GetFullPath(intermediateRoot);
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!fullPath.StartsWith(temporaryParent, comparison))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to delete unexpected Roslyn intermediate path: {fullPath}");
+            }
+            if (Directory.Exists(fullPath))
+                Directory.Delete(fullPath, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup must not invalidate an otherwise reproducible graph.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best-effort cleanup must not invalidate an otherwise reproducible graph.
+        }
     }
 
     private static MsBuildRegistration RegisterMsBuild(string workingDirectory)

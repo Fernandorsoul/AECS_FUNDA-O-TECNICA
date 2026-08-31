@@ -17,7 +17,7 @@ O grafo também persiste commit-base, versões de Roslyn, MSBuild e SDK, proprie
 
 `RoslynSymbolGraphBuilder` usa `MSBuildLocator` e `MSBuildWorkspace`. As soluções `.sln`/`.slnx` do snapshot são abertas em ordem ordinal; projetos C# que não pertencem a uma solução são abertos depois, também em ordem. Somente documentos presentes no snapshot podem originar declarações.
 
-A avaliação usa propriedades globais fixas de design time: configuração `Release`, plataforma `AnyCPU`, `BuildProjectReferences=false`, `DesignTimeBuild=true`, `SkipCompilerExecution=true` e restore sem falhar por feeds indisponíveis. Parse options, compilation options, frameworks, símbolos de pré-processador e referências de projeto ficam registrados por projeto.
+A avaliação usa propriedades globais fixas de design time: configuração `Release`, plataforma `AnyCPU`, `BuildProjectReferences=false`, `DesignTimeBuild=true`, `SkipCompilerExecution=true` e restore sem falhar por feeds indisponíveis. Artefatos intermediários do MSBuild são redirecionados para um diretório temporário isolado e removidos ao final, sem alterar o checkout analisado nem introduzir o caminho efêmero no hash. Parse options, compilation options, frameworks, símbolos de pré-processador e referências de projeto ficam registrados por projeto.
 
 ## Nós, arestas e identidade
 

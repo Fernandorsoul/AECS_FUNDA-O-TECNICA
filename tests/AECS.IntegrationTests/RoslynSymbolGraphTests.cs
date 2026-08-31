@@ -66,6 +66,8 @@ public sealed class RoslynSymbolGraphTests
         first.Edges.Should().Contain(edge => edge.Kind == "implements");
         first.Edges.Should().Contain(edge => edge.Kind == "project-reference");
         first.Edges.Should().Contain(edge => edge.Kind == "references");
+        (await fixture.StatusAsync()).Should().BeEmpty(
+            "Roslyn design-time builds must not create intermediate files in the baseline");
     }
 
     [Fact]
@@ -330,6 +332,10 @@ public sealed class RoslynSymbolGraphTests
                 ToolCommands(),
                 CancellationToken.None);
         }
+
+        public async Task<string> StatusAsync() =>
+            (await GitAsync("status", "--porcelain=v1", "--untracked-files=all"))
+            .StandardOutput;
 
         public async ValueTask DisposeAsync()
         {
