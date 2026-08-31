@@ -386,19 +386,37 @@ internal static class EvidenceGraphProjection
         foreach (var command in commands)
         {
             var commandNode = $"command:{command.Id:N}";
+            var attributes = new Dictionary<string, string>
+            {
+                ["phase"] = phase,
+                ["fileName"] = command.FileName,
+                ["arguments"] = string.Join(" ", command.Arguments),
+                ["workingDirectory"] = command.WorkingDirectory,
+                ["exitCode"] = command.ExitCode.ToString(),
+                ["timedOut"] = command.TimedOut.ToString(),
+                ["cancelled"] = command.Cancelled.ToString()
+            };
+            if (command.Environment is not null)
+            {
+                attributes["runtime"] = command.Environment.Runtime;
+                attributes["runtimeVersion"] = command.Environment.RuntimeVersion;
+                attributes["image"] = command.Environment.Image;
+                attributes["imageDigest"] = command.Environment.ImageDigest;
+                attributes["networkMode"] = command.Environment.NetworkMode;
+                attributes["cpuLimit"] = command.Environment.CpuLimit;
+                attributes["memoryLimit"] = command.Environment.MemoryLimit;
+                attributes["processLimit"] = command.Environment.ProcessLimit.ToString();
+                attributes["wallClockLimitSeconds"] =
+                    command.Environment.WallClockLimitSeconds.ToString();
+                attributes["workspaceMount"] = command.Environment.WorkspaceMount;
+                attributes["developmentHostOverride"] =
+                    command.Environment.DevelopmentHostOverride.ToString();
+            }
+
             builder.Node(commandNode, EvidenceGraphNodeKind.Command,
                 $"{command.FileName} {string.Join(' ', command.Arguments)}".Trim(),
                 $"{phase}-command", authority, null,
-                attributes: new()
-                {
-                    ["phase"] = phase,
-                    ["fileName"] = command.FileName,
-                    ["arguments"] = string.Join(" ", command.Arguments),
-                    ["workingDirectory"] = command.WorkingDirectory,
-                    ["exitCode"] = command.ExitCode.ToString(),
-                    ["timedOut"] = command.TimedOut.ToString(),
-                    ["cancelled"] = command.Cancelled.ToString()
-                });
+                attributes: attributes);
             commandNodes[command.Id] = commandNode;
             builder.Edge(ownerNode, commandNode, "executes-command", $"{phase}-command",
                 authority);

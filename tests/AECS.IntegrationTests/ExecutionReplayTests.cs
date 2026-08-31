@@ -150,7 +150,11 @@ public sealed class ExecutionReplayTests
                 Id = $"TASK-REPLAY-{Guid.NewGuid():N}",
                 Objective = "Create a deterministic replay fixture",
                 Scope = new ScopeDefinition { Allowed = ["feature.txt"] },
-                Execution = new RepositoryExecutionProfile { Target = "ReplayFixture.sln" },
+                Execution = new RepositoryExecutionProfile
+                {
+                    Target = "ReplayFixture.sln",
+                    Runtime = RepositoryExecutionProfile.HostRuntime
+                },
                 Verification = new VerificationProfile
                 {
                     Build = true,

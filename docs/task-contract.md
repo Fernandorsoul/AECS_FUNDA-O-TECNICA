@@ -44,8 +44,16 @@ task:
     wall_clock_seconds: 120
     max_files_changed: 5
   execution:
+    runtime: docker
     working_directory: .
     target: SampleProject.slnx
+    sandbox:
+      image: mcr.microsoft.com/dotnet/sdk:9.0@sha256:f190d2dd9eef2899c91ac323caa0bd2b39334a5400ba93013e5199da39dad940
+      cpu_limit: "1.0"
+      memory_limit: 512m
+      process_limit: 128
+      wall_clock_seconds: 120
+      network_access: false
   verification:
     build: required
     unit_tests: required
@@ -149,12 +157,25 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 
 | Campo | Tipo | Padrão | Semântica |
 | --- | --- | --- | --- |
+| `execution.runtime` | `docker` ou `host` | `docker` | Runtime dos comandos que executam código/ferramentas do repositório staged |
 | `execution.working_directory` | caminho relativo | `.` | Diretório, dentro do worktree isolado, onde build e testes são executados |
 | `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado pelos comandos `dotnet build` e `dotnet test` |
+| `execution.sandbox.image` | referência OCI | SDK .NET 9 fixado | Imagem imutável; tags sem `@sha256:<digest>` são rejeitadas |
+| `execution.sandbox.cpu_limit` | decimal positivo | `1.0` | Limite de CPU passado ao Docker |
+| `execution.sandbox.memory_limit` | limite Docker | `512m` | Limite de memória do container |
+| `execution.sandbox.process_limit` | inteiro positivo | `128` | Limite de processos/PIDs |
+| `execution.sandbox.wall_clock_seconds` | inteiro positivo | `120` | Teto por comando, sempre limitado também pelo orçamento global restante |
+| `execution.sandbox.network_access` | boolean | `false` | `false` usa `--network none`; acesso precisa ser declarado explicitamente |
 
 Quando build ou testes são obrigatórios, `execution.target` também é obrigatório. O AECS falha fechado antes de chamar o agente se o perfil estiver ausente ou inválido, se o diretório/target não existir ou se algum caminho tentar atravessar a fronteira do worktree.
 
-O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de um baseline verde o AECS cria um segundo worktree limpo para o agente. Os mesmos diretório e target são reutilizados no candidato, e comandos, argumentos, duração, saída e exit code ficam registrados na evidência.
+O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de um baseline verde o AECS cria um segundo worktree limpo para o agente. Os mesmos diretório e target são reutilizados no candidato. Build, testes, testes de aceite e qualquer scanner externo usam requisições estruturadas diretamente no container, sem `sh -c`. Somente o worktree staged é montado; o checkout original, o socket Docker e caches do host não são expostos.
+
+O container usa root filesystem read-only, `/tmp` limitado, capabilities removidas, `no-new-privileges`, limites de CPU/memória/PIDs/wall clock e rede negada por padrão. A imagem precisa estar fixada por digest. Runtime e versão, imagem/digest, rede, limites e tipo de mount ficam registrados em cada comando da evidência autenticada. Containers são removidos em sucesso, falha, timeout e cancelamento; o worktree também é removido pelo pipeline.
+
+`runtime: host` existe somente para desenvolvimento confiável. Na CLI ele exige também `--allow-host-execution`, e a evidência marca `developmentHostOverride: true`. Se Docker for obrigatório e o daemon estiver ausente, a execução falha fechada antes de executar código do repositório. Os verificadores estruturais EB embutidos continuam sendo lógica do controlador que apenas lê o worktree; eles não carregam nem executam código do repositório.
+
+Detalhes operacionais e o modelo de ameaça estão em [Sandbox Docker staged](docker-staged-sandbox.md).
 
 ### Contexto compilado
 

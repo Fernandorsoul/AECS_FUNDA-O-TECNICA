@@ -2,7 +2,7 @@
 
 O AECS é um protótipo de **plano de controle para engenharia de software com agentes de IA**. Ele transforma uma solicitação em um contrato explícito, avalia a execução contra limites de escopo e orçamento, verifica o resultado com ferramentas determinísticas e só então classifica a mudança como verificada, rejeitada ou pendente de revisão humana.
 
-> **Status:** protótipo experimental com projetos `net8.0` e SDK .NET 9 fixado em `global.json`. A execução exige uma working tree limpa e avalia candidatos em worktrees Git descartáveis; o checkout original não recebe a mudança automaticamente.
+> **Status:** protótipo experimental com projetos `net8.0` e SDK .NET 9 fixado em `global.json`. A execução exige uma working tree limpa, avalia candidatos em worktrees Git descartáveis e executa comandos do repositório em sandbox Docker por padrão; o checkout original não recebe a mudança automaticamente.
 
 ## Por que este projeto existe
 
@@ -54,7 +54,7 @@ Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes j
 - [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0), necessário para executar os projetos AECS `net8.0`;
 - Git, recomendado para revisar e descartar mudanças produzidas pelo agente;
 - [Ollama](https://ollama.com/), opcional para execução com modelo local;
-- Docker, opcional para subir o PostgreSQL definido no repositório.
+- Docker, obrigatório para a execução staged padrão e opcional apenas quando um contrato confiável usa o override de desenvolvimento no host.
 
 O PostgreSQL é opcional: `json` permanece o backend padrão local, enquanto `postgres` pode ser selecionado explicitamente em todos os fluxos da CLI. O CI provisiona PostgreSQL 16 para os testes reais do store.
 
@@ -275,6 +275,7 @@ task:
     wall_clock_seconds: 120
     max_files_changed: 5
   execution:
+    runtime: docker
     working_directory: .
     target: CustomerSystem.slnx
   verification:
@@ -347,7 +348,8 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - a promoção é deliberadamente manual ou autorizada por uma referência de política e deixa as mudanças staged, sem criar commit;
 - a telemetria final do provedor ainda é necessária para detectar eventual consumo acima da estimativa preventiva de tokens/custo;
 - o keyring RSA local não substitui KMS/HSM nem detecta rollback integral para uma versão antiga validamente assinada;
-- o isolamento Docker possui infraestrutura inicial, mas não envolve a execução padrão;
+- build, testes e aceite executável usam imagem Docker fixada por digest, sem rede por padrão e com limites de CPU, memória, PIDs e wall clock;
+- `execution.runtime: host` só é aceito pela CLI junto com `--allow-host-execution` e fica marcado na evidência como override de desenvolvimento;
 - `security_scan: required` falha fechado porque ainda não existe implementação do verificador `SecurityScan`;
 - o indexador de contexto atual é específico para arquivos C# e usa estimativa aproximada de quatro caracteres por token;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.

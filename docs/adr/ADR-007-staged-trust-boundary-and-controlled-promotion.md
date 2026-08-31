@@ -51,5 +51,5 @@ The original checkout is therefore immutable during discovery and verification. 
 - This decision is the concrete enforcement mechanism for [ADR-001](ADR-001-probabilistic-discovery-deterministic-enforcement.md).
 - It keeps the modular-monolith boundary from [ADR-002](ADR-002-modular-monolith.md).
 - [ADR-003](ADR-003-postgresql-evidence-store.md) provides the selectable durable backend while JSON remains an explicit local fallback.
-- It does not claim that [ADR-004](ADR-004-docker-isolation.md) is implemented in the default CLI path; Docker remains a future additional isolation layer.
+- [ADR-004](ADR-004-docker-isolation.md) now adds a container boundary around repository commands in each disposable worktree; this ADR remains responsible for Git staging and promotion isolation.
 - [ADR-008](ADR-008-authenticated-evidence-envelope.md) authenticates the execution record and its subsequent promotion events in either backend.

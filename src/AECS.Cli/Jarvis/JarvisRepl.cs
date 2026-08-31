@@ -12,6 +12,7 @@ using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
 using AECS.Infrastructure.Processes;
 using AECS.Infrastructure.Repositories;
+using AECS.Infrastructure.Sandbox;
 
 namespace AECS.Cli.Jarvis;
 
@@ -20,6 +21,7 @@ public class JarvisRepl
     private readonly string _repoPath;
     private readonly bool _useMock;
     private readonly IExecutionEvidenceStore _evidenceStore;
+    private readonly bool _allowHostExecution;
     private readonly TaskContractParser _parser = new();
     private readonly RiskClassifier _riskClassifier = new();
     private readonly ExecutionController _executionController = new();
@@ -31,12 +33,14 @@ public class JarvisRepl
     public JarvisRepl(
         string repoPath,
         bool useMock,
-        IExecutionEvidenceStore? evidenceStore = null)
+        IExecutionEvidenceStore? evidenceStore = null,
+        bool allowHostExecution = false)
     {
         _repoPath = repoPath;
         _useMock = useMock;
         _evidenceStore = evidenceStore ?? new JsonExecutionEvidenceStore(
             JsonExecutionEvidenceStore.GetDefaultRootPath());
+        _allowHostExecution = allowHostExecution;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -219,7 +223,13 @@ public class JarvisRepl
     private StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
     {
         var processRunner = new SystemProcessRunner();
-        return new StagedExecutionPipeline(agent, processRunner, _evidenceStore);
+        return new StagedExecutionPipeline(
+            agent,
+            processRunner,
+            _evidenceStore,
+            stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(
+                processRunner,
+                _allowHostExecution));
     }
 
     private void ShowStatus()

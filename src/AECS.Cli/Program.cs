@@ -18,6 +18,7 @@ using AECS.Infrastructure.AgentRuntime;
 using AECS.Infrastructure.Cryptography;
 using AECS.Infrastructure.Processes;
 using AECS.Infrastructure.Repositories;
+using AECS.Infrastructure.Sandbox;
 
 // Load .env file if present
 LoadEnvFile();
@@ -181,6 +182,7 @@ static async Task<int> RunReplay(string[] args)
 {
     string? repositoryPath = null;
     string? evidenceIdValue = null;
+    var allowHostExecution = false;
     var evidenceStoreSelection = new EvidenceStoreSelection();
 
     for (var index = 0; index < args.Length; index++)
@@ -189,6 +191,8 @@ static async Task<int> RunReplay(string[] args)
             repositoryPath = args[++index];
         else if (args[index] == "--evidence" && index + 1 < args.Length)
             evidenceIdValue = args[++index];
+        else if (args[index] == "--allow-host-execution")
+            allowHostExecution = true;
         else if (evidenceStoreSelection.TryConsume(args, ref index))
         {
         }
@@ -196,6 +200,7 @@ static async Task<int> RunReplay(string[] args)
         {
             Console.WriteLine(
                 "Usage: aecs replay --repo <path> --evidence <id> " +
+                "[--allow-host-execution] " +
                 EvidenceStoreSelection.Usage);
             return 1;
         }
@@ -205,6 +210,7 @@ static async Task<int> RunReplay(string[] args)
     {
         Console.WriteLine(
             "Usage: aecs replay --repo <path> --evidence <id> " +
+            "[--allow-host-execution] " +
             EvidenceStoreSelection.Usage);
         return 1;
     }
@@ -216,7 +222,11 @@ static async Task<int> RunReplay(string[] args)
     {
         var result = await new ExecutionReplayService(
             new SystemProcessRunner(),
-            store).ReplayAsync(new ExecutionReplayRequest
+            store,
+            new DockerStagedProcessRunnerFactory(
+                new SystemProcessRunner(),
+                allowHostExecution))
+            .ReplayAsync(new ExecutionReplayRequest
             {
                 EvidenceId = evidenceId,
                 RepositoryPath = repositoryPath
@@ -453,6 +463,7 @@ static async Task<int> RunExperiment(string[] args)
     string? repoPath = null;
     string? tasksDir = null;
     bool useMock = false;
+    bool allowHostExecution = false;
     string? cloudKey = null;
     string? cloudModel = null;
     string? cloudUrl = null;
@@ -466,6 +477,8 @@ static async Task<int> RunExperiment(string[] args)
             tasksDir = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
+        else if (args[i] == "--allow-host-execution")
+            allowHostExecution = true;
         else if (args[i] == "--cloud-key" && i + 1 < args.Length)
             cloudKey = args[++i];
         else if (args[i] == "--cloud-model" && i + 1 < args.Length)
@@ -481,6 +494,7 @@ static async Task<int> RunExperiment(string[] args)
     {
         Console.WriteLine(
             "Usage: aecs experiment --repo <path> --tasks <dir> [--mock] " +
+            "[--allow-host-execution] " +
             "[--cloud-key <key>] [--cloud-model <model>] " +
             EvidenceStoreSelection.Usage);
         return 1;
@@ -504,7 +518,10 @@ static async Task<int> RunExperiment(string[] args)
     ExperimentReport report;
     try
     {
-        var runner = new ExperimentRunner(CreatePipeline(agent, evidenceStore));
+        var runner = new ExperimentRunner(CreatePipeline(
+            agent,
+            evidenceStore,
+            allowHostExecution));
         report = await runner.RunAsync(repoPath, taskFiles, CancellationToken.None);
     }
     catch (Exception ex)
@@ -523,6 +540,7 @@ static async Task<int> RunSingle(string[] args)
     string? repoPath = null;
     string? taskFile = null;
     bool useMock = false;
+    bool allowHostExecution = false;
 
     string? cloudKey = null;
     string? cloudModel = null;
@@ -537,6 +555,8 @@ static async Task<int> RunSingle(string[] args)
             taskFile = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
+        else if (args[i] == "--allow-host-execution")
+            allowHostExecution = true;
         else if (args[i] == "--cloud-key" && i + 1 < args.Length)
             cloudKey = args[++i];
         else if (args[i] == "--cloud-model" && i + 1 < args.Length)
@@ -552,9 +572,11 @@ static async Task<int> RunSingle(string[] args)
     {
         Console.WriteLine(
             "Usage: aecs run --repo <path> --task-file <path> [--mock] " +
+            "[--allow-host-execution] " +
             "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs experiment --repo <path> --tasks <dir> [--mock] " +
+            "[--allow-host-execution] " +
             "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
@@ -564,6 +586,7 @@ static async Task<int> RunSingle(string[] args)
             "--output <path> --actor <actor> " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs replay --repo <path> --evidence <id> " +
+            "[--allow-host-execution] " +
             EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs evidence <show|list|trace> --repo <path> " +
@@ -592,7 +615,10 @@ static async Task<int> RunSingle(string[] args)
     StagedExecutionResult execution;
     try
     {
-        execution = await CreatePipeline(agent, evidenceStore).RunAsync(
+        execution = await CreatePipeline(
+            agent,
+            evidenceStore,
+            allowHostExecution).RunAsync(
             repoPath,
             contract,
             CancellationToken.None);
@@ -670,16 +696,24 @@ static async Task<int> RunSingle(string[] args)
 
 static StagedExecutionPipeline CreatePipeline(
     IAgentAdapter agent,
-    IExecutionEvidenceStore evidenceStore)
+    IExecutionEvidenceStore evidenceStore,
+    bool allowHostExecution = false)
 {
     var processRunner = new SystemProcessRunner();
-    return new StagedExecutionPipeline(agent, processRunner, evidenceStore);
+    return new StagedExecutionPipeline(
+        agent,
+        processRunner,
+        evidenceStore,
+        stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(
+            processRunner,
+            allowHostExecution));
 }
 
 static async Task<int> RunJarvis(string[] args)
 {
     string? repoPath = null;
     bool useMock = false;
+    bool allowHostExecution = false;
     var evidenceStoreSelection = new EvidenceStoreSelection();
 
     for (int i = 0; i < args.Length; i++)
@@ -688,6 +722,8 @@ static async Task<int> RunJarvis(string[] args)
             repoPath = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
+        else if (args[i] == "--allow-host-execution")
+            allowHostExecution = true;
         else if (evidenceStoreSelection.TryConsume(args, ref i))
         {
         }
@@ -698,7 +734,11 @@ static async Task<int> RunJarvis(string[] args)
     if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
         return 1;
 
-    var repl = new JarvisRepl(repoPath, useMock, evidenceStore);
+    var repl = new JarvisRepl(
+        repoPath,
+        useMock,
+        evidenceStore,
+        allowHostExecution);
     await repl.RunAsync(CancellationToken.None);
     return 0;
 }

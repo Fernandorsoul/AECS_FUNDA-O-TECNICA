@@ -16,6 +16,7 @@ public class ProcessExecutionResult
     public TimeSpan Duration { get; init; }
     public bool TimedOut { get; init; }
     public bool Cancelled { get; init; }
+    public ExecutionEnvironmentEvidence? Environment { get; init; }
 
     public bool Succeeded => !TimedOut && !Cancelled && ExitCode == 0;
 }

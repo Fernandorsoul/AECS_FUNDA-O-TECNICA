@@ -26,7 +26,8 @@ internal static class ExecutionCommandEvidenceFactory
             Cancelled = result.Cancelled,
             Duration = result.Duration,
             StandardOutput = result.StandardOutput,
-            StandardError = result.StandardError
+            StandardError = result.StandardError,
+            Environment = result.Environment
         };
     }
 

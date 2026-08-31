@@ -233,6 +233,7 @@ public sealed class StagedExecutionPipelineTests
             Objective = contract.Objective,
             Scope = contract.Scope,
             Budget = contract.Budget,
+            Execution = contract.Execution,
             Verification = new VerificationProfile
             {
                 Build = false,
@@ -659,7 +660,13 @@ public sealed class StagedExecutionPipelineTests
                 MaxDurationSeconds = 60,
                 MaxFilesChanged = 10
             },
-            Execution = execution ?? new RepositoryExecutionProfile(),
+            Execution = new RepositoryExecutionProfile
+            {
+                WorkingDirectory = execution?.WorkingDirectory ?? ".",
+                Target = execution?.Target ?? string.Empty,
+                Runtime = execution?.Runtime ?? RepositoryExecutionProfile.HostRuntime,
+                Sandbox = execution?.Sandbox
+            },
             Verification = new VerificationProfile
             {
                 Build = build,

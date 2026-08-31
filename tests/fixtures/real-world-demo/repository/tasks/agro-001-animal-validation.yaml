@@ -38,6 +38,7 @@ task:
     wall_clock_seconds: 300
     max_files_changed: 5
   execution:
+    runtime: host
     working_directory: Backend
     target: AgronomoPlus.Tests/AgronomoPlus.Tests.csproj
   verification:
