@@ -21,7 +21,7 @@ O replay:
 4. compara versões de Git e .NET e repete o preflight de build/test;
 5. aplica no worktree apenas o diff persistido e assinado, sem interpretar a antiga resposta do agente;
 6. deriva novamente o `CandidateChangeSet` pelo Git e compara hash e arquivos;
-7. repete build, testes, verificadores EB determinísticos disponíveis e evidências de aceite;
+7. repete build, o gate legado `Tests` ou a matriz versionada `UnitTests`/`IntegrationTests`/`AcceptanceTests`, verificadores EB determinísticos disponíveis e evidências de aceite;
 8. compara definições e resultados dos comandos, gates e referências de artefatos;
 9. remove o worktree e confirma que HEAD, branch e index originais não mudaram.
 

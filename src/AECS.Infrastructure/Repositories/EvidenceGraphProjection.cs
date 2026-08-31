@@ -191,9 +191,11 @@ internal static class EvidenceGraphProjection
 
         var verificationNodes = new Dictionary<Guid, string>();
         AddVerifications(builder, evidence.BaselineVerificationResults, baselineNode,
-            "baseline", evidence.AgentRun.Id, envelope.Seal.KeyId, verificationNodes);
+            "baseline", evidence.AgentRun.Id, envelope.Seal.KeyId, verificationNodes,
+            commandNodes);
         AddVerifications(builder, evidence.VerificationResults, candidateNode,
-            "candidate", evidence.AgentRun.Id, envelope.Seal.KeyId, verificationNodes);
+            "candidate", evidence.AgentRun.Id, envelope.Seal.KeyId, verificationNodes,
+            commandNodes);
 
         builder.Node(decisionNode, EvidenceGraphNodeKind.Decision,
             evidence.FinalDecision.Decision.ToString(), "decision-engine",
@@ -447,7 +449,8 @@ internal static class EvidenceGraphProjection
         string phase,
         Guid runId,
         string authority,
-        Dictionary<Guid, string> verificationNodes)
+        Dictionary<Guid, string> verificationNodes,
+        IReadOnlyDictionary<Guid, string> commandNodes)
     {
         foreach (var verification in verifications)
         {
@@ -470,6 +473,20 @@ internal static class EvidenceGraphProjection
                     .Select(finding =>
                         $"{finding.Rule}@{finding.Path}:{finding.Line}:{finding.Severity}:{finding.Disposition}"));
             }
+            if (verification.TestSuite is not null)
+            {
+                attributes["testSuiteSchema"] = verification.TestSuite.SchemaVersion;
+                attributes["testSuiteCategory"] = verification.TestSuite.Category.ToString();
+                attributes["testSuiteMode"] = verification.TestSuite.Mode.ToString();
+                attributes["testSuiteTarget"] = verification.TestSuite.Target;
+                attributes["testsDiscovered"] = verification.TestSuite.Discovered.ToString();
+                attributes["testsExecuted"] = verification.TestSuite.Executed.ToString();
+                attributes["testsPassed"] = verification.TestSuite.Passed.ToString();
+                attributes["testsFailed"] = verification.TestSuite.Failed.ToString();
+                attributes["testsSkipped"] = verification.TestSuite.Skipped.ToString();
+                attributes["testCommandEvidenceId"] =
+                    verification.TestSuite.CommandEvidenceId.ToString("N");
+            }
             builder.Node(verificationNode, EvidenceGraphNodeKind.Verification,
                 verification.Verifier, $"{phase}-verification", authority,
                 verification.CreatedAt,
@@ -485,6 +502,21 @@ internal static class EvidenceGraphProjection
             {
                 builder.Diagnostic(
                     $"Verification '{verification.Id:N}' has an invalid run reference; edge omitted.");
+            }
+            if (verification.TestSuite?.CommandEvidenceId is { } commandId &&
+                commandId != Guid.Empty)
+            {
+                if (commandNodes.TryGetValue(commandId, out var commandNode))
+                {
+                    builder.Edge(commandNode, verificationNode,
+                        "produces-test-suite-evidence", $"{phase}-verification",
+                        authority, verification.CreatedAt);
+                }
+                else
+                {
+                    builder.Diagnostic(
+                        $"Verification '{verification.Id:N}' has an invalid test command reference; edge omitted.");
+                }
             }
         }
     }

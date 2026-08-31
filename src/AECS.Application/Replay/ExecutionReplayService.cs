@@ -12,7 +12,9 @@ public sealed class ExecutionReplayService
     private static readonly HashSet<string> SupportedCandidateGates = new(
         [
             "AgentSuccess", "Application", "NonEmptyChange", "Scope", "Budget",
-            "Build", "Tests", "EB001-Architecture", "EB002-Pattern",
+            "Build", "Tests", TestSuiteVerifier.UnitName,
+            TestSuiteVerifier.IntegrationName, TestSuiteVerifier.AcceptanceName,
+            "EB001-Architecture", "EB002-Pattern",
             "EB003-BreakingChange", "EB004-MissingChange",
             "EB005-HistoricalConflict", SecurityScanVerifier.VerifierName,
             AcceptanceCriteriaVerifier.Name
@@ -343,6 +345,7 @@ public sealed class ExecutionReplayService
             Target = profile.Target,
             Runtime = runtime,
             Sandbox = profile.Sandbox,
+            TestSuites = profile.TestSuites,
             Capabilities = ExecutionCapabilityPolicy.LegacyCompatibility(
                 profile.Sandbox?.NetworkAccess == true)
         };
@@ -365,8 +368,9 @@ public sealed class ExecutionReplayService
         var buildPassed = results
             .Where(item => item.Verifier == "Build")
             .All(item => item.Status == VerificationStatus.Pass);
-        if (context.Contract.Verification.UnitTests ||
-            context.Contract.Verification.IntegrationTests)
+        if (context.Contract.Execution.TestSuites is null &&
+            (context.Contract.Verification.UnitTests ||
+             context.Contract.Verification.IntegrationTests))
         {
             results.Add(buildPassed
                 ? await RunVerifierAsync(
@@ -374,6 +378,24 @@ public sealed class ExecutionReplayService
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
+        }
+        else if (context.Contract.Execution.TestSuites is not null)
+        {
+            foreach (var suite in context.Contract.Execution.TestSuites.EnabledSuites)
+            {
+                results.Add(buildPassed
+                    ? await RunVerifierAsync(
+                        new TestSuiteVerifier(
+                            stagedProcessRunner,
+                            suite.Category,
+                            suite.Profile),
+                        context,
+                        cancellationToken)
+                    : Skipped(
+                        context.AgentRunId,
+                        TestSuiteVerifier.NameFor(suite.Category),
+                        "Baseline build prerequisite failed"));
+            }
         }
 
         if (context.Contract.Verification.SecurityScan)
@@ -428,8 +450,9 @@ public sealed class ExecutionReplayService
         var buildPassed = results
             .Where(item => item.Verifier == "Build")
             .All(item => item.Status == VerificationStatus.Pass);
-        if (context.Contract.Verification.UnitTests ||
-            context.Contract.Verification.IntegrationTests)
+        if (context.Contract.Execution.TestSuites is null &&
+            (context.Contract.Verification.UnitTests ||
+             context.Contract.Verification.IntegrationTests))
         {
             results.Add(prerequisitesPassed && buildPassed
                 ? await RunVerifierAsync(
@@ -437,6 +460,24 @@ public sealed class ExecutionReplayService
                     context,
                     cancellationToken)
                 : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
+        }
+        else if (context.Contract.Execution.TestSuites is not null)
+        {
+            foreach (var suite in context.Contract.Execution.TestSuites.EnabledSuites)
+            {
+                results.Add(prerequisitesPassed && buildPassed
+                    ? await RunVerifierAsync(
+                        new TestSuiteVerifier(
+                            stagedProcessRunner,
+                            suite.Category,
+                            suite.Profile),
+                        context,
+                        cancellationToken)
+                    : Skipped(
+                        context.AgentRunId,
+                        TestSuiteVerifier.NameFor(suite.Category),
+                        "Trust-boundary or build prerequisite failed"));
+            }
         }
 
         if (context.Contract.Verification.SecurityScan)
@@ -659,6 +700,11 @@ public sealed class ExecutionReplayService
     {
         if (expected.Status != actual.Status)
             return false;
+        if (expected.TestSuite is not null)
+        {
+            return actual.TestSuite is not null &&
+                TestSuiteEvidenceEquals(expected.TestSuite, actual.TestSuite);
+        }
         if (expected.SecurityScan is null)
             return true;
         return actual.SecurityScan is not null &&
@@ -666,9 +712,34 @@ public sealed class ExecutionReplayService
             JsonSerializer.Serialize(actual.SecurityScan);
     }
 
+    private static bool TestSuiteEvidenceEquals(
+        TestSuiteEvidence expected,
+        TestSuiteEvidence actual) =>
+        expected.SchemaVersion == actual.SchemaVersion &&
+        expected.ProfileVersion == actual.ProfileVersion &&
+        expected.Category == actual.Category &&
+        expected.Mode == actual.Mode &&
+        expected.Target == actual.Target &&
+        expected.Arguments.SequenceEqual(actual.Arguments, StringComparer.Ordinal) &&
+        expected.DiscoveryCompleted == actual.DiscoveryCompleted &&
+        expected.Discovered == actual.Discovered &&
+        expected.Executed == actual.Executed &&
+        expected.Passed == actual.Passed &&
+        expected.Failed == actual.Failed &&
+        expected.Skipped == actual.Skipped;
+
     private static IReadOnlySet<string> SupportedBaselineGates(TaskContract contract)
     {
-        var gates = new HashSet<string>(["Build", "Tests"], StringComparer.OrdinalIgnoreCase);
+        var gates = new HashSet<string>(["Build"], StringComparer.OrdinalIgnoreCase);
+        if (contract.Execution.TestSuites is null)
+        {
+            gates.Add("Tests");
+        }
+        else
+        {
+            foreach (var suite in contract.Execution.TestSuites.EnabledSuites)
+                gates.Add(TestSuiteVerifier.NameFor(suite.Category));
+        }
         if (contract.Verification.SecurityScan)
             gates.Add(SecurityScanVerifier.VerifierName);
         return gates;

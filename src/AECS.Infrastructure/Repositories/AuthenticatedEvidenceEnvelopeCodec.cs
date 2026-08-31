@@ -385,6 +385,35 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new EvidenceIntegrityException(
                 "Security scan evidence is incomplete or has an unsupported schema.");
         }
+
+        var testSuites = evidence.BaselineVerificationResults
+            .Concat(evidence.VerificationResults)
+            .Where(result => result.TestSuite is not null)
+            .Select(result => result.TestSuite!)
+            .ToList();
+        var commandIds = evidence.BaselineCommands
+            .Concat(evidence.CandidateCommands)
+            .Select(command => command.Id)
+            .ToHashSet();
+        if (testSuites.Any(suite =>
+                suite.SchemaVersion != TestSuiteSchema.EvidenceVersion ||
+                suite.ProfileVersion != TestSuiteSchema.ProfileVersion ||
+                suite.Mode == TestGateMode.Disabled ||
+                string.IsNullOrWhiteSpace(suite.Target) ||
+                suite.Arguments is null ||
+                suite.Discovered < 0 ||
+                suite.Executed < 0 ||
+                suite.Passed < 0 ||
+                suite.Failed < 0 ||
+                suite.Skipped < 0 ||
+                suite.Executed > suite.Discovered ||
+                suite.Passed + suite.Failed > suite.Executed ||
+                suite.CommandEvidenceId != Guid.Empty &&
+                !commandIds.Contains(suite.CommandEvidenceId)))
+        {
+            throw new EvidenceIntegrityException(
+                "Test suite evidence is incomplete, inconsistent, or has an unsupported schema.");
+        }
     }
 
     private void VerifySeal(EvidenceSeal seal, object payload, string description)

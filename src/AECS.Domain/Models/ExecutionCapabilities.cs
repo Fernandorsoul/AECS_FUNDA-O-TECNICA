@@ -9,9 +9,15 @@ public static class ExecutionCapabilityPhases
     public const string BaselineToolProbe = "baseline.tool-probe";
     public const string BaselineBuild = "baseline.build";
     public const string BaselineTest = "baseline.test";
+    public const string BaselineUnitTest = "baseline.unit-test";
+    public const string BaselineIntegrationTest = "baseline.integration-test";
+    public const string BaselineAcceptanceTest = "baseline.acceptance-test";
     public const string BaselineSecurityScan = "baseline.security-scan";
     public const string CandidateBuild = "candidate.build";
     public const string CandidateTest = "candidate.test";
+    public const string CandidateUnitTest = "candidate.unit-test";
+    public const string CandidateIntegrationTest = "candidate.integration-test";
+    public const string CandidateAcceptanceTest = "candidate.acceptance-test";
     public const string CandidateSecurityScan = "candidate.security-scan";
     public const string CandidateAcceptance = "candidate.acceptance";
 }
@@ -30,30 +36,67 @@ public sealed class ExecutionCapabilityPolicy
     public List<SecretCapability> Secrets { get; init; } = [];
     public ResourceCapabilities Resources { get; init; } = new();
 
-    public static ExecutionCapabilityPolicy RestrictiveDefault() => new()
+    public static ExecutionCapabilityPolicy RestrictiveDefault() => CreateDefault(
+        testSuites: null);
+
+    public static ExecutionCapabilityPolicy TestSuitesDefault(TestSuiteMatrix testSuites)
     {
-        FileSystem = new FileSystemCapabilities
-        {
-            Read = ["**"],
-            Write = ["**/bin/**", "**/obj/**", ".aecs-verification/**"]
-        },
-        Processes =
-        [
-            Rule("git", ["--version"], ExecutionCapabilityPhases.BaselineToolProbe),
-            Rule("dotnet", ["--version"], ExecutionCapabilityPhases.BaselineToolProbe),
-            Rule("dotnet", ["build"],
-                ExecutionCapabilityPhases.BaselineBuild,
-                ExecutionCapabilityPhases.CandidateBuild),
-            Rule("dotnet", ["test"],
+        ArgumentNullException.ThrowIfNull(testSuites);
+        return CreateDefault(testSuites);
+    }
+
+    private static ExecutionCapabilityPolicy CreateDefault(TestSuiteMatrix? testSuites)
+    {
+        var testPhases = testSuites is null
+            ? new List<string>
+            {
                 ExecutionCapabilityPhases.BaselineTest,
                 ExecutionCapabilityPhases.CandidateTest,
-                ExecutionCapabilityPhases.CandidateAcceptance),
-            Rule("dotnet", ["list"],
-                ExecutionCapabilityPhases.BaselineSecurityScan,
-                ExecutionCapabilityPhases.CandidateSecurityScan)
-        ],
-        Resources = new ResourceCapabilities()
-    };
+                ExecutionCapabilityPhases.CandidateAcceptance
+            }
+            : new List<string> { ExecutionCapabilityPhases.CandidateAcceptance };
+        if (testSuites is not null)
+        {
+            foreach (var suite in testSuites.EnabledSuites)
+            {
+                testPhases.Add(suite.Category switch
+                {
+                    TestSuiteCategory.Unit => ExecutionCapabilityPhases.BaselineUnitTest,
+                    TestSuiteCategory.Integration => ExecutionCapabilityPhases.BaselineIntegrationTest,
+                    TestSuiteCategory.Acceptance => ExecutionCapabilityPhases.BaselineAcceptanceTest,
+                    _ => throw new ArgumentOutOfRangeException()
+                });
+                testPhases.Add(suite.Category switch
+                {
+                    TestSuiteCategory.Unit => ExecutionCapabilityPhases.CandidateUnitTest,
+                    TestSuiteCategory.Integration => ExecutionCapabilityPhases.CandidateIntegrationTest,
+                    TestSuiteCategory.Acceptance => ExecutionCapabilityPhases.CandidateAcceptanceTest,
+                    _ => throw new ArgumentOutOfRangeException()
+                });
+            }
+        }
+        return new ExecutionCapabilityPolicy
+        {
+            FileSystem = new FileSystemCapabilities
+            {
+                Read = ["**"],
+                Write = ["**/bin/**", "**/obj/**", ".aecs-verification/**"]
+            },
+            Processes =
+            [
+                Rule("git", ["--version"], ExecutionCapabilityPhases.BaselineToolProbe),
+                Rule("dotnet", ["--version"], ExecutionCapabilityPhases.BaselineToolProbe),
+                Rule("dotnet", ["build"],
+                    ExecutionCapabilityPhases.BaselineBuild,
+                    ExecutionCapabilityPhases.CandidateBuild),
+                Rule("dotnet", ["test"], testPhases.ToArray()),
+                Rule("dotnet", ["list"],
+                    ExecutionCapabilityPhases.BaselineSecurityScan,
+                    ExecutionCapabilityPhases.CandidateSecurityScan)
+            ],
+            Resources = new ResourceCapabilities()
+        };
+    }
 
     public static ExecutionCapabilityPolicy LegacyCompatibility(bool networkAccess) => new()
     {

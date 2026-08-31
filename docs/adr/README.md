@@ -14,6 +14,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-008](ADR-008-authenticated-evidence-envelope.md) | Accepted | Autenticar a evidência e encadear eventos de promoção assinados |
 | [ADR-009](ADR-009-preventive-execution-capabilities.md) | Accepted | Aplicar capabilities preventivas versionadas aos comandos staged |
 | [ADR-010](ADR-010-reproducible-security-scan-gate.md) | Accepted | Executar SecurityScan reproduzível com baseline, snapshot fixa e saída sanitizada |
+| [ADR-011](ADR-011-independent-versioned-test-suite-gates.md) | Accepted | Separar suites unitárias, de integração e aceite com política e evidência TRX próprias |
 
 ## Convenção para novos ADRs
 

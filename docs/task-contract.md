@@ -20,7 +20,7 @@ task:
       behavioral: true
     - id: AC-002
       type: verifier
-      reference: Tests
+      reference: UnitTests
     - id: AC-003
       type: test
       reference: FullyQualifiedName~CustomerMapperTests.NullCustomer
@@ -47,6 +47,21 @@ task:
     runtime: docker
     working_directory: .
     target: SampleProject.slnx
+    test_suites:
+      version: aecs.test-suites/v1
+      unit:
+        mode: required
+        target: tests/SampleProject.UnitTests/SampleProject.UnitTests.csproj
+        arguments: ["--configuration", "Release"]
+        timeout_seconds: 45
+      integration:
+        mode: optional
+        target: tests/SampleProject.IntegrationTests/SampleProject.IntegrationTests.csproj
+        timeout_seconds: 60
+      acceptance:
+        mode: required
+        target: tests/SampleProject.UnitTests/SampleProject.UnitTests.csproj
+        timeout_seconds: 45
     sandbox:
       image: mcr.microsoft.com/dotnet/sdk:9.0@sha256:f190d2dd9eef2899c91ac323caa0bd2b39334a5400ba93013e5199da39dad940
       cpu_limit: "1.0"
@@ -75,7 +90,14 @@ task:
         phases: [baseline.build, candidate.build]
       - executable: dotnet
         argument_prefix: [test]
-        phases: [baseline.test, candidate.test, candidate.acceptance]
+        phases:
+          - baseline.unit-test
+          - baseline.integration-test
+          - baseline.acceptance-test
+          - candidate.unit-test
+          - candidate.integration-test
+          - candidate.acceptance-test
+          - candidate.acceptance
       - executable: dotnet
         argument_prefix: [list]
         phases: [baseline.security-scan, candidate.security-scan]
@@ -90,8 +112,6 @@ task:
       wall_clock_seconds: 120
   verification:
     build: required
-    unit_tests: required
-    integration_tests: optional
     scope: required
     security_scan: required
     security_policy:
@@ -199,7 +219,8 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 | --- | --- | --- | --- |
 | `execution.runtime` | `docker` ou `host` | `docker` | Runtime dos comandos que executam código/ferramentas do repositório staged |
 | `execution.working_directory` | caminho relativo | `.` | Diretório, dentro do worktree isolado, onde build e testes são executados |
-| `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado por build, testes e inventário de dependências |
+| `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado por build, gate legado de testes e inventário de dependências |
+| `execution.test_suites` | objeto versionado | ausente | Ativa os gates independentes `UnitTests`, `IntegrationTests` e `AcceptanceTests` |
 | `execution.sandbox.image` | referência OCI | SDK .NET 9 fixado | Imagem imutável; tags sem `@sha256:<digest>` são rejeitadas |
 | `execution.sandbox.cpu_limit` | decimal positivo | `1.0` | Limite de CPU passado ao Docker |
 | `execution.sandbox.memory_limit` | limite Docker | `512m` | Limite de memória do container |
@@ -207,9 +228,26 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 | `execution.sandbox.wall_clock_seconds` | inteiro positivo | `120` | Teto por comando, sempre limitado também pelo orçamento global restante |
 | `execution.sandbox.network_access` | boolean | `false` | `false` usa `--network none`; acesso precisa ser declarado explicitamente |
 
-Quando build ou testes são obrigatórios, `execution.target` também é obrigatório. O AECS falha fechado antes de chamar o agente se o perfil estiver ausente ou inválido, se o diretório/target não existir ou se algum caminho tentar atravessar a fronteira do worktree.
+Quando build ou o gate legado de testes são obrigatórios, `execution.target` também é obrigatório. Em `test_suites/v1`, cada suite habilitada declara seu próprio target. O AECS falha fechado antes de chamar o agente se o perfil estiver ausente ou inválido, se o diretório/target não existir ou se algum caminho tentar atravessar a fronteira do worktree.
 
-O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de um baseline verde o AECS cria um segundo worktree limpo para o agente. Os mesmos diretório e target são reutilizados no candidato. Build, testes, testes de aceite e qualquer scanner externo usam requisições estruturadas diretamente no container, sem `sh -c`. Somente o worktree staged é montado; o checkout original, o socket Docker e caches do host não são expostos.
+#### Matriz de suites `aecs.test-suites/v1`
+
+`execution.test_suites.version: aecs.test-suites/v1` substitui o agregado ambíguo `Tests` por três comandos e resultados identificáveis. O bloco contém `unit`, `integration` e `acceptance`; cada categoria aceita:
+
+| Campo | Regra |
+| --- | --- |
+| `mode` | `required` executa e bloqueia; `optional` executa e informa sem bloquear; `disabled` não executa |
+| `target` | Solução ou projeto relativo ao `working_directory`; obrigatório quando o gate está habilitado |
+| `arguments` | Argumentos adicionais estruturados de `dotnet test`; logger, results directory e `--no-build` pertencem ao controlador |
+| `timeout_seconds` | Teto positivo do comando, ainda limitado pelo wall clock global restante e pelo sandbox |
+
+Baseline e candidato executam exatamente as mesmas categorias habilitadas, em ordem `unit`, `integration`, `acceptance`. Cada comando recebe `--no-build`, logger TRX e results directory isolado. A evidência `aecs.test-suite-evidence/v1` registra categoria, modo, target, argv, vínculo ao comando e quantidades descobertas, executadas, aprovadas, falhas e ignoradas. Um gate obrigatório sem TRX ou com zero testes executados produz `Fail`; resultado obrigatório ausente continua sendo rejeitado pelo `DecisionEngine`.
+
+Testes de aceite filtrados por `acceptance_evidence.type: test` usam o target/argumentos da categoria `acceptance`, exigem um `AcceptanceTests` em `Pass` e continuam produzindo prova específica do candidato. Por isso, contratos v1 com esse tipo de evidência não podem desabilitar a categoria `acceptance`.
+
+Compatibilidade é explícita: contratos sem `execution.test_suites` preservam `verification.unit_tests`/`integration_tests` e o único gate legado `Tests`, inclusive no replay de evidências autenticadas antigas. Novos contratos devem usar v1; não misture os campos legados para definir a política das suites, pois os modos v1 são autoritativos.
+
+O preflight usa um worktree exclusivo para compilar e testar o baseline. Somente depois de todos os gates obrigatórios da baseline passarem o AECS cria um segundo worktree limpo para o agente; falhas opcionais permanecem visíveis sem bloquear. A mesma matriz é reutilizada no candidato. Build, suites, testes de aceite filtrados e qualquer scanner externo usam requisições estruturadas diretamente no container, sem `sh -c`. Somente o worktree staged é montado; o checkout original, o socket Docker e caches do host não são expostos.
 
 O container usa root filesystem read-only, `/tmp` limitado, capabilities removidas, `no-new-privileges`, limites de CPU/memória/PIDs/wall clock e rede negada por padrão. A imagem precisa estar fixada por digest. Runtime e versão, imagem/digest, rede, limites e tipo de mount ficam registrados em cada comando da evidência autenticada. Containers são removidos em sucesso, falha, timeout e cancelamento; o worktree também é removido pelo pipeline.
 
@@ -219,7 +257,7 @@ Detalhes operacionais e o modelo de ameaça estão em [Sandbox Docker staged](do
 
 ### Capabilities preventivas
 
-`capabilities.version: aecs.capabilities/v1` é a autoridade preventiva dos comandos staged. O bloco pode ficar diretamente sob `task` ou dentro de `task.execution`; em novos contratos, prefira a primeira forma. Quando ele é omitido, o parser materializa exatamente a política restritiva mostrada no exemplo: leitura somente do worktree, escrita apenas em `bin`, `obj` e `.aecs-verification`, comandos `git --version`, `dotnet --version`, `dotnet build`, `dotnet test` e `dotnet list`, rede e segredos vazios e recursos limitados a `1.0` CPU, `512m`, 128 PIDs e 120 segundos.
+`capabilities.version: aecs.capabilities/v1` é a autoridade preventiva dos comandos staged. O bloco pode ficar diretamente sob `task` ou dentro de `task.execution`; em novos contratos, prefira a primeira forma. Quando ele é omitido, o parser materializa uma política restritiva: leitura somente do worktree, escrita apenas em `bin`, `obj` e `.aecs-verification`, comandos `git --version`, `dotnet --version`, `dotnet build`, `dotnet test` e `dotnet list`, rede e segredos vazios e recursos limitados a `1.0` CPU, `512m`, 128 PIDs e 120 segundos. O default legado preserva apenas as fases agregadas antigas; contratos `test_suites/v1` recebem as fases específicas das categorias habilitadas e mantêm `candidate.acceptance` para a prova filtrada, sem alterar hashes de políticas históricas.
 
 Se o bloco for declarado, campos ausentes não herdam permissões de filesystem, processos, rede ou segredos. Uma versão desconhecida, regra incompleta, fase desconhecida, caminho inseguro ou ausência de um comando exigido pelos gates faz o parse/preflight falhar antes do agente. A autoridade é definida pelo contrato (`task-contract`), não pode ser substituída no YAML, e qualquer plano adaptativo é comparado com ela para impedir expansão.
 
@@ -234,7 +272,7 @@ Se o bloco for declarado, campos ausentes não herdam permissões de filesystem,
 | `secrets[].name` | Nome de variável de ambiente em maiúsculas; o valor vem do ambiente do controlador somente nas fases declaradas |
 | `resources` | Tetos de CPU, memória, PIDs e wall clock; os limites de `execution.sandbox` não podem excedê-los |
 
-Fases reconhecidas: `baseline.tool-probe`, `baseline.build`, `baseline.test`, `baseline.security-scan`, `candidate.build`, `candidate.test`, `candidate.security-scan` e `candidate.acceptance`. Build/test, scan de dependências e aceite baseado em teste exigem antecipadamente as regras de processo correspondentes. O processo recebe argv estruturado, portanto o prefixo não é reinterpretado por um shell.
+Fases reconhecidas: `baseline.tool-probe`, `baseline.build`, `baseline.test`, `baseline.unit-test`, `baseline.integration-test`, `baseline.acceptance-test`, `baseline.security-scan`, `candidate.build`, `candidate.test`, `candidate.unit-test`, `candidate.integration-test`, `candidate.acceptance-test`, `candidate.security-scan` e `candidate.acceptance`. Build, cada suite habilitada, scan de dependências e aceite filtrado exigem antecipadamente as regras de processo correspondentes. O processo recebe argv estruturado, portanto o prefixo não é reinterpretado por um shell.
 
 No Docker, `/workspace` é read-only e cada diretório autorizado recebe um bind mount gravável separado. Caminhos absolutos, traversal, `.git`, wildcards não suportados, symlinks, junctions/reparse points e escapes por mount são recusados. A implementação atual consegue aplicar egress somente como `none` ou Docker `bridge`: uma lista contendo explicitamente `"*"` autoriza `bridge` nas fases indicadas; destinos mais estreitos falham fechados até existir um enforcer de egress por destino.
 
@@ -253,8 +291,8 @@ Os limites padrão são 12 mil tokens estimados, 48 mil caracteres totais e 16 m
 | Campo | Padrão | Efeito de `required` |
 | --- | --- | --- |
 | `verification.build` | `required` | Build participa da decisão |
-| `verification.unit_tests` | `required` | Testes participam da decisão |
-| `verification.integration_tests` | `optional` | Quando required, ativa o mesmo gate/comando `Tests` usado por unit tests |
+| `verification.unit_tests` | `required` | Compatibilidade legada: ativa o agregado `Tests` quando `execution.test_suites` está ausente |
+| `verification.integration_tests` | `optional` | Compatibilidade legada: quando required, ativa o mesmo agregado `Tests` |
 | `verification.scope` | `required` | Campo aceito, mas `Scope` é sempre um gate estrutural obrigatório na trust boundary atual |
 | `verification.security_scan` | `optional` | Quando required, inventaria a baseline e bloqueia achados novos do candidato conforme `security_policy` |
 | `verification.architecture` | `optional` | Quando required, exige `EB001-Architecture` em `Pass` |

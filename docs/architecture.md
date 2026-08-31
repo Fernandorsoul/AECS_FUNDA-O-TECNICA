@@ -38,7 +38,7 @@ O pipeline executa as seguintes etapas:
 1. `TaskContractParser` converte o YAML, e `RiskClassifier` pode elevar o risco declarado.
 2. `ExecutionBudgetScope` inicia um wall clock compartilhado por preflight, agente, retries e verificações.
 3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada.
-4. Um worktree detached temporário executa build e testes da baseline conforme o perfil do contrato. Falha nessa fase impede a chamada do agente.
+4. Um worktree detached temporário executa build e a matriz de suites da baseline conforme o perfil do contrato. Somente falha de gate obrigatório impede a chamada do agente; gates opcionais permanecem na evidência.
 5. Depois de confirmar que o checkout original não mudou, um segundo worktree detached é criado no mesmo commit.
 6. `RepositoryContextCompiler` seleciona contexto dentro do escopo, aplica limites e entrega ao agente conteúdo e prompt acompanhados por um manifesto.
 7. `AgentExecutionCoordinator` chama o runtime e repete apenas falhas transitórias, rate limit e timeout enquanto ainda houver tentativas, tokens, custo e tempo.
@@ -73,17 +73,19 @@ O repositório informado à CLI precisa:
 
 Preflight e candidato usam worktrees separados em `%TEMP%`/`$TMPDIR`, ambos detached no commit da baseline. A limpeza usa token não cancelável para que timeout ou cancelamento não deixem worktrees do agente ativos. O AECS detecta mudanças concorrentes no checkout original e falha fechado; ele não bloqueia processos externos durante uma execução staged.
 
-## Perfil de build e testes
+## Perfil de build e suites
 
 `execution.working_directory` define um diretório relativo à raiz do worktree e `execution.target` aponta para uma solução ou projeto `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj`. Caminhos absolutos, traversal, `.git` e links de filesystem são recusados.
 
-Quando build ou testes estão habilitados, o target explícito é obrigatório. O mesmo perfil executa:
+Quando build ou o gate legado de testes estão habilitados, o target explícito é obrigatório. Sem `execution.test_suites`, o perfil compatível executa:
 
 - `dotnet build <target>` na baseline e no candidato;
 - `dotnet test <target> --no-build` depois de um build aprovado;
 - `dotnet test <target> --no-build --filter <reference>` para evidência de aceite do tipo `test`.
 
-O process runner consome `stdout` e `stderr` de forma assíncrona, encerra a árvore de processos em timeout/cancelamento e registra cada comando. Build ou testes da baseline que não produzam `Pass` encerram o fluxo antes do agente.
+Com `execution.test_suites.version: aecs.test-suites/v1`, unitários, integração e aceite têm target, argumentos estruturados, modo (`required`, `optional`, `disabled`) e timeout separados. As categorias habilitadas executam na baseline e no candidato como `UnitTests`, `IntegrationTests` e `AcceptanceTests`. O controlador acrescenta logger/result directory TRX, persiste descoberta e contagens e falha fechado quando um gate obrigatório executa zero testes ou não produz resultado. Testes filtrados de critérios de aceite reutilizam o perfil `acceptance` no candidato.
+
+O process runner consome `stdout` e `stderr` de forma assíncrona, encerra a árvore de processos em timeout/cancelamento e registra cada comando. Build e gates de teste obrigatórios da baseline que não produzam `Pass` encerram o fluxo antes do agente; falhas opcionais permanecem informativas.
 
 ## Contexto compilado
 
@@ -113,7 +115,8 @@ Os gates sempre obrigatórios são:
 Gates condicionais:
 
 - `Build`, quando `verification.build` é `required`;
-- `Tests`, quando unit ou integration tests são `required`; ambos usam hoje o mesmo verificador `dotnet test`;
+- `Tests`, somente na compatibilidade sem `test_suites`;
+- `UnitTests`, `IntegrationTests` e `AcceptanceTests` em v1; categorias opcionais executam e são exibidas, mas somente as marcadas `required` bloqueiam;
 - `AcceptanceCriteria`, quando existe ao menos um critério declarado;
 - `EB001-Architecture`, quando `verification.architecture` é `required`;
 - nomes listados em `required_semantic_verifiers`;
@@ -146,7 +149,7 @@ Cada documento preserva:
 - baseline, comandos e verificações de preflight;
 - manifesto de contexto;
 - `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
-- matriz de critérios de aceite, decisão final e transições de estado;
+- matriz de suites com descoberta/contagens, matriz de critérios de aceite, decisão final e transições de estado;
 - exportações, promoções e replays posteriores.
 
 A criação inicial produz um envelope `aecs.execution-evidence/v1`: JSON canônico, SHA-256 e assinatura RSA-PSS/SHA-256 identificada pelo hash da chave pública. Promoções, exportações e replays são eventos assinados numa única sequência ligada à assinatura anterior, e uma cabeça também assinada cobre a quantidade de eventos e a última assinatura. A leitura rejeita schema legado, campo desconhecido ou duplicado, hash divergente, chave não confiável e cadeia inválida antes de entregar `ExecutionEvidence` ao consumidor.

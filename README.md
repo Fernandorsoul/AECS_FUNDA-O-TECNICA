@@ -18,7 +18,7 @@ Modelos podem descobrir padrões, selecionar contexto e propor alterações. Bui
 flowchart LR
     A[TaskContract YAML] --> B[Baseline Git limpa]
     B --> C[Worktree de preflight]
-    C --> D{Build e testes da baseline}
+    C --> D{Build + matriz de suites da baseline}
     D -->|falha| R[Rejected + evidência]
     D -->|passa| E[Worktree do candidato]
     E --> F[Contexto limitado + agente]
@@ -37,7 +37,7 @@ O protótipo já inclui:
 - seleção de modelos locais por risco;
 - execução via Ollama e fallback para APIs compatíveis com OpenAI;
 - limites de tokens, custo, duração, tentativas e arquivos alterados;
-- preflight da baseline e verificadores bloqueantes de agente, aplicação, mudança real, build, testes, escopo e orçamento;
+- preflight da baseline e gates versionados independentes para unitários, integração e aceite, com modos required/optional/disabled e contagem TRX;
 - critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
 - verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
 - compilação seletiva e limitada de contexto em toda execução staged;
@@ -257,7 +257,7 @@ task:
       behavioral: true
     - id: AC-002
       type: verifier
-      reference: Tests
+      reference: UnitTests
   scope:
     allowed:
       - src/Customers/**
@@ -278,6 +278,20 @@ task:
     runtime: docker
     working_directory: .
     target: CustomerSystem.slnx
+    test_suites:
+      version: aecs.test-suites/v1
+      unit:
+        mode: required
+        target: tests/CustomerSystem.UnitTests/CustomerSystem.UnitTests.csproj
+        timeout_seconds: 45
+      integration:
+        mode: optional
+        target: tests/CustomerSystem.IntegrationTests/CustomerSystem.IntegrationTests.csproj
+        timeout_seconds: 60
+      acceptance:
+        mode: required
+        target: tests/CustomerSystem.UnitTests/CustomerSystem.UnitTests.csproj
+        timeout_seconds: 45
   capabilities:
     version: aecs.capabilities/v1
     file_system:
@@ -295,7 +309,14 @@ task:
         phases: [baseline.build, candidate.build]
       - executable: dotnet
         argument_prefix: [test]
-        phases: [baseline.test, candidate.test, candidate.acceptance]
+        phases:
+          - baseline.unit-test
+          - baseline.integration-test
+          - baseline.acceptance-test
+          - candidate.unit-test
+          - candidate.integration-test
+          - candidate.acceptance-test
+          - candidate.acceptance
       - executable: dotnet
         argument_prefix: [list]
         phases: [baseline.security-scan, candidate.security-scan]
@@ -310,7 +331,6 @@ task:
       wall_clock_seconds: 120
   verification:
     build: required
-    unit_tests: required
     scope: required
   approval:
     production: none

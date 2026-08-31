@@ -106,8 +106,16 @@ public class DecisionEngine
         if (contract.Verification.Build)
             required.Add("Build");
 
-        if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
-            required.Add("Tests");
+        if (contract.Execution.TestSuites is null)
+        {
+            if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
+                required.Add("Tests");
+        }
+        else
+        {
+            foreach (var suite in contract.Execution.TestSuites.RequiredSuites)
+                required.Add(TestSuiteVerifier.NameFor(suite.Category));
+        }
 
         if (contract.Verification.Architecture)
             required.Add("EB001-Architecture");

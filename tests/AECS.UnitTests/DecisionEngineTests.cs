@@ -1,4 +1,5 @@
 using AECS.Application;
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 using FluentAssertions;
@@ -201,5 +202,43 @@ public class DecisionEngineTests
         });
 
         _engine.Decide(results, contract).Decision.Should().Be(TaskDecision.Verified);
+    }
+
+    [Fact]
+    public void Decide_VersionedSuites_BlockOnlyRequiredCategory()
+    {
+        var contract = new TaskContract
+        {
+            Verification = new VerificationProfile { Build = false },
+            Execution = new RepositoryExecutionProfile
+            {
+                TestSuites = new TestSuiteMatrix
+                {
+                    Unit = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Required,
+                        Target = "tests/Unit/Unit.csproj"
+                    },
+                    Integration = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Optional,
+                        Target = "tests/Integration/Integration.csproj"
+                    }
+                }
+            }
+        };
+        var results = new List<VerificationResult>
+        {
+            Result("AgentSuccess"), Result("Application"), Result("NonEmptyChange"),
+            Result("Scope"), Result("Budget"), Result(TestSuiteVerifier.UnitName),
+            Result(TestSuiteVerifier.IntegrationName, VerificationStatus.Fail)
+        };
+
+        _engine.Decide(results, contract).Decision.Should().Be(TaskDecision.Verified);
+
+        results.RemoveAll(result => result.Verifier == TestSuiteVerifier.UnitName);
+        var rejected = _engine.Decide(results, contract);
+        rejected.Decision.Should().Be(TaskDecision.Rejected);
+        rejected.Failures.Should().Contain(failure => failure.Contains(TestSuiteVerifier.UnitName));
     }
 }
