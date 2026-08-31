@@ -1,18 +1,19 @@
 # Promoção controlada de candidatos
 
-A promoção é uma operação separada da descoberta e da verificação. O AECS nunca usa apenas a resposta do agente para escrever no checkout original: ele carrega a evidência persistida e só aceita um candidato `Verified` ou um `HumanReviewRequired` acompanhado de aprovação humana referenciada.
+A promoção é uma operação separada da descoberta e da verificação. O AECS nunca usa apenas a resposta do agente para escrever no checkout original: ele valida o envelope assinado da evidência persistida e só aceita um candidato `Verified` ou um `HumanReviewRequired` acompanhado de aprovação humana referenciada.
 
 ## Invariantes
 
 Antes de aplicar o patch, `CandidatePromotionService` confirma:
 
-1. o identificador da tarefa, o `AgentRun` e o commit-base do candidato correspondem à evidência;
-2. o SHA-256 recalculado do diff corresponde tanto ao hash persistido quanto ao hash informado pelo operador;
-3. existe um ator e exatamente uma aprovação explícita na CLI;
-4. o caminho solicitado resolve para o mesmo repositório registrado na baseline;
-5. `HEAD`, branch e status do Git ainda são exatamente os da baseline limpa;
-6. todos os caminhos declarados pelo candidato permanecem dentro do repositório;
-7. `git apply --check --index` aceita o patch completo.
+1. schema, hash, assinatura e cadeia de eventos da evidência são válidos para uma chave confiável;
+2. o identificador da tarefa, o `AgentRun` e o commit-base do candidato correspondem à evidência;
+3. o SHA-256 recalculado do diff corresponde tanto ao hash persistido quanto ao hash informado pelo operador;
+4. existe um ator e exatamente uma aprovação explícita na CLI;
+5. o caminho solicitado resolve para o mesmo repositório registrado na baseline;
+6. `HEAD`, branch e status do Git ainda são exatamente os da baseline limpa;
+7. todos os caminhos declarados pelo candidato permanecem dentro do repositório;
+8. `git apply --check --index` aceita o patch completo.
 
 Uma decisão `Verified` aceita confirmação do usuário (`--confirm`) ou política referenciada (`--policy`). Uma decisão `HumanReviewRequired` só se torna elegível com `--human-approval <referência>`. Candidatos rejeitados nunca são promovidos.
 
@@ -26,14 +27,14 @@ A promoção bem-sucedida não cria commit. As mudanças ficam staged para inspe
 
 ## Auditoria
 
-Cada tentativa acrescenta um registro à mesma evidência JSON, preservando:
+Cada tentativa acrescenta um evento assinado e ligado à assinatura anterior, preservando:
 
 - ação e resultado (`Exported`, `Promoted`, `Rejected` ou `Failed`);
 - ator, tipo de aprovação, referência e instante da confirmação;
 - commit-base, hash do diff e identificador do candidato;
 - repositório ou arquivo exportado, mensagem e duração da operação.
 
-A atualização do JSON usa arquivo temporário e substituição atômica. Se o registro de uma promoção já aplicada não puder ser persistido, o repositório é restaurado.
+A cabeça assinada da cadeia cobre a quantidade de eventos e a assinatura final, detectando edição, reordenação e remoção simples de cauda. A atualização do JSON usa arquivo temporário e substituição atômica. Se o registro de uma promoção já aplicada não puder ser persistido, o repositório é restaurado.
 
 ## Exportação sem aplicação
 
@@ -43,4 +44,4 @@ Quando o store não está no caminho padrão, use `--evidence-root <path>` nos d
 
 ## Recusas esperadas
 
-A operação termina sem aplicar mudanças quando a evidência não existe, o hash não confere, a decisão não é elegível, falta confirmação, o repositório é outro, a baseline divergiu, o checkout está sujo, há um caminho inseguro ou o patch falha no preflight. Esses resultados também são registrados quando a evidência original está disponível.
+A operação termina sem aplicar mudanças quando a evidência não existe, sua assinatura/cadeia não é válida, o hash não confere, a decisão não é elegível, falta confirmação, o repositório é outro, a baseline divergiu, o checkout está sujo, há um caminho inseguro ou o patch falha no preflight. Esses resultados também são registrados quando a evidência original autenticada está disponível; uma evidência inválida não pode receber um novo evento confiável.

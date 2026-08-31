@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using AECS.Application.Promotion;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -116,6 +118,28 @@ public sealed class CandidatePromotionTests
     }
 
     [Fact]
+    public async Task CoordinatedEvidenceTampering_IsRejectedBeforeRepositoryMutation()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        await fixture.MutateEvidenceAsync(evidence.Id, root =>
+        {
+            var candidate = root["evidence"]!["candidateChangeSet"]!;
+            candidate["diff"] = "forged patch";
+            candidate["diffHash"] = PromotionFixture.Hash("forged patch");
+            root["evidence"]!["finalDecision"]!["decision"] = (int)TaskDecision.Verified;
+        });
+
+        var result = await fixture.Service.PromoteAsync(
+            fixture.Request(evidence),
+            CancellationToken.None);
+
+        result.Status.Should().Be(CandidatePromotionStatus.Rejected);
+        result.Message.Should().Contain("failed integrity or isolation validation");
+        await fixture.AssertBaselineUnchangedAsync();
+    }
+
+    [Fact]
     public async Task DivergedBaselineCommit_IsRejected()
     {
         await using var fixture = await PromotionFixture.CreateAsync();
@@ -175,6 +199,31 @@ public sealed class CandidatePromotionTests
             record.Action == CandidatePromotionAction.ExportPatch &&
             record.Status == CandidatePromotionStatus.Exported &&
             record.OutputPath == outputPath);
+    }
+
+    [Fact]
+    public async Task ExportPatch_TamperedEvidence_IsRejectedWithoutCreatingOutput()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        var outputPath = Path.Combine(fixture.RootPath, "exports", "forged.patch");
+        await fixture.MutateEvidenceAsync(
+            evidence.Id,
+            root => root["evidence"]!["finalDecision"]!["decision"] =
+                (int)TaskDecision.Rejected);
+
+        var result = await fixture.Service.ExportPatchAsync(new CandidatePatchExportRequest
+        {
+            EvidenceId = evidence.Id,
+            DestinationPath = outputPath,
+            ExpectedDiffHash = evidence.CandidateChangeSet.DiffHash,
+            Actor = "operator@example.com"
+        }, CancellationToken.None);
+
+        result.Status.Should().Be(CandidatePromotionStatus.Rejected);
+        result.Message.Should().Contain("failed integrity or isolation validation");
+        File.Exists(outputPath).Should().BeFalse();
+        await fixture.AssertBaselineUnchangedAsync();
     }
 
     [Fact]
@@ -403,6 +452,16 @@ public sealed class CandidatePromotionTests
         public async Task<List<CandidatePromotionEvidence>> LoadPromotionsAsync(Guid evidenceId) =>
             (await Store.LoadAsync(evidenceId, CancellationToken.None))!.Promotions;
 
+        public async Task MutateEvidenceAsync(Guid evidenceId, Action<JsonObject> mutate)
+        {
+            var path = Path.Combine(EvidencePath, $"{evidenceId:N}.json");
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+            mutate(root);
+            await File.WriteAllTextAsync(
+                path,
+                root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+
         public async Task<string> StatusAsync() =>
             (await GitAsync("status", "--porcelain=v1", "--untracked-files=all"))
             .StandardOutput;
@@ -468,7 +527,7 @@ public sealed class CandidatePromotionTests
             return result;
         }
 
-        private static string Hash(string value)
+        public static string Hash(string value)
         {
             var digest = SHA256.HashData(Encoding.UTF8.GetBytes(value));
             return $"sha256:{Convert.ToHexString(digest).ToLowerInvariant()}";
