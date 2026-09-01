@@ -61,6 +61,65 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
     }
 
     [PostgreSqlFact]
+    public async Task HistoricalRegistry_PersistsApprovedRuleAndVersionedSuppression()
+    {
+        await using var fixture = PostgreSqlEvidenceFixture.Create();
+        var now = new DateTime(2026, 8, 31, 21, 0, 0, DateTimeKind.Utc);
+        var decision = new HistoricalDecision
+        {
+            Id = $"POL-PG-{Guid.NewGuid():N}",
+            Version = 3,
+            Type = HistoricalDecisionType.Policy,
+            Source = "policies/POL-PG-1.json",
+            SourceVersion = "policy:v3",
+            SourceHash = $"sha256:{new string('d', 64)}",
+            Authority = "platform-governance",
+            ValidFrom = now.AddDays(-1),
+            ProhibitedPatterns =
+            [
+                new HistoricalDecisionPattern
+                {
+                    Kind = HistoricalPatternKind.ProjectReference,
+                    Value = "Legacy.Infrastructure"
+                }
+            ],
+            Justification = "Reviewed platform boundary.",
+            Enforcement = HistoricalDecisionEnforcement.Blocking,
+            Review = new HistoricalDecisionReview
+            {
+                Status = HistoricalDecisionReviewStatus.Approved,
+                Authority = HistoricalDecisionReviewAuthority.Human,
+                Actor = "architect@example.com",
+                Reason = "Approved in architecture review.",
+                ReviewedAt = now.AddHours(-1)
+            },
+            CreatedAt = now.AddHours(-2)
+        };
+        fixture.TrackHistoricalDecision(decision.Id);
+        var suppressionId = $"SUP-PG-{Guid.NewGuid():N}";
+        await fixture.Store.SaveHistoricalDecisionAsync(decision, CancellationToken.None);
+        await fixture.Store.SaveHistoricalDecisionSuppressionAsync(
+            new HistoricalDecisionSuppression
+            {
+                Id = suppressionId,
+                Version = 2,
+                DecisionId = decision.Id,
+                DecisionVersion = decision.Version,
+                Actor = "platform-owner",
+                Reason = "Migration expires after the release.",
+                CreatedAt = now,
+                ExpiresAt = now.AddDays(7)
+            },
+            CancellationToken.None);
+
+        var restarted = fixture.CreateStore();
+        (await restarted.LoadHistoricalDecisionsAsync(CancellationToken.None))
+            .Should().ContainSingle(item => item.Id == decision.Id && item.Version == 3);
+        (await restarted.LoadHistoricalDecisionSuppressionsAsync(CancellationToken.None))
+            .Should().ContainSingle(item => item.Id == suppressionId && item.Version == 2);
+    }
+
+    [PostgreSqlFact]
     public async Task ConcurrentAppends_AreSerializedWithoutLosingEventsAndRetriesAreIdempotent()
     {
         await using var fixture = PostgreSqlEvidenceFixture.Create();
@@ -192,6 +251,7 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
     {
         private const string TemporaryRootPrefix = "aecs-postgresql-evidence-tests-";
         private readonly HashSet<Guid> _evidenceIds = [];
+        private readonly HashSet<string> _historicalDecisionIds = [];
 
         private PostgreSqlEvidenceFixture(string connectionString, string rootPath)
         {
@@ -218,6 +278,9 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
 
         public PostgreSqlExecutionEvidenceStore CreateStore() =>
             new(ConnectionString, KeyDirectoryPath);
+
+        public void TrackHistoricalDecision(string decisionId) =>
+            _historicalDecisionIds.Add(decisionId);
 
         public ExecutionEvidence CreateEvidence()
         {
@@ -430,7 +493,7 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
 
         public async ValueTask DisposeAsync()
         {
-            if (_evidenceIds.Count > 0)
+            if (_evidenceIds.Count > 0 || _historicalDecisionIds.Count > 0)
             {
                 await using var connection = new NpgsqlConnection(ConnectionString);
                 await connection.OpenAsync();
@@ -441,6 +504,21 @@ public sealed class PostgreSqlExecutionEvidenceStoreTests
                         "DELETE FROM execution_evidence WHERE \"Id\" = @evidenceId";
                     command.Parameters.AddWithValue("evidenceId", evidenceId);
                     await command.ExecuteNonQueryAsync();
+                }
+                foreach (var decisionId in _historicalDecisionIds)
+                {
+                    await using var suppressionCommand = connection.CreateCommand();
+                    suppressionCommand.CommandText =
+                        "DELETE FROM historical_decision_suppressions " +
+                        "WHERE \"DecisionId\" = @decisionId";
+                    suppressionCommand.Parameters.AddWithValue("decisionId", decisionId);
+                    await suppressionCommand.ExecuteNonQueryAsync();
+
+                    await using var decisionCommand = connection.CreateCommand();
+                    decisionCommand.CommandText =
+                        "DELETE FROM historical_decisions WHERE \"Id\" = @decisionId";
+                    decisionCommand.Parameters.AddWithValue("decisionId", decisionId);
+                    await decisionCommand.ExecuteNonQueryAsync();
                 }
             }
 

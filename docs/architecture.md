@@ -139,6 +139,8 @@ Gates condicionais:
 
 `security_scan: required` adiciona `SecurityScan` à matriz. O gate inventaria a baseline e o candidato com scanners pluggable de segredos, dependências e padrões; somente findings novos acima da política bloqueiam, enquanto falha ou saída inconclusiva vira `Error`. O inventário `dotnet list` passa pelo runner staged e os scanners embutidos apenas leem arquivos, sem carregar código. Os verificadores EB001–EB005 só executam depois dos pré-requisitos e do build. Exceções de qualquer verificador viram `Error`, não sucesso.
 
+EB005 consulta o `IHistoricalDecisionStore` implementado pelo mesmo backend operacional. Somente versões aprovadas, vigentes e semanticamente relacionadas ao candidato são selecionadas. Regras contraditórias retornam `Ambiguous`, store indisponível retorna `Unavailable` e histórico não aplicável retorna `NoHistory`; nenhum desses estados cria regra implícita. Conflito bloqueante só pode vir de versão aprovada por humano.
+
 Critérios de aceite obrigatórios precisam apontar para um resultado de verificador ou teste filtrado. Para testes, exit code zero sem nenhum caso TRX executado falha. Critérios comportamentais também exigem que o arquivo de teste declarado apareça no diff, salvo evidência equivalente explicitamente autorizada.
 
 Cancelamento, wall clock esgotado, orçamento excedido ou falha permanente do agente produzem decisão `Rejected` e estados terminais específicos (`Cancelled`, `TimedOut`, `BudgetExceeded` ou `AgentFailed`).
@@ -164,6 +166,7 @@ Cada documento preserva:
 - baseline, comandos e verificações de preflight;
 - `RepositorySnapshot` da baseline, configuração de descoberta e proveniência das ferramentas;
 - `CSharpSymbolGraph` da baseline, opções efetivas, versões, diagnósticos e vínculo ao snapshot;
+- seleção histórica usada por EB005, versões/hash das decisões, supressões e provenance até fonte e símbolo;
 - manifesto de contexto;
 - `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
 - matriz de suites com descoberta/contagens, matriz de critérios de aceite, decisão final e transições de estado;

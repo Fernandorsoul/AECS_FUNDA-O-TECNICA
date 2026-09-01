@@ -53,6 +53,7 @@ public sealed class StagedExecutionPipeline
     private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
     private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
     private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
+    private readonly IHistoricalDecisionStore? _historicalDecisionStore;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -64,7 +65,8 @@ public sealed class StagedExecutionPipeline
         IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
         IReadOnlyList<ISecurityScanner>? securityScanners = null,
         RepositorySnapshotBuilder? repositorySnapshotBuilder = null,
-        ICSharpSymbolGraphBuilder? symbolGraphBuilder = null)
+        ICSharpSymbolGraphBuilder? symbolGraphBuilder = null,
+        IHistoricalDecisionStore? historicalDecisionStore = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -76,6 +78,8 @@ public sealed class StagedExecutionPipeline
         _repositorySnapshotBuilder = repositorySnapshotBuilder ??
             new RepositorySnapshotBuilder(processRunner);
         _symbolGraphBuilder = symbolGraphBuilder ?? new RoslynSymbolGraphBuilder();
+        _historicalDecisionStore = historicalDecisionStore ??
+            evidenceStore as IHistoricalDecisionStore;
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -660,12 +664,21 @@ public sealed class StagedExecutionPipeline
                 new EB001Verifier(),
                 new EB002Verifier(),
                 new EB003Verifier(),
-                new EB004Verifier(),
-                new EB005Verifier()
+                new EB004Verifier()
             };
 
             foreach (var verifier in semanticVerifiers)
                 results.Add(await RunVerifierAsync(verifier, semanticContext, cancellationToken));
+
+            var historicalSelection = await HistoricalDecisionSelector.LoadAsync(
+                semanticContext,
+                _historicalDecisionStore,
+                DateTime.UtcNow,
+                cancellationToken);
+            results.Add(await RunVerifierAsync(
+                new EB005Verifier(historicalSelection),
+                semanticContext,
+                cancellationToken));
         }
 
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)

@@ -96,6 +96,128 @@ public sealed class AuthenticatedEvidenceStoreTests
     }
 
     [Fact]
+    public async Task Save_IncompleteHistoricalDecisionEvidence_IsRejectedBeforeSigning()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var evidence = fixture.CreateEvidence();
+        evidence.VerificationResults.Add(new VerificationResult
+        {
+            AgentRunId = evidence.AgentRun.Id.ToString("N"),
+            Verifier = "EB005-HistoricalConflict",
+            Status = VerificationStatus.Pass,
+            Severity = Severity.Info,
+            Historical = new HistoricalDecisionVerificationEvidence
+            {
+                Status = HistoricalDecisionSelectionStatus.Selected,
+                EvaluatedAt = DateTime.UtcNow,
+                Message = "forged empty selection"
+            }
+        });
+
+        var save = () => fixture.Store.SaveAsync(evidence, CancellationToken.None);
+
+        await save.Should().ThrowAsync<EvidenceIntegrityException>()
+            .WithMessage("*Historical decision verification evidence*incomplete*");
+    }
+
+    [Fact]
+    public async Task Save_ValidHistoricalProvenanceAndSuppression_SurvivesRestart()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var evidence = fixture.CreateEvidence();
+        var evaluatedAt = new DateTime(2026, 8, 31, 18, 0, 0, DateTimeKind.Utc);
+        var decision = HistoricalDecisionContract.Seal(new HistoricalDecision
+        {
+            Id = "POL-SEC-1",
+            Version = 2,
+            Type = HistoricalDecisionType.Policy,
+            Source = "policies/security.json",
+            SourceVersion = "git:abc123",
+            SourceHash = Hash("policy-source"),
+            Authority = "security-board",
+            ValidFrom = evaluatedAt.AddDays(-1),
+            ProhibitedPatterns =
+            [
+                new HistoricalDecisionPattern
+                {
+                    Kind = HistoricalPatternKind.TypeName,
+                    Value = "LegacyHandler"
+                }
+            ],
+            Justification = "The legacy handler must not be introduced.",
+            Enforcement = HistoricalDecisionEnforcement.Blocking,
+            Review = new HistoricalDecisionReview
+            {
+                Status = HistoricalDecisionReviewStatus.Approved,
+                Authority = HistoricalDecisionReviewAuthority.Human,
+                Actor = "security@example.com",
+                Reason = "Source and selector reviewed.",
+                ReviewedAt = evaluatedAt.AddHours(-1)
+            },
+            CreatedAt = evaluatedAt.AddHours(-1)
+        });
+        var suppression = HistoricalDecisionContract.Seal(
+            new HistoricalDecisionSuppression
+            {
+                Id = "SUP-SEC-1",
+                Version = 1,
+                DecisionId = decision.Id,
+                DecisionVersion = decision.Version,
+                Actor = "platform-owner",
+                Reason = "Temporary migration window.",
+                SymbolId = "T:App.LegacyHandler",
+                CreatedAt = evaluatedAt.AddMinutes(-10),
+                ExpiresAt = evaluatedAt.AddDays(1)
+            });
+        evidence.VerificationResults.Add(new VerificationResult
+        {
+            AgentRunId = evidence.AgentRun.Id.ToString("N"),
+            Verifier = "EB005-HistoricalConflict",
+            Status = VerificationStatus.Pass,
+            Severity = Severity.Warning,
+            Historical = new HistoricalDecisionVerificationEvidence
+            {
+                Status = HistoricalDecisionSelectionStatus.Selected,
+                EvaluatedAt = evaluatedAt,
+                Message = "Selected 1 approved historical decision.",
+                Decisions = [decision],
+                Suppressions = [suppression],
+                Conflicts =
+                [
+                    new HistoricalConflictEvidence
+                    {
+                        RuleId = "EB005-POLICY-CONFLICT",
+                        DecisionId = decision.Id,
+                        DecisionVersion = decision.Version,
+                        Source = decision.Source,
+                        SourceVersion = decision.SourceVersion,
+                        SourceHash = decision.SourceHash,
+                        Authority = decision.Authority,
+                        SymbolId = suppression.SymbolId,
+                        Symbol = "App.LegacyHandler",
+                        FilePath = "file.txt",
+                        Severity = "Error",
+                        Pattern = "TypeName:LegacyHandler",
+                        Justification = "Resolved type violates the reviewed policy.",
+                        Suppressed = true,
+                        SuppressionId = suppression.Id,
+                        SuppressionVersion = suppression.Version
+                    }
+                ]
+            }
+        });
+
+        await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+        var loaded = await fixture.CreateRestartedStore().LoadAsync(
+            evidence.Id,
+            CancellationToken.None);
+
+        loaded!.VerificationResults.Single(result =>
+                result.Verifier == "EB005-HistoricalConflict")
+            .Historical!.Conflicts.Should().ContainSingle().Which.Suppressed.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CoordinatedDiffHashAndDecisionTampering_IsRejected()
     {
         await using var fixture = AuthenticatedEvidenceFixture.Create();

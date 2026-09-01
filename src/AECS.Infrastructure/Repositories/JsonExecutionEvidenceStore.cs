@@ -8,7 +8,10 @@ using AECS.Infrastructure.Cryptography;
 
 namespace AECS.Infrastructure.Repositories;
 
-public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore, IEvidenceGraphSource
+public sealed partial class JsonExecutionEvidenceStore :
+    IExecutionEvidenceStore,
+    IEvidenceGraphSource,
+    IHistoricalDecisionStore
 {
     public const string CurrentSchemaVersion = EvidenceEnvelopeFormat.CurrentSchemaVersion;
 

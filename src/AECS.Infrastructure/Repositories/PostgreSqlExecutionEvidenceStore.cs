@@ -12,7 +12,10 @@ using Npgsql;
 
 namespace AECS.Infrastructure.Repositories;
 
-public sealed class PostgreSqlExecutionEvidenceStore : IExecutionEvidenceStore, IEvidenceGraphSource
+public sealed partial class PostgreSqlExecutionEvidenceStore :
+    IExecutionEvidenceStore,
+    IEvidenceGraphSource,
+    IHistoricalDecisionStore
 {
     public const string ConnectionStringEnvironmentVariable =
         "AECS_POSTGRES_CONNECTION_STRING";

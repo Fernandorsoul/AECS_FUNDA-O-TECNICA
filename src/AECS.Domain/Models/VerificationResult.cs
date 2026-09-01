@@ -21,4 +21,7 @@ public class VerificationResult
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SemanticVerificationEvidence? Semantic { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HistoricalDecisionVerificationEvidence? Historical { get; init; }
 }
