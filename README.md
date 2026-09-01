@@ -371,11 +371,11 @@ Comandos disponíveis dentro do Jarvis:
 | --- | --- |
 | `run <task-file>` | Executa uma tarefa |
 | `experiment <dir>` | Executa os YAMLs do diretório |
-| `status` | Mostra a última execução da sessão |
-| `history` | Lista o histórico em memória da sessão |
-| `explain <task-id>` | Explica a decisão registrada na sessão |
+| `status [--json]` | Mostra a execução autenticada mais recente do repositório |
+| `history [filtros]` | Consulta o histórico durável por task, run, candidato ou evidence ID |
+| `explain <task-id> [--json]` | Explica decisão, gates, tentativas, budget, contexto e promoções persistidas |
 | `risk <objective>` | Classifica um objetivo sem executar um agente |
-| `context <task-id>` | Mostra o pacote de contexto selecionado |
+| `context <task-id> [--json]` | Mostra o manifesto de contexto persistido na evidência |
 | `exit` | Encerra o REPL |
 
 ## Estrutura do repositório
@@ -406,6 +406,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;
 - [Evidence Graph](docs/evidence-graph.md) — consultas, IDs/arestas estáveis, autorização e exportação JSON/DOT;
 - [Adaptive Controller em shadow mode](docs/adaptive-shadow-controller.md) — histórico autenticado, fallbacks, invariantes e relatório offline;
+- [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.

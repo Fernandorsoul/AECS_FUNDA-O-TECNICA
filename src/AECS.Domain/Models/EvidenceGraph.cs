@@ -49,6 +49,8 @@ public sealed class EvidenceGraphQuery
 public sealed class EvidenceGraphSummary
 {
     public Guid EvidenceId { get; init; }
+    public string SchemaVersion { get; init; } = string.Empty;
+    public string Authority { get; init; } = string.Empty;
     public string RepositoryId { get; init; } = string.Empty;
     public string TaskId { get; init; } = string.Empty;
     public Guid RunId { get; init; }

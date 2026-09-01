@@ -1,11 +1,9 @@
 using AECS.Application;
 using AECS.Application.Classification;
-using AECS.Application.ContextCompiler;
-using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
+using AECS.Application.Jarvis;
 using AECS.Application.Parsing;
 using AECS.Application.Staging;
-using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -24,11 +22,7 @@ public class JarvisRepl
     private readonly bool _allowHostExecution;
     private readonly TaskContractParser _parser = new();
     private readonly RiskClassifier _riskClassifier = new();
-    private readonly ExecutionController _executionController = new();
-    private readonly ControlKernel _kernel = new();
-    private readonly DecisionEngine _decisionEngine = new();
-    private readonly List<TaskExperimentResult> _history = [];
-    private TaskExperimentResult? _lastResult;
+    private readonly DurableExecutionHistoryService? _durableHistory;
 
     public JarvisRepl(
         string repoPath,
@@ -41,6 +35,14 @@ public class JarvisRepl
         _evidenceStore = evidenceStore ?? new JsonExecutionEvidenceStore(
             JsonExecutionEvidenceStore.GetDefaultRootPath());
         _allowHostExecution = allowHostExecution;
+        if (_evidenceStore is IEvidenceGraphSource graphSource)
+        {
+            _durableHistory = new DurableExecutionHistoryService(
+                _evidenceStore,
+                graphSource,
+                repoPath,
+                Environment.UserName);
+        }
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -97,15 +99,15 @@ public class JarvisRepl
                 return false;
 
             case "status":
-                ShowStatus();
+                await ShowStatus(argument, ct);
                 return false;
 
             case "history":
-                ShowHistory();
+                await ShowHistory(argument, ct);
                 return false;
 
             case "explain":
-                ExplainTask(argument);
+                await ExplainTask(argument, ct);
                 return false;
 
             case "risk":
@@ -113,7 +115,7 @@ public class JarvisRepl
                 return false;
 
             case "context":
-                ShowContext(argument);
+                await ShowContext(argument, ct);
                 return false;
 
             case "exit" or "quit":
@@ -131,11 +133,12 @@ public class JarvisRepl
         Console.WriteLine("Commands:");
         Console.WriteLine("  run <task-file>     Execute a single task");
         Console.WriteLine("  experiment <dir>    Run experiment on task directory");
-        Console.WriteLine("  status              Show last run status");
-        Console.WriteLine("  history             Show execution history");
-        Console.WriteLine("  explain <task-id>   Explain what happened in a task");
+        Console.WriteLine("  status [--json]     Show latest persisted execution");
+        Console.WriteLine("  history [filters]   Query authenticated execution history");
+        Console.WriteLine("  explain <task-id>   Explain persisted evidence (--json supported)");
         Console.WriteLine("  risk <objective>    Classify risk for an objective");
-        Console.WriteLine("  context <task-id>   Show context package for a task");
+        Console.WriteLine("  context <task-id>   Show persisted context manifest (--json supported)");
+        Console.WriteLine("  filters: --task <id> --run <id> --candidate <id> --evidence <id> --limit <n>");
         Console.WriteLine("  exit                Quit AECS");
     }
 
@@ -153,33 +156,6 @@ public class JarvisRepl
             : new OllamaAdapter(new HttpClient());
 
         var execution = await CreatePipeline(agent).RunAsync(_repoPath, contract, ct);
-
-        var result = new TaskExperimentResult
-        {
-            TaskId = execution.Contract.Id,
-            Objective = execution.Contract.Objective,
-            Risk = execution.Risk,
-            Model = execution.Model,
-            Decision = execution.Decision.Decision,
-            DecisionReason = execution.Decision.Reason,
-            Duration = execution.BudgetUsage.WallClockElapsed,
-            InputTokens = execution.AgentResult.InputTokens,
-            OutputTokens = execution.AgentResult.OutputTokens,
-            EstimatedCost = execution.AgentResult.EstimatedCost,
-            FilesChanged = execution.CandidateChangeSet.ChangedFiles.Count,
-            Verifications = execution.VerificationResults.ToDictionary(
-                verification => verification.Verifier,
-                verification => verification.Status),
-            AcceptanceCriteria = execution.AcceptanceCriteriaResults.ToList(),
-            AgentAttempts = execution.AgentAttempts.ToList(),
-            BudgetUsage = execution.BudgetUsage,
-            RetryCount = execution.AgentRun.RetryCount,
-            EvidenceId = execution.EvidenceId,
-            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
-        };
-
-        _history.Add(result);
-        _lastResult = result;
 
         Console.WriteLine($"Decision: {execution.Decision.Decision}");
         Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
@@ -215,9 +191,6 @@ public class JarvisRepl
 
         Console.WriteLine(ExperimentReportFormatter.Format(report));
 
-        _history.AddRange(report.Results);
-        if (report.Results.Count > 0)
-            _lastResult = report.Results.Last();
     }
 
     private StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
@@ -232,91 +205,55 @@ public class JarvisRepl
                 _allowHostExecution));
     }
 
-    private void ShowStatus()
+    private async Task ShowStatus(string argument, CancellationToken cancellationToken)
     {
-        if (_lastResult is null)
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: false, out var options, out var error) ||
+            !IsUnfiltered(options.Query) || options.Query.Limit != 50)
         {
-            Console.WriteLine("No executions yet. Use 'run' or 'experiment' first.");
+            Console.WriteLine($"Usage: status [--json]. {error}");
             return;
         }
-
-        Console.WriteLine($"Last execution: {_lastResult.TaskId}");
-        Console.WriteLine($"Objective: {_lastResult.Objective}");
-        Console.WriteLine($"Risk: {_lastResult.Risk}");
-        Console.WriteLine($"Model: {_lastResult.Model}");
-        Console.WriteLine($"Decision: {_lastResult.Decision}");
-        Console.WriteLine($"Duration: {_lastResult.Duration.TotalSeconds:F1}s");
-        Console.WriteLine($"Cost: ${_lastResult.EstimatedCost:F2}");
+        var result = await _durableHistory!.StatusAsync(cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.HistoryToText(result, status: true));
     }
 
-    private void ShowHistory()
+    private async Task ShowHistory(string argument, CancellationToken cancellationToken)
     {
-        if (_history.Count == 0)
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: false, out var options, out var error))
         {
-            Console.WriteLine("No executions yet.");
+            Console.WriteLine(
+                "Usage: history [--task <id>] [--run <id>] [--candidate <id>] " +
+                "[--evidence <id>] [--limit <1-500>] [--json]. " + error);
             return;
         }
-
-        Console.WriteLine($"{"Task",-12} {"Decision",-12} {"Duration",8} {"Cost",8} {"Files",6}");
-        Console.WriteLine(new string('-', 50));
-
-        foreach (var r in _history)
-        {
-            Console.WriteLine($"{r.TaskId,-12} {r.Decision,-12} {r.Duration.TotalSeconds,6:F1}s  ${r.EstimatedCost:F2}  {r.FilesChanged}");
-        }
+        var result = await _durableHistory!.QueryAsync(options.Query, cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.HistoryToText(result));
     }
 
-    private void ExplainTask(string taskId)
+    private async Task ExplainTask(string argument, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(taskId))
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: true, out var options, out var error) ||
+            IsUnfiltered(options.Query))
         {
-            Console.WriteLine("Usage: explain <task-id>");
+            Console.WriteLine(
+                "Usage: explain <task-id> | --task <id> | --run <id> | " +
+                "--candidate <id> | --evidence <id> [--json]. " + error);
             return;
         }
-
-        var record = _history.FirstOrDefault(r =>
-            r.TaskId.Equals(taskId, StringComparison.OrdinalIgnoreCase));
-
-        if (record is null)
-        {
-            Console.WriteLine($"No execution found for task '{taskId}'.");
-            return;
-        }
-
-        Console.WriteLine($"Task: {record.Objective}");
-        Console.WriteLine($"Risk: {record.Risk}");
-        Console.WriteLine($"Model: {record.Model}");
-        Console.WriteLine($"Decision: {record.Decision}");
-        Console.WriteLine($"Reason: {record.DecisionReason}");
-        Console.WriteLine($"Duration: {record.Duration.TotalSeconds:F1}s");
-        Console.WriteLine($"Tokens: {record.InputTokens} in / {record.OutputTokens} out");
-        Console.WriteLine($"Cost: ${record.EstimatedCost:F2}");
-        Console.WriteLine($"Files changed: {record.FilesChanged}");
-        Console.WriteLine(
-            $"Budget: {record.BudgetUsage.AttemptsUsed}/{record.BudgetUsage.MaximumAttempts} attempts, " +
-            $"{record.BudgetUsage.WallClockElapsed.TotalSeconds:F1}/{record.BudgetUsage.WallClockLimitSeconds}s");
-        if (record.AgentAttempts.Count > 0)
-        {
-            Console.WriteLine("Agent attempts:");
-            foreach (var attempt in record.AgentAttempts)
-            {
-                Console.WriteLine(
-                    $"  #{attempt.AttemptNumber} {attempt.FailureKind} " +
-                    $"retry={attempt.WillRetry} — {attempt.DecisionReason}");
-            }
-        }
-        if (record.AcceptanceCriteria.Count > 0)
-        {
-            Console.WriteLine("Acceptance evidence:");
-            foreach (var criterion in record.AcceptanceCriteria)
-            {
-                var reference = string.IsNullOrWhiteSpace(criterion.EvidenceReference)
-                    ? "missing"
-                    : $"{criterion.EvidenceType}:{criterion.EvidenceReference}";
-                Console.WriteLine(
-                    $"  {criterion.CriterionId} {criterion.Status} {reference} — {criterion.Description}");
-            }
-        }
+        var result = await _durableHistory!.ExplainAsync(options.Query, cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.ExplanationToText(result));
     }
 
     private void ClassifyRisk(string objective)
@@ -339,62 +276,128 @@ public class JarvisRepl
         Console.WriteLine($"Objective: {objective}");
     }
 
-    private void ShowContext(string taskId)
+    private async Task ShowContext(string argument, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(taskId))
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: true, out var options, out var error) ||
+            IsUnfiltered(options.Query))
         {
-            Console.WriteLine("Usage: context <task-id>");
+            Console.WriteLine(
+                "Usage: context <task-id> | --task <id> | --run <id> | " +
+                "--candidate <id> | --evidence <id> [--json]. " + error);
             return;
         }
-
-        var samplePath = Path.Combine(_repoPath, "src");
-        if (!Directory.Exists(samplePath))
-        {
-            Console.WriteLine($"Source path not found: {samplePath}");
-            return;
-        }
-
-        var indexer = new CodebaseIndexer();
-        var index = indexer.Index(samplePath);
-
-        var selector = new ContextSelector();
-        var package = selector.Select(index, taskId, taskId, ["src/**"]);
-
-        var compiler = new ContextCompiler();
-        var prompt = compiler.Compile(package, samplePath, taskId);
-
-        Console.WriteLine($"Context Package: {package.Id}");
-        Console.WriteLine($"Strategy: {package.Strategy}");
-        Console.WriteLine($"Estimated tokens: {package.EstimatedTokens}");
-        Console.WriteLine();
-        Console.WriteLine("Compiled Prompt Preview:");
-        Console.WriteLine(new string('-', 50));
-
-        // Mostrar apenas as primeiras linhas do prompt
-        var lines = prompt.Split('\n').Take(30).ToArray();
-        foreach (var line in lines)
-        {
-            Console.WriteLine(line);
-        }
-
-        if (prompt.Split('\n').Length > 30)
-        {
-            Console.WriteLine($"\n... [{prompt.Split('\n').Length - 30} more lines]");
-        }
+        var result = await _durableHistory!.ContextAsync(options.Query, cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.ContextToText(result));
     }
 
-    private static string BuildLegacyPrompt(TaskContract contract, Dictionary<string, string> codeContext)
+    private bool EnsureDurableHistory()
     {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Task: {contract.Objective}");
-        sb.AppendLine();
-        sb.AppendLine("Code Context:");
-        foreach (var kv in codeContext)
+        if (_durableHistory is not null)
+            return true;
+        Console.WriteLine(
+            "Authenticated durable history is unavailable for the selected evidence store.");
+        return false;
+    }
+
+    private static bool IsUnfiltered(DurableHistoryQuery query) =>
+        query.EvidenceId is null && query.TaskId is null &&
+        query.RunId is null && query.CandidateId is null;
+
+    private static bool TryParseLookup(
+        string argument,
+        bool allowLegacyTask,
+        out JarvisLookupOptions options,
+        out string error)
+    {
+        var tokens = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string? taskId = null;
+        Guid? evidenceId = null;
+        Guid? runId = null;
+        Guid? candidateId = null;
+        var limit = 50;
+        var json = false;
+        for (var index = 0; index < tokens.Length; index++)
         {
-            sb.AppendLine($"// File: {kv.Key}");
-            sb.AppendLine(kv.Value);
-            sb.AppendLine();
+            var token = tokens[index];
+            if (token == "--json")
+            {
+                json = true;
+                continue;
+            }
+            if (token == "--format" && index + 1 < tokens.Length)
+            {
+                var format = tokens[++index];
+                if (format is not ("json" or "text"))
+                {
+                    options = new JarvisLookupOptions();
+                    error = "Format must be text or json.";
+                    return false;
+                }
+                json = format == "json";
+                continue;
+            }
+            if (token == "--task" && index + 1 < tokens.Length)
+            {
+                taskId = tokens[++index];
+                continue;
+            }
+            if (token == "--limit" && index + 1 < tokens.Length &&
+                int.TryParse(tokens[++index], out var parsedLimit) && parsedLimit is >= 1 and <= 500)
+            {
+                limit = parsedLimit;
+                continue;
+            }
+            if ((token is "--evidence" or "--run" or "--candidate") &&
+                index + 1 < tokens.Length && Guid.TryParse(tokens[++index], out var parsedId))
+            {
+                if (token == "--evidence")
+                    evidenceId = parsedId;
+                else if (token == "--run")
+                    runId = parsedId;
+                else
+                    candidateId = parsedId;
+                continue;
+            }
+            if (allowLegacyTask && !token.StartsWith("--", StringComparison.Ordinal) &&
+                taskId is null)
+            {
+                taskId = token;
+                continue;
+            }
+            options = new JarvisLookupOptions();
+            error = $"Invalid argument '{token}'.";
+            return false;
         }
-        return sb.ToString();
+        if (evidenceId.HasValue &&
+            (taskId is not null || runId.HasValue || candidateId.HasValue))
+        {
+            options = new JarvisLookupOptions();
+            error = "--evidence cannot be combined with other execution identifiers.";
+            return false;
+        }
+        options = new JarvisLookupOptions
+        {
+            Json = json,
+            Query = new DurableHistoryQuery
+            {
+                EvidenceId = evidenceId,
+                TaskId = taskId,
+                RunId = runId,
+                CandidateId = candidateId,
+                Limit = limit
+            }
+        };
+        error = string.Empty;
+        return true;
+    }
+
+    private sealed class JarvisLookupOptions
+    {
+        public bool Json { get; init; }
+        public DurableHistoryQuery Query { get; init; } = new();
     }
 }
