@@ -59,6 +59,8 @@ coverage/
 **/launchSettings.json
 /aecs.runtime.local.json
 /aecs.runtime.*.local.json
+/aecs.alert-policy.local.json
+/aecs.alert-policy.*.local.json
 
 # Compiled source
 **/Generated\ Files/

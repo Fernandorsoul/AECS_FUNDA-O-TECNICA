@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "aecs.alert-policy/v1",
+  "id": "policy/local-operator/v1",
+  "enabled": false,
+  "recipient": "local-operator",
+  "cooldownMinutes": 60,
+  "lookbackHours": 24,
+  "repeatedFailureThreshold": 2,
+  "defaultDeadlineMinutes": 60,
+  "events": [
+    "Security",
+    "Scope",
+    "Budget",
+    "RepeatedFailure",
+    "Regression",
+    "HumanReview"
+  ],
+  "severityOverrides": {
+    "Security": "Critical",
+    "Scope": "High",
+    "Budget": "High",
+    "Regression": "High",
+    "HumanReview": "Warning"
+  },
+  "deadlineMinutes": {
+    "Security": 15,
+    "Scope": 30,
+    "Budget": 60,
+    "RepeatedFailure": 120,
+    "Regression": 30,
+    "HumanReview": 240
+  },
+  "channelAuthorization": {
+    "allowCode": false,
+    "allowSecrets": false
+  },
+  "deathCriteria": {
+    "minimumDeliveredAlerts": 20,
+    "minimumActionRate": 0.1,
+    "maximumIgnoredRate": 0.7
+  }
+}
