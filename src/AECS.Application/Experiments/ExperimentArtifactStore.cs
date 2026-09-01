@@ -35,6 +35,7 @@ public sealed class ExperimentArtifactStore
     public string ReportPath => Path.Combine(OutputDirectory, "report.json");
     public string ResultsCsvPath => Path.Combine(OutputDirectory, "results.csv");
     public string ComparisonsCsvPath => Path.Combine(OutputDirectory, "comparisons.csv");
+    public string AnalysisCsvPath => Path.Combine(OutputDirectory, "analysis.csv");
 
     public static void EnsureOutsideRepository(string outputDirectory, string repositoryPath)
     {
@@ -149,6 +150,10 @@ public sealed class ExperimentArtifactStore
         await WriteTextReplaceAsync(
             ComparisonsCsvPath,
             ExperimentCsvFormatter.Comparisons(report),
+            cancellationToken);
+        await WriteTextReplaceAsync(
+            AnalysisCsvPath,
+            ExperimentCsvFormatter.Analysis(report),
             cancellationToken);
     }
 
@@ -337,6 +342,8 @@ public static class ExperimentCsvFormatter
                 "expected_decision",
                 "actual_decision", "matches_expected", "duration_seconds", "input_tokens",
                 "output_tokens", "estimated_cost", "files_changed", "retry_count",
+                "verified_code_change", "first_pass_verified", "scope_violation_count",
+                "rework_count",
                 "evidence_id", "evidence_location", "original_repository_unchanged", "failure")
         };
         rows.AddRange(report.Results.Select(result => Row(
@@ -374,6 +381,10 @@ public static class ExperimentCsvFormatter
             result.EstimatedCost.ToString(CultureInfo.InvariantCulture),
             result.FilesChanged.ToString(CultureInfo.InvariantCulture),
             result.RetryCount.ToString(CultureInfo.InvariantCulture),
+            result.VerifiedCodeChange.ToString(CultureInfo.InvariantCulture),
+            result.FirstPassVerified.ToString(CultureInfo.InvariantCulture),
+            result.ScopeViolationCount.ToString(CultureInfo.InvariantCulture),
+            result.ReworkCount.ToString(CultureInfo.InvariantCulture),
             result.EvidenceId == Guid.Empty ? string.Empty : result.EvidenceId.ToString("N"),
             result.EvidenceLocation,
             result.OriginalRepositoryUnchanged.ToString(CultureInfo.InvariantCulture),
@@ -389,7 +400,11 @@ public static class ExperimentCsvFormatter
                 "task_id", "repetition", "reference_variant_id", "candidate_variant_id",
                 "reference_run_key", "candidate_run_key", "reference_status",
                 "candidate_status", "both_completed", "decision_changed",
-                "duration_delta_seconds", "cost_delta", "reference_evidence_id",
+                "reference_vcc", "candidate_vcc", "vcc_delta", "reference_first_pass",
+                "candidate_first_pass", "first_pass_delta", "reference_total_tokens",
+                "candidate_total_tokens", "total_token_delta", "reference_estimated_cost",
+                "candidate_estimated_cost", "duration_delta_seconds", "cost_delta",
+                "scope_violation_delta", "rework_delta", "reference_evidence_id",
                 "candidate_evidence_id", "failure")
         };
         rows.AddRange(report.PairedComparisons.Select(pair => Row(
@@ -403,13 +418,73 @@ public static class ExperimentCsvFormatter
             pair.CandidateStatus.ToString(),
             pair.BothCompleted.ToString(CultureInfo.InvariantCulture),
             pair.DecisionChanged.ToString(CultureInfo.InvariantCulture),
+            pair.ReferenceVerifiedCodeChange.ToString(CultureInfo.InvariantCulture),
+            pair.CandidateVerifiedCodeChange.ToString(CultureInfo.InvariantCulture),
+            pair.VerifiedCodeChangeDelta.ToString(CultureInfo.InvariantCulture),
+            pair.ReferenceFirstPass.ToString(CultureInfo.InvariantCulture),
+            pair.CandidateFirstPass.ToString(CultureInfo.InvariantCulture),
+            pair.FirstPassDelta.ToString(CultureInfo.InvariantCulture),
+            pair.ReferenceTotalTokens.ToString(CultureInfo.InvariantCulture),
+            pair.CandidateTotalTokens.ToString(CultureInfo.InvariantCulture),
+            pair.TotalTokenDelta.ToString(CultureInfo.InvariantCulture),
+            pair.ReferenceEstimatedCost.ToString(CultureInfo.InvariantCulture),
+            pair.CandidateEstimatedCost.ToString(CultureInfo.InvariantCulture),
             pair.DurationDeltaSeconds.ToString("F6", CultureInfo.InvariantCulture),
             pair.CostDelta.ToString(CultureInfo.InvariantCulture),
+            pair.ScopeViolationDelta.ToString(CultureInfo.InvariantCulture),
+            pair.ReworkDelta.ToString(CultureInfo.InvariantCulture),
             pair.ReferenceEvidenceId?.ToString("N") ?? string.Empty,
             pair.CandidateEvidenceId?.ToString("N") ?? string.Empty,
             pair.Failure)));
         return string.Join("\n", rows) + "\n";
     }
+
+    public static string Analysis(ExperimentReport report)
+    {
+        var rows = new List<string>
+        {
+            Row(
+                "hypothesis_id", "conclusion", "conclusion_reason", "variant_id",
+                "context_strategy", "planned_runs", "observed_runs", "completed_runs",
+                "failed_runs", "skipped_runs", "vcc", "vcc_rate", "first_pass_vcc",
+                "first_pass_rate", "failure_rate", "scope_violations",
+                "scope_violation_rate", "rework_attempts", "total_estimated_cost",
+                "vcc_per_estimated_dollar", "token_mean", "token_ci95_lower",
+                "token_ci95_upper", "latency_median_seconds")
+        };
+        if (report.Analysis is null)
+            return string.Join("\n", rows) + "\n";
+
+        rows.AddRange(report.Analysis.Variants.Select(variant => Row(
+            report.Analysis.HypothesisId,
+            report.Analysis.Conclusion.ToString(),
+            report.Analysis.ConclusionReason,
+            variant.VariantId,
+            variant.ContextStrategy,
+            variant.PlannedRuns.ToString(CultureInfo.InvariantCulture),
+            variant.ObservedRuns.ToString(CultureInfo.InvariantCulture),
+            variant.CompletedRuns.ToString(CultureInfo.InvariantCulture),
+            variant.FailedRuns.ToString(CultureInfo.InvariantCulture),
+            variant.SkippedRuns.ToString(CultureInfo.InvariantCulture),
+            variant.VerifiedCodeChanges.ToString(CultureInfo.InvariantCulture),
+            variant.VerifiedCodeChangeRate.ToString("F6", CultureInfo.InvariantCulture),
+            variant.FirstPassVerifiedChanges.ToString(CultureInfo.InvariantCulture),
+            variant.FirstPassRate.ToString("F6", CultureInfo.InvariantCulture),
+            variant.FailureRate.ToString("F6", CultureInfo.InvariantCulture),
+            variant.ScopeViolations.ToString(CultureInfo.InvariantCulture),
+            variant.ScopeViolationRate.ToString("F6", CultureInfo.InvariantCulture),
+            variant.ReworkAttempts.ToString(CultureInfo.InvariantCulture),
+            variant.TotalEstimatedCost.ToString(CultureInfo.InvariantCulture),
+            Number(variant.VerifiedChangesPerEstimatedDollar),
+            Number(variant.TotalTokens.Mean),
+            Number(variant.TotalTokens.MeanConfidenceIntervalLower),
+            Number(variant.TotalTokens.MeanConfidenceIntervalUpper),
+            Number(variant.LatencySeconds.Median))));
+        return string.Join("\n", rows) + "\n";
+    }
+
+    private static string Number(double? value) =>
+        value?.ToString("G17", CultureInfo.InvariantCulture) ?? string.Empty;
 
     private static string Row(params string[] values) => string.Join(',', values.Select(Escape));
 

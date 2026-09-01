@@ -20,7 +20,7 @@
       "id": "control",
       "provider": "Mock",
       "model": "mock-control-v1",
-      "contextStrategy": "symbol-aware-control",
+      "contextStrategy": "graph-ranked",
       "context": {
         "maxTokens": 2000,
         "maxCharacters": 8000,
@@ -35,7 +35,7 @@
       "id": "shallow",
       "provider": "Mock",
       "model": "mock-shallow-v1",
-      "contextStrategy": "symbol-aware-shallow",
+      "contextStrategy": "graph-ranked",
       "context": {
         "maxTokens": 1000,
         "maxCharacters": 4000,

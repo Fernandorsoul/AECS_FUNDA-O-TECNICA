@@ -72,6 +72,40 @@ public sealed class AuthenticatedEvidenceStoreTests
     }
 
     [Fact]
+    public async Task Save_NaiveContextManifest_PreservesAuthenticatedStrategyEvidence()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var repository = Path.Combine(fixture.RootPath, "context-repository");
+        Directory.CreateDirectory(Path.Combine(repository, "src"));
+        await File.WriteAllTextAsync(
+            Path.Combine(repository, "src", "Policy.cs"),
+            "namespace Demo; public class Policy { }");
+        var context = new RepositoryContextCompiler(
+                selectionStrategy: ContextStrategyIds.NaivePathOrder)
+            .Compile(
+                repository,
+                new TaskContract
+                {
+                    Id = "TASK-EVIDENCE-001",
+                    Objective = "Change policy",
+                    Scope = new ScopeDefinition { Allowed = ["src/**"] }
+                },
+                "0123456789abcdef");
+        var evidence = fixture.CreateEvidence(context.Manifest);
+
+        await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+        var loaded = await fixture.CreateRestartedStore().LoadAsync(
+            evidence.Id,
+            CancellationToken.None);
+
+        loaded.Should().NotBeNull();
+        loaded!.ContextManifest.StrategyVersion.Should()
+            .Be(ContextManifestSchema.NaiveStrategyVersion);
+        loaded.ContextManifest.Selections.Should().ContainSingle()
+            .Which.Relation.Should().Be(ContextManifestSchema.NaiveStrategyId);
+    }
+
+    [Fact]
     public async Task Save_IncompleteSemanticEvidence_IsRejectedBeforeSigning()
     {
         await using var fixture = AuthenticatedEvidenceFixture.Create();

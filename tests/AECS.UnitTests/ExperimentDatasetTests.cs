@@ -104,6 +104,7 @@ public sealed class ExperimentDatasetTests
                 result.EvidenceId != Guid.Empty &&
                 !string.IsNullOrWhiteSpace(result.EvidenceLocation));
         File.Exists(artifacts.ReportPath).Should().BeTrue();
+        File.Exists(artifacts.AnalysisCsvPath).Should().BeTrue();
         File.ReadAllLines(artifacts.ResultsCsvPath).Should().HaveCount(5);
         File.ReadAllLines(artifacts.ComparisonsCsvPath).Should().HaveCount(3);
 

@@ -1,6 +1,7 @@
 using AECS.Application.ContextCompiler;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
+using System.Text.Json.Serialization;
 
 namespace AECS.Application.Experiments;
 
@@ -44,6 +45,16 @@ public class TaskExperimentResult
     public List<AgentAttemptEvidence> AgentAttempts { get; init; } = [];
     public ExecutionBudgetEvidence BudgetUsage { get; init; } = new();
     public int RetryCount { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool VerifiedCodeChange { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FirstPassVerified { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ScopeViolationCount { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ReworkCount { get; init; }
+    [JsonIgnore]
+    public int TotalTokens => InputTokens + OutputTokens;
     public Guid EvidenceId { get; init; }
     public string EvidenceLocation { get; init; } = string.Empty;
     public bool OriginalRepositoryUnchanged { get; init; }
@@ -66,6 +77,8 @@ public class ExperimentReport
         ExperimentEnvironment.Capture();
     public List<TaskExperimentResult> Results { get; init; } = [];
     public List<ExperimentPairedComparison> PairedComparisons { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExperimentHypothesisAnalysis? Analysis { get; init; }
 
     public int TotalTasks => Results.Count;
     public int CompletedCount => Results.Count(r => r.Status == ExperimentResultStatus.Completed);
@@ -83,8 +96,9 @@ public class ExperimentReport
     public TimeSpan TotalDuration => Results.Aggregate(TimeSpan.Zero, (acc, r) => acc + r.Duration);
     public decimal TotalCost => Results.Sum(r => r.EstimatedCost);
     public decimal Cpvc => VerifiedCount > 0 ? TotalCost / VerifiedCount : 0;
+    public int FirstPassVerifiedCount => Results.Count(result => result.FirstPassVerified);
     public double FirstPassRate => CompletedCount > 0
-        ? (double)VerifiedCount / CompletedCount * 100
+        ? (double)FirstPassVerifiedCount / CompletedCount * 100
         : 0;
     public double AverageFilesChanged => CompletedCount > 0
         ? Results.Where(result => result.Status == ExperimentResultStatus.Completed)

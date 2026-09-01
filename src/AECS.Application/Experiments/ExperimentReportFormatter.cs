@@ -94,6 +94,8 @@ public static class ExperimentReportFormatter
             {
                 var outcome = pair.BothCompleted
                     ? $"decisionChanged={pair.DecisionChanged} " +
+                      $"vccDelta={pair.VerifiedCodeChangeDelta} " +
+                      $"tokenDelta={pair.TotalTokenDelta} " +
                       $"durationDelta={pair.DurationDeltaSeconds:F2}s " +
                       $"costDelta=${pair.CostDelta:F4}"
                     : pair.Failure;
@@ -101,6 +103,32 @@ public static class ExperimentReportFormatter
                     $"{pair.TaskId}/r{pair.Repetition} {pair.ReferenceVariantId} -> " +
                     $"{pair.CandidateVariantId}: {outcome}");
             }
+            sb.AppendLine();
+        }
+
+        if (report.Analysis is not null)
+        {
+            sb.AppendLine($"HYPOTHESIS {report.Analysis.HypothesisId}");
+            sb.AppendLine($"Primary metric: {report.Analysis.PrimaryMetric}");
+            foreach (var variant in report.Analysis.Variants)
+            {
+                var yield = variant.VerifiedChangesPerEstimatedDollar is null
+                    ? "unavailable"
+                    : variant.VerifiedChangesPerEstimatedDollar.Value.ToString("F4");
+                var tokensMedian = variant.TotalTokens.Median?.ToString("F1") ?? "unavailable";
+                var latencyMedian = variant.LatencySeconds.Median is null
+                    ? "unavailable"
+                    : $"{variant.LatencySeconds.Median:F2}s";
+                sb.AppendLine(
+                    $"{variant.VariantId}: VCC={variant.VerifiedCodeChanges}/" +
+                    $"{variant.ObservedRuns}, firstPass={variant.FirstPassRate:P1}, " +
+                    $"tokensMedian={tokensMedian}, latencyMedian={latencyMedian}, " +
+                    $"scope={variant.ScopeViolations}, rework={variant.ReworkAttempts}, " +
+                    $"VCC/$estimated={yield}");
+            }
+            sb.AppendLine(
+                $"Conclusion: {report.Analysis.Conclusion} — " +
+                report.Analysis.ConclusionReason);
             sb.AppendLine();
         }
 
@@ -131,7 +159,7 @@ public static class ExperimentReportFormatter
         sb.AppendLine($"Total estimated cost: ${report.TotalCost:F2}");
         sb.AppendLine(
             $"First-pass verification rate: {report.FirstPassRate:F0}% " +
-            $"({report.VerifiedCount}/{report.CompletedCount})");
+            $"({report.FirstPassVerifiedCount}/{report.CompletedCount})");
         sb.AppendLine($"Average files changed: {report.AverageFilesChanged:F1}");
         sb.AppendLine($"CPVC (Cost per Verified Change): ${report.Cpvc:F2}");
 

@@ -1,0 +1,82 @@
+name: Context Compiler H1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paired-context-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OPENAI_API_KEY: ${{ secrets.AECS_EXPERIMENT_OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Require experiment credential
+        shell: bash
+        run: test -n "${OPENAI_API_KEY}"
+
+      - name: Restore and build controller
+        run: |
+          dotnet restore AECS.slnx
+          dotnet build AECS.slnx --configuration Release --no-restore --nologo
+
+      - name: Prepare versioned benchmark baseline
+        shell: bash
+        run: |
+          experiment_root="${RUNNER_TEMP}/context-compiler-h1"
+          cp -R experiments/context-compiler-h1 "${experiment_root}"
+          git -C "${experiment_root}/repository" init --initial-branch main
+          git -C "${experiment_root}/repository" config user.name "AECS H1"
+          git -C "${experiment_root}/repository" config user.email "h1@aecs.invalid"
+          git -C "${experiment_root}/repository" add -A
+          git -C "${experiment_root}/repository" commit -m "H1 benchmark baseline"
+
+      - name: Run preregistered 30-pair experiment
+        id: experiment
+        continue-on-error: true
+        shell: bash
+        run: |
+          dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            experiment \
+            --dataset "${RUNNER_TEMP}/context-compiler-h1/dataset.cloud.json" \
+            --output "${RUNNER_TEMP}/context-compiler-h1-output" \
+            --include-real-providers \
+            --allow-host-execution \
+            --evidence-root "${RUNNER_TEMP}/context-compiler-h1-evidence" \
+            --key-directory "${RUNNER_TEMP}/context-compiler-h1-keys"
+
+      - name: Validate published artifacts
+        if: always()
+        shell: bash
+        run: |
+          test -s "${RUNNER_TEMP}/context-compiler-h1-output/report.json"
+          test -s "${RUNNER_TEMP}/context-compiler-h1-output/results.csv"
+          test -s "${RUNNER_TEMP}/context-compiler-h1-output/comparisons.csv"
+          test -s "${RUNNER_TEMP}/context-compiler-h1-output/analysis.csv"
+          test "$(find "${RUNNER_TEMP}/context-compiler-h1-output/runs" -name '*.json' | wc -l)" -eq 60
+
+      - name: Publish report and authenticated evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-compiler-h1-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/context-compiler-h1-output/
+            ${{ runner.temp }}/context-compiler-h1-evidence/
+            ${{ runner.temp }}/context-compiler-h1-keys/*.public.pem
+          if-no-files-found: error
+          retention-days: 30

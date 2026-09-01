@@ -194,7 +194,12 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 ## Experiment Harness
 
-O modo versionado do Experiment Harness lê `aecs.experiment-dataset/v1`, resolve a baseline exata e expande tarefas × variantes × repetições. Cada combinação usa o isolamento staged existente, recebe run key determinístico e checkpoint imutável. O relatório `aecs.experiment-report/v1` preserva ambiente, falhas individuais, pares referência/candidato e links para todas as evidências produzidas. Consulte [Experiment Harness reproduzível](experiment-harness.md).
+O modo versionado do Experiment Harness lê datasets v1 gerais e o protocolo de contexto A/B
+v2, resolve a baseline exata e expande tarefas × variantes × repetições. Cada combinação usa o
+isolamento staged existente, recebe run key determinístico e checkpoint imutável. O relatório
+`aecs.experiment-report/v2` preserva ambiente, falhas individuais, pares, distribuições,
+incerteza, conclusão H1 e links para todas as evidências produzidas. Consulte
+[Experiment Harness reproduzível](experiment-harness.md).
 
 ## Mapa de componentes
 
