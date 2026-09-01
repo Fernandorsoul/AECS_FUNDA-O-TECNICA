@@ -8,20 +8,25 @@ public class FallbackAdapter : IAgentAdapter
     private readonly IAgentAdapter _primary;
     private readonly IAgentAdapter _fallback;
     private readonly Func<AgentRunResult, bool> _shouldFallback;
+    private readonly Func<AgentExecutionRequest, bool> _authorizeFallback;
 
     public FallbackAdapter(
         IAgentAdapter primary,
         IAgentAdapter fallback,
-        Func<AgentRunResult, bool>? shouldFallback = null)
+        Func<AgentRunResult, bool>? shouldFallback = null,
+        Func<AgentExecutionRequest, bool>? authorizeFallback = null)
     {
         _primary = primary;
         _fallback = fallback;
         _shouldFallback = shouldFallback ?? DefaultShouldFallback;
+        _authorizeFallback = authorizeFallback ?? (_ => true);
     }
 
     public AgentContextProfile GetContextProfile(AgentExecutionRequest request)
     {
         var primary = _primary.GetContextProfile(request);
+        if (!_authorizeFallback(request))
+            return primary;
         var fallback = _fallback.GetContextProfile(request);
         return new AgentContextProfile
         {
@@ -51,6 +56,9 @@ public class FallbackAdapter : IAgentAdapter
 
         if (!_shouldFallback(result) || IsHardStop(result, cancellationToken))
             return result;
+
+        if (!_authorizeFallback(request))
+            return BlockedByPolicy(result);
 
         var remainingTokens = request.Budget.MaxTokens - result.InputTokens - result.OutputTokens;
         var remainingCost = request.Budget.MaxCostUsd - result.EstimatedCost;
@@ -118,6 +126,25 @@ public class FallbackAdapter : IAgentAdapter
             AgentFailureKind.RateLimited or
             AgentFailureKind.Timeout;
     }
+
+    private static AgentRunResult BlockedByPolicy(AgentRunResult primary) => new()
+    {
+        Success = false,
+        StdOut = primary.StdOut,
+        StdErr = string.IsNullOrWhiteSpace(primary.StdErr)
+            ? "Cloud fallback was blocked by the effective runtime policy"
+            : primary.StdErr + "; cloud fallback was blocked by the effective runtime policy",
+        ExitCode = -1,
+        Duration = primary.Duration,
+        InputTokens = primary.InputTokens,
+        OutputTokens = primary.OutputTokens,
+        EstimatedCost = primary.EstimatedCost,
+        UsageAccounting = primary.UsageAccounting,
+        FilesChanged = primary.FilesChanged,
+        ExitReason = "FallbackPolicyBlocked",
+        FailureKind = AgentFailureKind.PolicyViolation,
+        RetryAfter = primary.RetryAfter
+    };
 
     private static bool IsHardStop(
         AgentRunResult result,

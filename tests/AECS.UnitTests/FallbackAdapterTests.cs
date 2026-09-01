@@ -141,6 +141,77 @@ public class FallbackAdapterTests
     }
 
     [Fact]
+    public async Task LocalRateLimit_FallsBackToCloud()
+    {
+        var local = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = false,
+                ExitCode = 429,
+                ExitReason = "RateLimited"
+            }
+        };
+        var cloud = new CountingAdapter(new AgentRunResult
+        {
+            Success = true,
+            ExitReason = "Completed",
+            FilesChanged = ["src/Cloud.cs"]
+        });
+
+        var result = await new FallbackAdapter(local, cloud).ExecuteAsync(
+            CreateRequest(),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.ExitReason.Should().Be("CompletedViaFallback");
+        cloud.ExecutionCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RuntimePolicyDeniesRisk_CloudIsNotCalledAndFailureIsExplicit()
+    {
+        var local = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = false,
+                ExitReason = "ConnectionError",
+                FailureKind = AgentFailureKind.Transient
+            }
+        };
+        var cloud = new CountingAdapter(new AgentRunResult
+        {
+            Success = true,
+            ExitReason = "Completed"
+        });
+        var fallback = new FallbackAdapter(
+            local,
+            cloud,
+            authorizeFallback: request => request.Risk == AECS.Domain.Enums.RiskLevel.R0);
+        var request = CreateRequest();
+        request = new AgentExecutionRequest
+        {
+            TaskId = request.TaskId,
+            Objective = request.Objective,
+            RepoPath = request.RepoPath,
+            Scope = request.Scope,
+            Budget = request.Budget,
+            Model = request.Model,
+            Risk = AECS.Domain.Enums.RiskLevel.R3
+        };
+
+        var result = await fallback.ExecuteAsync(request, CancellationToken.None);
+        var profile = fallback.GetContextProfile(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureKind.Should().Be(AgentFailureKind.PolicyViolation);
+        result.ExitReason.Should().Be("FallbackPolicyBlocked");
+        cloud.ExecutionCount.Should().Be(0);
+        profile.Adapter.Should().Be(nameof(MockAgentAdapter));
+    }
+
+    [Fact]
     public async Task MissingPrimaryAccounting_DoesNotBecomeZeroDuringFallback()
     {
         var local = new MockAgentAdapter
@@ -243,4 +314,17 @@ public class FallbackAdapterTests
             LocalResourceEstimatedCostUsd = localCost,
             CostComplete = true
         };
+
+    private sealed class CountingAdapter(AgentRunResult result) : IAgentAdapter
+    {
+        public int ExecutionCount { get; private set; }
+
+        public Task<AgentRunResult> ExecuteAsync(
+            AgentExecutionRequest request,
+            CancellationToken cancellationToken)
+        {
+            ExecutionCount++;
+            return Task.FromResult(result);
+        }
+    }
 }

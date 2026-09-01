@@ -57,6 +57,8 @@ coverage/
 # User-specific files
 **/local.settings.json
 **/launchSettings.json
+/aecs.runtime.local.json
+/aecs.runtime.*.local.json
 
 # Compiled source
 **/Generated\ Files/

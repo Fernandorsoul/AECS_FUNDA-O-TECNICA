@@ -4,8 +4,10 @@ using System.Text.Json.Nodes;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Jarvis;
 using AECS.Cli.Jarvis;
+using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
+using AECS.Infrastructure.AgentRuntime;
 using AECS.Infrastructure.Repositories;
 using FluentAssertions;
 
@@ -32,10 +34,13 @@ public sealed class DurableExecutionHistoryTests
                 $"context {evidence.TaskContract.Id}",
                 "exit")));
             Console.SetOut(output);
-            await new JarvisRepl(
+            using var runtime = AecsExecutionRuntime.CreateForTesting(
+                new MockAgentAdapter(),
+                fixture.RestartStore());
+            var exitCode = await new JarvisRepl(
                 fixture.RepositoryPath,
-                useMock: true,
-                fixture.RestartStore()).RunAsync(CancellationToken.None);
+                runtime).RunAsync(CancellationToken.None);
+            exitCode.Should().Be(0);
         }
         finally
         {
@@ -50,6 +55,37 @@ public sealed class DurableExecutionHistoryTests
             .And.Contain("[persisted] context status=Complete")
             .And.Contain(evidence.AgentRun.Id.ToString("N"))
             .And.Contain(evidence.CandidateChangeSet.DiffHash);
+    }
+
+    [Fact]
+    public async Task JarvisExecutionError_IsReportedThroughProcessExitCode()
+    {
+        await using var fixture = Fixture.Create();
+        using var runtime = AecsExecutionRuntime.CreateForTesting(
+            new MockAgentAdapter(),
+            fixture.RestartStore());
+        var originalInput = Console.In;
+        var originalOutput = Console.Out;
+        await using var output = new StringWriter();
+        try
+        {
+            Console.SetIn(new StringReader(string.Join(Environment.NewLine,
+                "run missing-task.yaml",
+                "exit")));
+            Console.SetOut(output);
+
+            var exitCode = await new JarvisRepl(
+                fixture.RepositoryPath,
+                runtime).RunAsync(CancellationToken.None);
+
+            exitCode.Should().Be(1);
+            output.ToString().Should().Contain("Error:");
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
     }
 
     [Fact]
