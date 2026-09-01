@@ -4,6 +4,10 @@ Os comandos `status`, `history`, `explain` e `context` do Jarvis consultam o mes
 operacional selecionado na CLI. Eles não dependem mais da memória da sessão e continuam úteis
 depois de reiniciar o processo.
 
+`review` e `export-patch` usam a mesma leitura autenticada. Aprovações, recusas, abandonos,
+exportações e resultados de promoção aparecem depois em `explain`, incluindo justificativa,
+validade e referência de política quando o evento é uma revisão humana.
+
 ## Consultas
 
 `status` retorna a execução autenticada mais recente do repositório. `history` aceita filtros

@@ -27,6 +27,182 @@ public sealed class CandidatePromotionService
         _evidenceStore = evidenceStore;
     }
 
+    public async Task<CandidateReviewSnapshot> InspectAsync(
+        Guid evidenceId,
+        string repositoryPath,
+        CancellationToken cancellationToken)
+    {
+        var unavailable = new CandidateReviewSnapshot
+        {
+            EvidenceId = evidenceId,
+            RepositoryPath = repositoryPath
+        };
+        try
+        {
+            if (string.IsNullOrWhiteSpace(repositoryPath))
+                return UnavailableReview(unavailable, "An explicit repository path is required");
+            _evidenceStore.EnsureRepositoryIsolation(repositoryPath);
+            var evidence = await LoadEvidenceAsync(evidenceId, cancellationToken);
+            if (evidence is null)
+                return UnavailableReview(unavailable, "Execution evidence was not found");
+
+            var repository = await ResolveRepositoryAsync(repositoryPath, cancellationToken);
+            if (!SamePath(repository.RootPath, evidence.Baseline.RepositoryPath))
+            {
+                return UnavailableReview(
+                    unavailable,
+                    "Requested repository does not match the repository captured in evidence");
+            }
+
+            var integrityFailure = ValidateCandidateIntegrity(
+                evidence,
+                evidence.CandidateChangeSet.DiffHash);
+            if (integrityFailure is not null)
+                return UnavailableReview(unavailable, integrityFailure);
+
+            var repositoryFailure = await ValidateBaselineAsync(
+                repository.RootPath,
+                evidence.Baseline,
+                cancellationToken);
+            var reviewable = IsReviewable(evidence);
+            return new CandidateReviewSnapshot
+            {
+                Available = true,
+                Message = reviewable
+                    ? "Authenticated candidate is available for human review"
+                    : "Candidate decision is not eligible for human approval",
+                EvidenceId = evidence.Id,
+                TaskId = evidence.TaskContract.Id,
+                CandidateId = evidence.CandidateChangeSet.Id,
+                RepositoryPath = repository.RootPath,
+                BaselineCommit = evidence.Baseline.Commit,
+                BaselineBranch = evidence.Baseline.Branch,
+                Diff = evidence.CandidateChangeSet.Diff,
+                DiffHash = evidence.CandidateChangeSet.DiffHash,
+                ChangedFiles = [.. evidence.CandidateChangeSet.ChangedFiles],
+                Risk = evidence.TaskContract.Constraints.SecurityRisk,
+                Decision = evidence.FinalDecision.Decision,
+                State = evidence.FinalDecision.State,
+                Eligibility = GetEligibility(evidence, null),
+                Reviewable = reviewable,
+                RepositoryReady = repositoryFailure is null,
+                RepositoryState = repositoryFailure ?? "Baseline and working tree match evidence",
+                Gates = evidence.BaselineVerificationResults
+                    .Select(result => ReviewGate("baseline", result))
+                    .Concat(evidence.VerificationResults.Select(result =>
+                        ReviewGate("candidate", result)))
+                    .ToList()
+            };
+        }
+        catch (Exception ex) when (IsEvidenceValidationFailure(ex) ||
+            ex is ArgumentException or NotSupportedException)
+        {
+            return UnavailableReview(
+                unavailable,
+                $"Execution evidence failed integrity or isolation validation: {ex.Message}");
+        }
+    }
+
+    public async Task<CandidateReviewResult> ReviewAsync(
+        CandidateReviewRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var now = DateTime.UtcNow;
+        ExecutionEvidence? evidence;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(request.RepositoryPath))
+                _evidenceStore.EnsureRepositoryIsolation(request.RepositoryPath);
+            evidence = await LoadEvidenceAsync(request.EvidenceId, cancellationToken);
+        }
+        catch (Exception ex) when (IsEvidenceValidationFailure(ex))
+        {
+            return UnpersistedReview(
+                request,
+                CandidatePromotionStatus.Rejected,
+                $"Execution evidence failed integrity or isolation validation: {ex.Message}",
+                now);
+        }
+
+        if (evidence is null)
+        {
+            return UnpersistedReview(
+                request,
+                CandidatePromotionStatus.Rejected,
+                "Execution evidence was not found",
+                now);
+        }
+
+        var failure = ValidateReviewRequest(request, evidence, now);
+        string resolvedRepository = request.RepositoryPath;
+        try
+        {
+            var repository = await ResolveRepositoryAsync(
+                request.RepositoryPath,
+                cancellationToken);
+            resolvedRepository = repository.RootPath;
+            if (!SamePath(repository.RootPath, evidence.Baseline.RepositoryPath))
+            {
+                failure ??=
+                    "Requested repository does not match the repository captured in evidence";
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or
+            InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+        {
+            failure ??= $"Repository validation failed: {ex.Message}";
+        }
+
+        if (failure is not null)
+            return UnpersistedReview(request, CandidatePromotionStatus.Rejected, failure, now);
+
+        var status = request.Decision switch
+        {
+            CandidateReviewDecision.Approve => CandidatePromotionStatus.Approved,
+            CandidateReviewDecision.Reject => CandidatePromotionStatus.Declined,
+            CandidateReviewDecision.Abandon => CandidatePromotionStatus.Abandoned,
+            _ => CandidatePromotionStatus.Rejected
+        };
+        var record = CreateReviewRecord(
+            evidence,
+            request,
+            resolvedRepository,
+            status,
+            request.Decision switch
+            {
+                CandidateReviewDecision.Approve => "Candidate was approved for controlled promotion",
+                CandidateReviewDecision.Reject => "Candidate was declined by the human reviewer",
+                CandidateReviewDecision.Abandon => "Human review or promotion confirmation was abandoned",
+                _ => "Human review decision was rejected"
+            },
+            now);
+        try
+        {
+            await _evidenceStore.AppendPromotionAsync(
+                evidence.Id,
+                record,
+                CancellationToken.None);
+            return new CandidateReviewResult
+            {
+                Status = record.Status,
+                Message = record.Message,
+                Evidence = record,
+                Persisted = true
+            };
+        }
+        catch (Exception ex)
+        {
+            return new CandidateReviewResult
+            {
+                Status = CandidatePromotionStatus.Failed,
+                Message = $"Human review could not be persisted: {ex.Message}",
+                Evidence = record,
+                Persisted = false
+            };
+        }
+    }
+
     public async Task<CandidatePromotionResult> PromoteAsync(
         CandidatePromotionRequest request,
         CancellationToken cancellationToken)
@@ -592,6 +768,19 @@ public sealed class CandidatePromotionService
         }
         if (request.Approval.ConfirmedAt > DateTime.UtcNow.AddMinutes(5))
             return "Approval timestamp cannot be in the future";
+        if (request.Approval.ConfirmedAt < DateTime.UtcNow.AddMinutes(-2))
+            return "Promotion confirmation is stale; confirm again immediately before promotion";
+        if (request.Approval.Kind == PromotionApprovalKind.HumanReview &&
+            CandidateReviewReference.TryParse(request.Approval.Reference, out var reviewId))
+        {
+            var reviewFailure = ValidateReferencedReview(
+                evidence,
+                reviewId,
+                request,
+                DateTime.UtcNow);
+            if (reviewFailure is not null)
+                return reviewFailure;
+        }
         if (eligibility == PromotionEligibility.None)
         {
             return evidence.FinalDecision.Decision == TaskDecision.HumanReviewRequired
@@ -602,6 +791,103 @@ public sealed class CandidatePromotionService
 
         return null;
     }
+
+    private static string? ValidateReviewRequest(
+        CandidateReviewRequest request,
+        ExecutionEvidence evidence,
+        DateTime now)
+    {
+        var integrityFailure = ValidateCandidateIntegrity(evidence, request.ExpectedDiffHash);
+        if (integrityFailure is not null)
+            return integrityFailure;
+        if (string.IsNullOrWhiteSpace(request.RepositoryPath))
+            return "An explicit repository path is required for human review";
+        if (string.IsNullOrWhiteSpace(request.Actor))
+            return "An authenticated actor is required for human review";
+        if (!Enum.IsDefined(request.Decision))
+            return "Human review decision is invalid";
+        if (string.IsNullOrWhiteSpace(request.Justification))
+            return "Human review requires an explicit justification";
+        if (string.IsNullOrWhiteSpace(request.PolicyReference))
+            return "Human review requires a policy reference";
+        if (request.ValidUntil <= now)
+            return "Human review validity must end in the future";
+        if (request.ValidUntil > now.AddHours(24))
+            return "Human review validity cannot exceed 24 hours";
+        if (request.Decision == CandidateReviewDecision.Approve && !IsReviewable(evidence))
+            return "Candidate decision is not eligible for human approval";
+        if (request.Decision == CandidateReviewDecision.Abandon)
+        {
+            if (request.RelatedReviewId.HasValue)
+            {
+                var related = evidence.Promotions.FirstOrDefault(item =>
+                    item.Id == request.RelatedReviewId &&
+                    item.Action == CandidatePromotionAction.Review &&
+                    item.Status == CandidatePromotionStatus.Approved);
+                if (related is null)
+                    return "The review being abandoned was not found or was not approved";
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ValidateReferencedReview(
+        ExecutionEvidence evidence,
+        Guid reviewId,
+        CandidatePromotionRequest request,
+        DateTime now)
+    {
+        var review = evidence.Promotions.FirstOrDefault(item => item.Id == reviewId);
+        if (review is null ||
+            review.Action != CandidatePromotionAction.Review ||
+            review.Status != CandidatePromotionStatus.Approved ||
+            review.ReviewDecision != CandidateReviewDecision.Approve)
+        {
+            return "Referenced AECS human approval was not found or was not approved";
+        }
+        if (!string.Equals(
+                review.ApprovalReference,
+                request.Approval.Reference,
+                StringComparison.Ordinal))
+        {
+            return "Referenced AECS human approval does not match its authenticated event";
+        }
+        if (!string.Equals(review.Actor, request.Actor, StringComparison.Ordinal))
+            return "Promotion actor does not match the authenticated human approval actor";
+        if (review.ValidUntil is null || review.ValidUntil <= now)
+            return "Referenced AECS human approval has expired";
+        if (string.IsNullOrWhiteSpace(review.Justification) ||
+            string.IsNullOrWhiteSpace(review.PolicyReference))
+        {
+            return "Referenced AECS human approval is incomplete";
+        }
+        if (review.ConfirmedAt is null || request.Approval.ConfirmedAt < review.ConfirmedAt)
+            return "Promotion confirmation predates the authenticated human approval";
+        if (!SamePath(review.RepositoryPath, request.RepositoryPath) ||
+            !string.Equals(review.BaselineCommit, evidence.Baseline.Commit, StringComparison.Ordinal) ||
+            !string.Equals(review.DiffHash, evidence.CandidateChangeSet.DiffHash,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "Referenced AECS human approval targets a different repository or candidate";
+        }
+        if (evidence.Promotions.Any(item =>
+                item.Action == CandidatePromotionAction.Review &&
+                item.Status == CandidatePromotionStatus.Abandoned &&
+                item.RelatedReviewId == review.Id &&
+                item.FinishedAt >= review.FinishedAt))
+        {
+            return "Referenced AECS human approval was abandoned";
+        }
+
+        return null;
+    }
+
+    private static bool IsReviewable(ExecutionEvidence evidence) =>
+        (evidence.FinalDecision.Decision == TaskDecision.Verified &&
+         evidence.FinalDecision.State == TaskState.Verified) ||
+        (evidence.FinalDecision.Decision == TaskDecision.HumanReviewRequired &&
+         evidence.FinalDecision.State == TaskState.HumanReviewRequired);
 
     private static string? ValidateCandidateIntegrity(
         ExecutionEvidence evidence,
@@ -791,6 +1077,99 @@ public sealed class CandidatePromotionService
             FinishedAt = DateTime.UtcNow
         };
 
+    private static CandidatePromotionEvidence CreateReviewRecord(
+        ExecutionEvidence evidence,
+        CandidateReviewRequest request,
+        string repositoryPath,
+        CandidatePromotionStatus status,
+        string message,
+        DateTime startedAt)
+    {
+        var id = Guid.NewGuid();
+        var reference = request.Decision == CandidateReviewDecision.Abandon &&
+            request.RelatedReviewId.HasValue
+                ? CandidateReviewReference.Create(request.RelatedReviewId.Value)
+                : CandidateReviewReference.Create(id);
+        return new CandidatePromotionEvidence
+        {
+            Id = id,
+            ExecutionEvidenceId = evidence.Id,
+            CandidateId = evidence.CandidateChangeSet.Id,
+            Action = CandidatePromotionAction.Review,
+            Status = status,
+            Eligibility = GetEligibility(
+                evidence,
+                status == CandidatePromotionStatus.Approved
+                    ? new PromotionApproval { Kind = PromotionApprovalKind.HumanReview }
+                    : null),
+            Actor = request.Actor,
+            ApprovalKind = status == CandidatePromotionStatus.Approved
+                ? PromotionApprovalKind.HumanReview
+                : PromotionApprovalKind.None,
+            ApprovalReference = reference,
+            ConfirmedAt = startedAt,
+            BaselineCommit = evidence.Baseline.Commit,
+            DiffHash = evidence.CandidateChangeSet.DiffHash,
+            RepositoryPath = repositoryPath,
+            Message = message,
+            StartedAt = startedAt,
+            FinishedAt = DateTime.UtcNow,
+            ReviewDecision = request.Decision,
+            Justification = request.Justification.Trim(),
+            ValidUntil = request.ValidUntil,
+            PolicyReference = request.PolicyReference.Trim(),
+            RelatedReviewId = request.RelatedReviewId
+        };
+    }
+
+    private static CandidateReviewGate ReviewGate(
+        string phase,
+        VerificationResult result) => new()
+        {
+            Phase = phase,
+            Verifier = result.Verifier,
+            Status = result.Status,
+            Message = result.Message
+        };
+
+    private static CandidateReviewSnapshot UnavailableReview(
+        CandidateReviewSnapshot source,
+        string message) => new()
+        {
+            Available = false,
+            Message = message,
+            EvidenceId = source.EvidenceId,
+            RepositoryPath = source.RepositoryPath,
+            RepositoryState = "unavailable"
+        };
+
+    private static CandidateReviewResult UnpersistedReview(
+        CandidateReviewRequest request,
+        CandidatePromotionStatus status,
+        string message,
+        DateTime startedAt) => new()
+        {
+            Status = status,
+            Message = message,
+            Persisted = false,
+            Evidence = new CandidatePromotionEvidence
+            {
+                ExecutionEvidenceId = request.EvidenceId,
+                Action = CandidatePromotionAction.Review,
+                Status = status,
+                Actor = request.Actor,
+                RepositoryPath = request.RepositoryPath,
+                Message = message,
+                StartedAt = startedAt,
+                FinishedAt = DateTime.UtcNow,
+                ReviewDecision = request.Decision,
+                Justification = request.Justification,
+                ValidUntil = request.ValidUntil,
+                PolicyReference = request.PolicyReference,
+                RelatedReviewId = request.RelatedReviewId
+            }
+        };
+
     private static CandidatePromotionEvidence CopyAsFailed(
         CandidatePromotionEvidence source,
         string message) => new()
@@ -810,7 +1189,12 @@ public sealed class CandidatePromotionService
             OutputPath = source.OutputPath,
             Message = message,
             StartedAt = source.StartedAt,
-            FinishedAt = DateTime.UtcNow
+            FinishedAt = DateTime.UtcNow,
+            ReviewDecision = source.ReviewDecision,
+            Justification = source.Justification,
+            ValidUntil = source.ValidUntil,
+            PolicyReference = source.PolicyReference,
+            RelatedReviewId = source.RelatedReviewId
         };
 
     private static CandidatePromotionResult Unpersisted(

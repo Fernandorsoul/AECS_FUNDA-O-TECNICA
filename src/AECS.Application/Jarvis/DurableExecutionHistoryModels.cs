@@ -141,6 +141,10 @@ public sealed class DurablePromotionFact
     public string Status { get; init; } = string.Empty;
     public string Actor { get; init; } = string.Empty;
     public string ApprovalReference { get; init; } = string.Empty;
+    public string ReviewDecision { get; init; } = string.Empty;
+    public string Justification { get; init; } = string.Empty;
+    public DateTime? ValidUntil { get; init; }
+    public string PolicyReference { get; init; } = string.Empty;
     public DateTime StartedAt { get; init; }
     public DateTime FinishedAt { get; init; }
 }

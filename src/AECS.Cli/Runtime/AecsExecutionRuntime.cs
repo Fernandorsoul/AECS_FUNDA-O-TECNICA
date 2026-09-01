@@ -1,4 +1,5 @@
 using AECS.Application.ContextCompiler;
+using AECS.Application.Promotion;
 using AECS.Application.Staging;
 using AECS.Domain.Interfaces;
 using AECS.Infrastructure.AgentRuntime;
@@ -173,6 +174,10 @@ public sealed class AecsExecutionRuntime : IDisposable
         new DockerStagedProcessRunnerFactory(
             processRunner ?? new SystemProcessRunner(),
             Configuration.AllowHostExecution.Value);
+
+    public CandidatePromotionService CreatePromotionService(
+        IProcessRunner? processRunner = null) =>
+        new(processRunner ?? new SystemProcessRunner(), EvidenceStore);
 
     public void Dispose()
     {

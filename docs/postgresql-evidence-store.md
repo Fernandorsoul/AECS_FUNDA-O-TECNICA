@@ -8,7 +8,11 @@ O mesmo backend implementa `IHistoricalDecisionStore`. Decisões e supressões d
 
 `execution_evidence` mantém o agregado imutável, o selo inicial, a cabeça atual da cadeia e projeções indexadas de tarefa, `AgentRun` e candidato. O JSONB inclui contrato, tentativas, orçamento, baseline, comandos, contexto, critérios, verificações, decisão e transições.
 
-`execution_evidence_promotion_events` mantém exportações e promoções; `execution_evidence_replay_events` mantém os resultados de replay ligados à mesma execução. Ambas têm FK, sequência positiva e índices únicos por agregado. `execution_evidence.EventCount` cobre a sequência global, e o store valida projeções relacionais e todas as assinaturas antes de devolver dados.
+`execution_evidence_promotion_events` mantém revisões humanas, exportações e promoções;
+`execution_evidence_replay_events` mantém os resultados de replay ligados à mesma execução. Ambas
+têm FK, sequência positiva e índices únicos por agregado. `execution_evidence.EventCount` cobre a
+sequência global, e o store valida projeções relacionais e todas as assinaturas antes de devolver
+dados.
 
 `SaveAsync` é idempotente para o mesmo ID e conteúdo. `AppendPromotionAsync` e `AppendReplayAsync` bloqueiam a linha da execução com `SELECT ... FOR UPDATE`, validam a cadeia dentro da transação e atualizam evento, contador e cabeça de forma atômica. Repetir o mesmo ID de evento e payload não duplica a auditoria; reutilizar o ID com outro conteúdo falha.
 

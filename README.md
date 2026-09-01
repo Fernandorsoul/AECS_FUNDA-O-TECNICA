@@ -105,8 +105,16 @@ Dentro do REPL:
 aecs> help
 aecs> risk Add validation to CustomerService
 aecs> context TASK-001
+aecs> review <evidence-id> --policy policy/team-v1
+aecs> export-patch <evidence-id> C:\revisoes\candidate.patch
 aecs> exit
 ```
+
+`review` mostra baseline, estado atual do repositório, risco, decisão, elegibilidade, gates,
+arquivos e diff autenticado. A decisão `approve`, `reject` ou `abandon` registra ator do processo,
+justificativa, validade e referência de política. Uma aprovação ainda exige a confirmação literal
+`PROMOTE <diff-hash>` imediatamente antes de chamar a promoção controlada; confirmação diferente
+é registrada como abandono e não altera o checkout.
 
 O adaptador mock simula metadados de uma execução. Ele é apropriado para exercitar o fluxo de controle, mas não comprova a qualidade de uma alteração real.
 
@@ -393,6 +401,8 @@ Comandos disponíveis dentro do Jarvis:
 | `explain <task-id> [--json]` | Explica decisão, gates, tentativas, budget, contexto e promoções persistidas |
 | `risk <objective>` | Classifica um objetivo sem executar um agente |
 | `context <task-id> [--json]` | Mostra o manifesto de contexto persistido na evidência |
+| `review <evidence-id> [--valid-minutes <n>] [--policy <ref>]` | Revisa, aprova/rejeita e opcionalmente promove com confirmação pelo hash |
+| `export-patch <evidence-id> <path>` | Mostra a revisão autenticada e exporta o patch sem promover |
 | `exit` | Encerra o REPL |
 
 ## Estrutura do repositório

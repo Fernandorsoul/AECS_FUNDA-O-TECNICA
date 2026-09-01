@@ -131,6 +131,11 @@ public static class DurableExecutionHistoryFormatter
                 .Append(" status=").Append(promotion.Status)
                 .Append(" actor=").Append(promotion.Actor)
                 .Append(" approval=").Append(promotion.ApprovalReference)
+                .Append(" review=").Append(promotion.ReviewDecision)
+                .Append(" justification=").Append(promotion.Justification)
+                .Append(" valid-until=").Append(
+                    promotion.ValidUntil?.ToString("O") ?? "none")
+                .Append(" policy=").Append(promotion.PolicyReference)
                 .Append(" started=").Append(promotion.StartedAt.ToString("O"))
                 .Append(" finished=").Append(promotion.FinishedAt.ToString("O"))
                 .AppendLine();

@@ -195,6 +195,11 @@ Promoção não faz parte do pipeline probabilístico. `CandidatePromotionServic
 
 Locks por repositório coordenam promoções concorrentes. Falha pós-aplicação ou impossibilidade de persistir a auditoria aciona rollback para a baseline. A mudança permanece staged e nenhum commit é criado. A exportação de patch é uma operação distinta e não modifica o repositório. Detalhes estão em [Promoção controlada](controlled-promotion.md).
 
+O Jarvis usa o mesmo serviço para `review` e `export-patch`. Revisões humanas são eventos da cadeia
+autenticada com ator, justificativa, validade e política; a aprovação sozinha não escreve no
+checkout. Uma confirmação literal pelo hash cria a autorização imediata e a promoção recarrega a
+evidência para detectar expiração, abandono, adulteração, concorrência ou mudança da baseline.
+
 ## Replay de evidência
 
 `ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, reconstrói e compara o `RepositorySnapshot` e o `CSharpSymbolGraph`, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; snapshot, grafo ou ambiente divergente com candidato idêntico é divergência do ambiente; gate ausente recebe classificação própria. O evento assinado preserva os hashes esperado/observado, inclusive do grafo, e o diff de arquivos do snapshot. O checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).

@@ -3,7 +3,8 @@ namespace AECS.Domain.Enums;
 public enum CandidatePromotionAction
 {
     ExportPatch,
-    Promote
+    Promote,
+    Review
 }
 
 public enum CandidatePromotionStatus
@@ -11,7 +12,10 @@ public enum CandidatePromotionStatus
     Exported,
     Promoted,
     Rejected,
-    Failed
+    Failed,
+    Approved,
+    Declined,
+    Abandoned
 }
 
 public enum PromotionApprovalKind
@@ -27,4 +31,11 @@ public enum PromotionEligibility
     None,
     Verified,
     HumanReviewApproved
+}
+
+public enum CandidateReviewDecision
+{
+    Approve,
+    Reject,
+    Abandon
 }

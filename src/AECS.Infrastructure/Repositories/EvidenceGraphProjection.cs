@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using AECS.Domain.Enums;
 using AECS.Domain.Models;
 
 namespace AECS.Infrastructure.Repositories;
@@ -375,7 +376,8 @@ internal static class EvidenceGraphProjection
                 item.Seal.PayloadSha256,
                 item.Promotion.Actor,
                 item.Promotion.Status.ToString(),
-                item.Promotion.DiffHash))
+                item.Promotion.DiffHash,
+                PromotionRelationship(item.Promotion)))
             .Concat(envelope.ReplayEvents.Select(item => new ChainProjection(
                 item.Sequence,
                 $"replay:{item.Replay.Id:N}",
@@ -387,7 +389,8 @@ internal static class EvidenceGraphProjection
                 item.Seal.PayloadSha256,
                 string.Empty,
                 item.Replay.Outcome.ToString(),
-                item.Replay.ActualDiffHash)))
+                item.Replay.ActualDiffHash,
+                "replayed-by")))
             .OrderBy(item => item.Sequence)
             .ToList();
         var previousEventNode = executionNode;
@@ -413,7 +416,7 @@ internal static class EvidenceGraphProjection
                     ? decisionNode
                     : candidateNode,
                 chainEvent.NodeId,
-                chainEvent.Kind == EvidenceGraphNodeKind.Promotion ? "authorizes" : "replayed-by",
+                chainEvent.Relationship,
                 chainEvent.Origin,
                 chainEvent.Authority,
                 chainEvent.Timestamp);
@@ -648,6 +651,21 @@ internal static class EvidenceGraphProjection
         ? "missing"
         : Uri.EscapeDataString(value.Trim());
 
+    private static string PromotionRelationship(CandidatePromotionEvidence promotion) =>
+        promotion.Action switch
+        {
+            CandidatePromotionAction.Review when
+                promotion.Status == CandidatePromotionStatus.Approved => "approved-by",
+            CandidatePromotionAction.Review when
+                promotion.Status == CandidatePromotionStatus.Declined => "declined-by",
+            CandidatePromotionAction.Review when
+                promotion.Status == CandidatePromotionStatus.Abandoned => "abandoned-by",
+            CandidatePromotionAction.ExportPatch => "exported-by",
+            CandidatePromotionAction.Promote when
+                promotion.Status == CandidatePromotionStatus.Promoted => "promoted-by",
+            _ => "promotion-attempt"
+        };
+
     private static string Hash(string value)
     {
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes(value));
@@ -665,7 +683,8 @@ internal static class EvidenceGraphProjection
         string PayloadHash,
         string Actor,
         string Result,
-        string CandidateHash);
+        string CandidateHash,
+        string Relationship);
 
     private sealed class Builder
     {
