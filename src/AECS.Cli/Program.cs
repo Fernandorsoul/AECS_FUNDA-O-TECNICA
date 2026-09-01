@@ -251,6 +251,13 @@ static async Task<int> RunReplay(string[] args)
                     $"~{result.Evidence.RepositorySnapshotDiff.ChangedFiles.Count}");
             }
         }
+        if (result.Evidence.ExpectedCSharpSymbolGraphHash is not null)
+        {
+            Console.WriteLine(
+                $"Expected C# symbol graph: {result.Evidence.ExpectedCSharpSymbolGraphHash}");
+            Console.WriteLine(
+                $"Actual C# symbol graph: {result.Evidence.ActualCSharpSymbolGraphHash ?? "missing"}");
+        }
         foreach (var tool in result.Evidence.Tools)
             Console.WriteLine($"Tool {tool.Tool}: {tool.Status}");
         foreach (var gate in result.Evidence.Gates)
@@ -668,6 +675,13 @@ static async Task<int> RunSingle(string[] args)
         $"{execution.RepositorySnapshot.Projects.Count} projects, " +
         $"{execution.RepositorySnapshot.Solutions.Count} solutions, " +
         $"{execution.RepositorySnapshot.TestSuites.Count} test suites");
+    Console.WriteLine($"C# symbol graph: {execution.CSharpSymbolGraph.GraphHash}");
+    Console.WriteLine(
+        $"Semantic inventory: {execution.CSharpSymbolGraph.Projects.Count} projects, " +
+        $"{execution.CSharpSymbolGraph.Nodes.Count} nodes, " +
+        $"{execution.CSharpSymbolGraph.Edges.Count} edges, " +
+        $"{execution.CSharpSymbolGraph.Diagnostics.Count} diagnostics " +
+        $"(loaded={execution.CSharpSymbolGraph.LoadSucceeded})");
     Console.WriteLine($"Context: {execution.ContextManifest.Id}");
     Console.WriteLine($"Context files: {execution.ContextManifest.Files.Count} " +
         $"({execution.ContextManifest.EstimatedTokens} estimated tokens)");

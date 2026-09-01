@@ -23,6 +23,8 @@ public class ExecutionEvidence
     public BaselineSnapshot Baseline { get; init; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RepositorySnapshot? RepositorySnapshot { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CSharpSymbolGraph? CSharpSymbolGraph { get; init; }
     public List<VerificationResult> BaselineVerificationResults { get; init; } = [];
     public List<ExecutionCommandEvidence> BaselineCommands { get; init; } = [];
     public ContextManifest ContextManifest { get; init; } = new();

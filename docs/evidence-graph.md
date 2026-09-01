@@ -33,9 +33,11 @@ aecs evidence trace --repo C:\repos\alvo --evidence <id> --format dot > graph.do
 dot -Tsvg graph.dot -o graph.svg
 ```
 
-Cada nó informa ID estável, tipo, origem, autoridade, timestamp, hashes, atributos e estado de validade. Arestas também têm ID estável, origem e autoridade. A projeção inclui repositório, tarefa, execução, run, tentativas, baseline, `RepositorySnapshot`, contexto, candidato, comandos, verificações, critérios de aceite, decisão, replays e promoções. Eventos posteriores preservam a ordem global assinada por arestas `authenticated-next`.
+Cada nó informa ID estável, tipo, origem, autoridade, timestamp, hashes, atributos e estado de validade. Arestas também têm ID estável, origem e autoridade. A projeção inclui repositório, tarefa, execução, run, tentativas, baseline, `RepositorySnapshot`, `CSharpSymbolGraph`, contexto, candidato, comandos, verificações, critérios de aceite, decisão, replays e promoções. Eventos posteriores preservam a ordem global assinada por arestas `authenticated-next`.
 
 O nó `RepositorySnapshot` expõe hashes do inventário e da configuração, commit-base e contagens agregadas, sem conteúdo de arquivos. Ele recebe `configures-snapshot` da tarefa e `described-by` da baseline; a execução aponta com `records-snapshot`, e o snapshot informa o contexto por `informs-context`.
+
+O nó `CSharpSymbolGraph` expõe hash do grafo, vínculo ao snapshot e commit, versões de Roslyn/MSBuild/SDK, status de carga e contagens. O snapshot aponta com `derives-symbol-graph`, a baseline com `analyzed-by` e a execução com `records-symbol-graph`. Ele só informa o contexto quando `ContextManifest.SymbolGraphHash` coincide exatamente, sem inferência por proximidade.
 
 ## IDs e ausência de inferência
 

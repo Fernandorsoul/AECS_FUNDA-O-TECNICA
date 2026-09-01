@@ -1,6 +1,7 @@
 using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Application.RepositorySnapshots;
+using AECS.Application.SymbolGraphs;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -28,12 +29,14 @@ public sealed class ExecutionReplayService
     private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
     private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
     private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
+    private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
 
     public ExecutionReplayService(
         IProcessRunner processRunner,
         IExecutionEvidenceStore evidenceStore,
         IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
-        IReadOnlyList<ISecurityScanner>? securityScanners = null)
+        IReadOnlyList<ISecurityScanner>? securityScanners = null,
+        ICSharpSymbolGraphBuilder? symbolGraphBuilder = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(evidenceStore);
@@ -44,6 +47,7 @@ public sealed class ExecutionReplayService
             new DefaultStagedProcessRunnerFactory(processRunner);
         _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
         _repositorySnapshotBuilder = new RepositorySnapshotBuilder(processRunner);
+        _symbolGraphBuilder = symbolGraphBuilder ?? new RoslynSymbolGraphBuilder();
     }
 
     public async Task<ExecutionReplayResult> ReplayAsync(
@@ -117,6 +121,8 @@ public sealed class ExecutionReplayService
             ExpectedRepositorySnapshotHash = original.RepositorySnapshot?.SnapshotHash,
             ActualRepositorySnapshotHash = run.ActualRepositorySnapshotHash,
             RepositorySnapshotDiff = run.RepositorySnapshotDiff,
+            ExpectedCSharpSymbolGraphHash = original.CSharpSymbolGraph?.GraphHash,
+            ActualCSharpSymbolGraphHash = run.ActualCSharpSymbolGraphHash,
             Tools = run.Tools,
             Commands = run.Commands,
             Gates = run.Gates,
@@ -193,6 +199,7 @@ public sealed class ExecutionReplayService
             cancellationToken);
         RepositorySnapshot? replaySnapshot = null;
         RepositorySnapshotDiff? repositorySnapshotDiff = null;
+        CSharpSymbolGraph? replaySymbolGraph = null;
         if (original.RepositorySnapshot is not null)
         {
             replaySnapshot = await _repositorySnapshotBuilder.BuildAsync(
@@ -204,6 +211,14 @@ public sealed class ExecutionReplayService
             repositorySnapshotDiff = RepositorySnapshotComparer.Compare(
                 original.RepositorySnapshot,
                 replaySnapshot);
+        }
+        if (original.CSharpSymbolGraph is not null && replaySnapshot is not null)
+        {
+            replaySymbolGraph = await _symbolGraphBuilder.BuildAsync(
+                workspace.Path,
+                replaySnapshot,
+                original.CSharpSymbolGraph.Limits,
+                cancellationToken);
         }
         var baselineResults = await VerifyBaselineAsync(
             stagedProcessRunner,
@@ -233,7 +248,8 @@ public sealed class ExecutionReplayService
                     NonProbeCommands(baselineCommands)).ToList(),
                 Gates = baselineComparisons.ToList(),
                 ActualRepositorySnapshotHash = replaySnapshot?.SnapshotHash,
-                RepositorySnapshotDiff = repositorySnapshotDiff
+                RepositorySnapshotDiff = repositorySnapshotDiff,
+                ActualCSharpSymbolGraphHash = replaySymbolGraph?.GraphHash
             };
         }
 
@@ -289,6 +305,11 @@ public sealed class ExecutionReplayService
                 original.RepositorySnapshot.SnapshotHash,
                 replaySnapshot?.SnapshotHash,
                 StringComparison.Ordinal);
+        var symbolGraphMatches = original.CSharpSymbolGraph is null ||
+            string.Equals(
+                original.CSharpSymbolGraph.GraphHash,
+                replaySymbolGraph?.GraphHash,
+                StringComparison.Ordinal);
 
         ExecutionReplayOutcome outcome;
         string message;
@@ -301,6 +322,11 @@ public sealed class ExecutionReplayService
         {
             outcome = ExecutionReplayOutcome.EnvironmentDivergence;
             message = "The baseline repository snapshot diverged from the authenticated inventory.";
+        }
+        else if (!symbolGraphMatches)
+        {
+            outcome = ExecutionReplayOutcome.EnvironmentDivergence;
+            message = "The baseline C# symbol graph diverged from the authenticated semantic graph.";
         }
         else if (tools.Any(item => item.Status == ReplayComparisonStatus.Missing) ||
                  gates.Any(item => item.Status is ReplayComparisonStatus.NotReproducible or
@@ -321,8 +347,8 @@ public sealed class ExecutionReplayService
         else
         {
             outcome = ExecutionReplayOutcome.Reproduced;
-            message = "Candidate, repository snapshot, tool versions, commands, gates, and " +
-                "acceptance artifacts were reproduced.";
+            message = "Candidate, repository snapshot, C# symbol graph, tool versions, commands, " +
+                "gates, and acceptance artifacts were reproduced.";
         }
 
         return new ReplayRun
@@ -335,7 +361,8 @@ public sealed class ExecutionReplayService
             Gates = gates,
             AcceptanceCriteria = acceptanceCriteria,
             ActualRepositorySnapshotHash = replaySnapshot?.SnapshotHash,
-            RepositorySnapshotDiff = repositorySnapshotDiff
+            RepositorySnapshotDiff = repositorySnapshotDiff,
+            ActualCSharpSymbolGraphHash = replaySymbolGraph?.GraphHash
         };
     }
 
@@ -938,6 +965,7 @@ public sealed class ExecutionReplayService
         public List<AcceptanceCriterionResult> AcceptanceCriteria { get; init; } = [];
         public string? ActualRepositorySnapshotHash { get; init; }
         public RepositorySnapshotDiff? RepositorySnapshotDiff { get; init; }
+        public string? ActualCSharpSymbolGraphHash { get; init; }
 
         public static ReplayRun Failed(ExecutionReplayOutcome outcome, string message) => new()
         {

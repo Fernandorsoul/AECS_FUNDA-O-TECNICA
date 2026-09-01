@@ -21,22 +21,25 @@ public class CodebaseIndexerTests
         index.SourceFiles.Should().NotBeEmpty();
         index.SourceFiles.Should().Contain(f => f.Contains("CustomerMapper"));
         index.SourceFiles.Should().Contain(f => f.Contains("CustomerService"));
+        index.SemanticAuthority.Should().BeFalse();
+        index.Symbols.Should().BeEmpty("textual fallback is only a file inventory");
     }
 
     [Fact]
-    public void Index_SampleProject_FindsSymbols()
+    public void Index_RoslynGraph_ProjectsAuthoritativeSymbols()
     {
         var samplePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "sample", "SampleProject"));
 
         if (!Directory.Exists(samplePath))
             return;
 
-        var index = _indexer.Index(Path.Combine(samplePath, "src", "SampleProject"));
+        var index = _indexer.Index(
+            Path.Combine(samplePath, "src", "SampleProject"),
+            SemanticGraph());
 
-        index.Symbols.Should().NotBeEmpty();
+        index.SemanticAuthority.Should().BeTrue();
         index.Symbols.Should().Contain(s => s.Name == "Customer");
-        index.Symbols.Should().Contain(s => s.Name == "CustomerMapper");
-        index.Symbols.Should().Contain(s => s.Name == "CustomerService");
+        index.Symbols.Single(s => s.Name == "Customer").Methods.Should().Equal("Map");
     }
 
     [Fact]
@@ -61,11 +64,97 @@ public class CodebaseIndexerTests
         if (!Directory.Exists(samplePath))
             return;
 
-        var index = _indexer.Index(Path.Combine(samplePath, "src", "SampleProject"));
+        var index = _indexer.Index(
+            Path.Combine(samplePath, "src", "SampleProject"),
+            SemanticGraph());
 
         var customerSymbol = index.Symbols.FirstOrDefault(s => s.Name == "Customer");
         customerSymbol.Should().NotBeNull();
         customerSymbol!.Namespace.Should().Be("SampleProject.Customers");
+    }
+
+    [Fact]
+    public void Index_TamperedGraph_IsNotSemanticAuthority()
+    {
+        var samplePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "sample", "SampleProject"));
+
+        if (!Directory.Exists(samplePath))
+            return;
+
+        var valid = SemanticGraph();
+        var tampered = new CSharpSymbolGraph
+        {
+            GraphHash = "sha256:" + new string('0', 64),
+            LoadSucceeded = true,
+            Nodes = valid.Nodes,
+            Edges = valid.Edges
+        };
+
+        var index = _indexer.Index(
+            Path.Combine(samplePath, "src", "SampleProject"),
+            tampered);
+
+        index.SemanticAuthority.Should().BeFalse();
+        index.Symbols.Should().BeEmpty();
+    }
+
+    private static CSharpSymbolGraph SemanticGraph()
+    {
+        var graph = new CSharpSymbolGraph
+        {
+            LoadSucceeded = true,
+            Nodes =
+            [
+                new()
+                {
+                    Id = "namespace",
+                    Hash = "sha256:" + new string('b', 64),
+                    Kind = "namespace",
+                    Name = "Customers",
+                    DisplayName = "SampleProject.Customers"
+                },
+                new()
+                {
+                    Id = "customer",
+                    Hash = "sha256:" + new string('c', 64),
+                    Kind = "type",
+                    Name = "Customer",
+                    DisplayName = "SampleProject.Customers.Customer",
+                    TypeKind = "Class",
+                    ContainingNodeId = "namespace",
+                    FilePaths = ["Customers/Customer.cs"]
+                },
+                new()
+                {
+                    Id = "map",
+                    Hash = "sha256:" + new string('d', 64),
+                    Kind = "member",
+                    MemberKind = "Method",
+                    Name = "Map",
+                    DisplayName = "SampleProject.Customers.Customer.Map()",
+                    ContainingNodeId = "customer",
+                    FilePaths = ["Customers/Customer.cs"]
+                }
+            ],
+            Edges =
+            [
+                new()
+                {
+                    Id = "contains",
+                    Hash = "sha256:" + new string('e', 64),
+                    Kind = "contains",
+                    FromNodeId = "customer",
+                    ToNodeId = "map"
+                }
+            ]
+        };
+        return new CSharpSymbolGraph
+        {
+            GraphHash = CSharpSymbolGraphFingerprint.Create(graph),
+            LoadSucceeded = graph.LoadSucceeded,
+            Nodes = graph.Nodes,
+            Edges = graph.Edges
+        };
     }
 }
 
@@ -162,7 +251,10 @@ public class RepositoryContextCompilerTests
         result.CodeContext.Keys.Should().BeEquivalentTo(
             "src/Allowed/OrderHandler.cs",
             "tests/Allowed/OrderHandlerTests.cs");
-        result.Prompt.Should().Contain("class Demo.OrderHandler");
+        result.Prompt.Should().Contain("class OrderHandler");
+        result.Prompt.Should().NotContain("Symbols:",
+            "the textual fallback is not semantic authority");
+        result.Manifest.SemanticIndex.Should().Be("textual-file-inventory");
         result.Prompt.Should().Contain("public void Handle()");
         result.Prompt.Should().NotContain("SecretHandler");
         result.Manifest.Source.Should().Be("isolated-git-worktree");

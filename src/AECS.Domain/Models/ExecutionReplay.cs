@@ -66,6 +66,10 @@ public sealed class ExecutionReplayEvidence
     public string? ActualRepositorySnapshotHash { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RepositorySnapshotDiff? RepositorySnapshotDiff { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedCSharpSymbolGraphHash { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActualCSharpSymbolGraphHash { get; init; }
     public List<ReplayToolComparison> Tools { get; init; } = [];
     public List<ReplayCommandComparison> Commands { get; init; } = [];
     public List<ReplayGateComparison> Gates { get; init; } = [];

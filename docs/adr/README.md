@@ -16,6 +16,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-010](ADR-010-reproducible-security-scan-gate.md) | Accepted | Executar SecurityScan reproduzível com baseline, snapshot fixa e saída sanitizada |
 | [ADR-011](ADR-011-independent-versioned-test-suite-gates.md) | Accepted | Separar suites unitárias, de integração e aceite com política e evidência TRX próprias |
 | [ADR-012](ADR-012-deterministic-repository-snapshot.md) | Accepted | Inventariar a baseline por uma snapshot Git determinística e endereçada por conteúdo |
+| [ADR-013](ADR-013-roslyn-msbuild-symbol-graph.md) | Accepted | Usar Roslyn/MSBuild como autoridade semântica para C# e restringir fallback a inventário textual |
 
 ## Convenção para novos ADRs
 

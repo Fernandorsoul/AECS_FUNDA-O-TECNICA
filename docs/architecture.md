@@ -19,7 +19,8 @@ flowchart TD
     B --> C[Captura de commit, branch e status]
     C --> D[Worktree descartável de preflight]
     D --> S[RepositorySnapshot da baseline]
-    S --> E{Build/testes da baseline}
+    S --> SG[CSharpSymbolGraph via Roslyn/MSBuild]
+    SG --> E{Build/testes da baseline}
     E -->|falha| X[Decisão Rejected]
     E -->|passa| F[Worktree descartável do candidato]
     F --> G[Contexto limitado e manifesto]
@@ -40,15 +41,16 @@ O pipeline executa as seguintes etapas:
 2. `ExecutionBudgetScope` inicia um wall clock compartilhado por preflight, agente, retries e verificações.
 3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada.
 4. `RepositorySnapshotBuilder` lê exclusivamente a árvore Git do commit no worktree detached e produz o inventário versionado e endereçado por conteúdo da baseline.
-5. O mesmo worktree temporário executa build e a matriz de suites da baseline conforme o perfil do contrato. Somente falha de gate obrigatório impede a chamada do agente; gates opcionais permanecem na evidência.
-6. Depois de confirmar que o checkout original não mudou, um segundo worktree detached é criado no mesmo commit.
-7. `RepositoryContextCompiler` seleciona contexto dentro do escopo, aplica limites e entrega ao agente conteúdo e prompt acompanhados por um manifesto.
-8. `AgentExecutionCoordinator` chama o runtime e repete apenas falhas transitórias, rate limit e timeout enquanto ainda houver tentativas, tokens, custo e tempo.
-9. `FileApplicator` interpreta blocos `FILE:`, valida todos os destinos e somente então escreve no worktree isolado.
-10. Git adiciona o estado do worktree e deriva o `CandidateChangeSet`: arquivos adicionados, modificados ou removidos, diff binário e SHA-256. Alegações de arquivos feitas pelo agente não substituem essa leitura.
-11. Os verificadores avaliam os pré-requisitos da trust boundary e, quando habilitados, build, testes, regras semânticas e critérios de aceite.
-12. `DecisionEngine` exige exatamente um `Pass` para cada gate obrigatório. Resultado ausente, duplicado, `Skip`, `Fail` ou `Error` rejeita a execução.
-13. O worktree é removido, o checkout original é conferido novamente e o `IExecutionEvidenceStore` selecionado (`json` ou `postgres`) persiste o resultado autenticado.
+5. `RoslynSymbolGraphBuilder` abre soluções e projetos C# autorizados pelo snapshot e produz o grafo semântico versionado, com opções, versões, diagnósticos, limites e hashes estáveis.
+6. O mesmo worktree temporário executa build e a matriz de suites da baseline conforme o perfil do contrato. Somente falha de gate obrigatório impede a chamada do agente; gates opcionais permanecem na evidência.
+7. Depois de confirmar que o checkout original não mudou, um segundo worktree detached é criado no mesmo commit.
+8. `RepositoryContextCompiler` seleciona contexto dentro do escopo, aplica limites e entrega ao agente conteúdo e prompt acompanhados por um manifesto.
+9. `AgentExecutionCoordinator` chama o runtime e repete apenas falhas transitórias, rate limit e timeout enquanto ainda houver tentativas, tokens, custo e tempo.
+10. `FileApplicator` interpreta blocos `FILE:`, valida todos os destinos e somente então escreve no worktree isolado.
+11. Git adiciona o estado do worktree e deriva o `CandidateChangeSet`: arquivos adicionados, modificados ou removidos, diff binário e SHA-256. Alegações de arquivos feitas pelo agente não substituem essa leitura.
+12. Os verificadores avaliam os pré-requisitos da trust boundary e, quando habilitados, build, testes, regras semânticas e critérios de aceite.
+13. `DecisionEngine` exige exatamente um `Pass` para cada gate obrigatório. Resultado ausente, duplicado, `Skip`, `Fail` ou `Error` rejeita a execução.
+14. O worktree é removido, o checkout original é conferido novamente e o `IExecutionEvidenceStore` selecionado (`json` ou `postgres`) persiste o resultado autenticado.
 
 ## Invariantes da trust boundary
 
@@ -102,14 +104,14 @@ O process runner consome `stdout` e `stderr` de forma assíncrona, encerra a ár
 
 Toda execução que ultrapassa o preflight chama `RepositoryContextCompiler` no worktree do candidato. A implementação atual:
 
-- indexa arquivos C# e símbolos simples, ignorando `.git`, outputs, dependências vendorizadas, diretórios ocultos e reparse points;
+- usa o `CSharpSymbolGraph` Roslyn válido como única autoridade para tipos, membros, namespaces, herança e referências; em falha de carga, mantém apenas inventário textual de arquivos, sem inferir semântica por regex;
 - restringe os arquivos aos padrões de `scope.allowed` e exclui `scope.forbidden`;
 - ranqueia por objetivo, critérios de aceite, caminhos, símbolos e testes relacionados;
 - omite arquivos sensíveis como `.env*`, `secrets.json`, chaves e certificados;
 - limita por padrão a 12 mil tokens estimados, 48 mil caracteres totais e 16 mil por arquivo, sempre respeitando um orçamento de tokens menor;
 - registra hash do conteúdo original, hash do trecho incluído, símbolos, truncamento, arquivos omitidos e hash do manifesto.
 
-A estimativa usa quatro caracteres por token e não substitui a telemetria do provedor. Um escopo `allowed` vazio produz contexto de código vazio; o cabeçalho e o manifesto ainda são determinísticos. Em falha de preflight, a evidência contém um manifesto `not-compiled`.
+A estimativa usa quatro caracteres por token e não substitui a telemetria do provedor. O manifesto registra a origem semântica e, quando autoritativa, o hash do grafo também participa de seu próprio hash. Um escopo `allowed` vazio produz contexto de código vazio; o cabeçalho e o manifesto ainda são determinísticos. Em falha de preflight, a evidência contém um manifesto `not-compiled`. Detalhes estão em [CSharpSymbolGraph determinístico](csharp-symbol-graph.md).
 
 ## Gates e comportamento fail-closed
 
@@ -159,6 +161,7 @@ Cada documento preserva:
 - consumo agregado de tokens, custo, tempo e motivo de exaustão;
 - baseline, comandos e verificações de preflight;
 - `RepositorySnapshot` da baseline, configuração de descoberta e proveniência das ferramentas;
+- `CSharpSymbolGraph` da baseline, opções efetivas, versões, diagnósticos e vínculo ao snapshot;
 - manifesto de contexto;
 - `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
 - matriz de suites com descoberta/contagens, matriz de critérios de aceite, decisão final e transições de estado;
@@ -178,11 +181,11 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 ## Replay de evidência
 
-`ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, reconstrói e compara o `RepositorySnapshot`, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; snapshot ou ambiente divergente com candidato idêntico é divergência do ambiente; gate ausente recebe classificação própria. O evento assinado preserva os hashes esperado/observado e o diff de arquivos do snapshot. O checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).
+`ExecutionReplayService` valida a evidência autenticada, abre um worktree detached no commit-base, reconstrói e compara o `RepositorySnapshot` e o `CSharpSymbolGraph`, aplica o diff persistido e deriva novamente o candidato pelo Git. Sem depender de `IAgentAdapter`, ele repete versões de ferramentas, preflight, comandos, gates e critérios de aceite disponíveis. Hash/arquivos diferentes são divergência do candidato; snapshot, grafo ou ambiente divergente com candidato idêntico é divergência do ambiente; gate ausente recebe classificação própria. O evento assinado preserva os hashes esperado/observado, inclusive do grafo, e o diff de arquivos do snapshot. O checkout original é conferido e preservado. Detalhes estão em [Replay de evidências](evidence-replay.md).
 
 ## Evidence Graph
 
-`IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. O snapshot é um nó próprio ligado à tarefa, baseline, execução e contexto. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
+`IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. Snapshot e grafo semântico são nós próprios ligados à baseline, execução e contexto por referências explícitas. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
 
 ## Mapa de componentes
 
@@ -202,7 +205,8 @@ A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-mon
 - operações Git e verificadores estruturais permanecem no host; comandos do repositório usam Docker por padrão, mas `runtime: host` continua disponível como override explícito de desenvolvimento confiável;
 - egress por destino específico ainda não possui enforcer: a rede fica negada ou exige a concessão explícita e ampla `"*"` para usar Docker `bridge`;
 - ambos os stores assinam a evidência, mas o keyring local não é um HSM/KMS e PostgreSQL, sozinho, não é uma âncora externa imutável capaz de detectar rollback coordenado de banco e chaves;
-- o compilador de contexto indexa apenas C# e usa tokenização aproximada;
+- o grafo semântico cobre C#; outras linguagens permanecem apenas no inventário do snapshot, e a tokenização de contexto ainda é aproximada;
+- a avaliação MSBuild de design time ocorre no processo do controlador; o limite de memória do grafo cobre o payload estimado, não o working set rígido do processo;
 - unit e integration tests compartilham um único comando/verificador;
 - a base de vulnerabilidades do `SecurityScan` é uma snapshot local pequena e versionada, não uma réplica completa e atualizada continuamente do GitHub Advisory Database;
 - a estimativa de custo do adapter não equivale à fatura final do provedor;

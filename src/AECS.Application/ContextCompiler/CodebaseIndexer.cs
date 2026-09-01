@@ -1,11 +1,13 @@
-using System.Text.RegularExpressions;
+using AECS.Domain.Models;
 
 namespace AECS.Application.ContextCompiler;
 
 public class CodeSymbol
 {
+    public string Id { get; init; } = string.Empty;
+    public string Hash { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
-    public string Kind { get; init; } = string.Empty; // class, interface, enum, struct
+    public string Kind { get; init; } = string.Empty;
     public string FilePath { get; init; } = string.Empty;
     public string Namespace { get; init; } = string.Empty;
     public List<string> BaseTypes { get; init; } = [];
@@ -19,6 +21,9 @@ public class CodebaseIndex
     public List<string> TestFiles { get; init; } = [];
     public List<CodeSymbol> Symbols { get; init; } = [];
     public Dictionary<string, List<string>> Dependencies { get; init; } = new();
+    public bool SemanticAuthority { get; init; }
+    public string SymbolGraphHash { get; init; } = string.Empty;
+    public string Source { get; init; } = "textual-file-inventory";
 }
 
 public class CodebaseIndexer
@@ -30,33 +35,41 @@ public class CodebaseIndexer
         "packages", "dist", "build", "coverage", "TestResults", "artifacts"
     };
 
-    private static readonly Regex ClassRegex = new(
-        @"(?:public|internal|private|protected)?\s*(?:static\s+)?(?:partial\s+)?(?:class|interface|enum|struct|record)\s+(\w+)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex NamespaceRegex = new(
-        @"namespace\s+([\w.]+)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex MethodRegex = new(
-        @"(?:public|internal|private|protected)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(",
-        RegexOptions.Compiled);
-
-    private static readonly Regex UsingRegex = new(
-        @"using\s+([\w.]+);",
-        RegexOptions.Compiled);
-
-    public CodebaseIndex Index(string rootPath)
+    public CodebaseIndex Index(string rootPath, CSharpSymbolGraph? symbolGraph = null)
     {
         var resolvedRoot = Path.GetFullPath(rootPath);
         if (!Directory.Exists(resolvedRoot))
             throw new DirectoryNotFoundException($"Context root not found: {resolvedRoot}");
 
-        var sourceFiles = new List<string>();
-        var testFiles = new List<string>();
-        var symbols = new List<CodeSymbol>();
-        var dependencies = new Dictionary<string, List<string>>();
+        var csFiles = EnumerateCSharpFiles(resolvedRoot);
+        var sourceFiles = csFiles.Where(path => !IsTestFile(path)).ToList();
+        var testFiles = csFiles.Where(IsTestFile).ToList();
+        var semanticAuthority = symbolGraph is
+        {
+            LoadSucceeded: true,
+            SchemaVersion: CSharpSymbolGraphSchema.GraphVersion,
+            StrategyVersion: CSharpSymbolGraphSchema.StrategyVersion
+        } && !string.IsNullOrWhiteSpace(symbolGraph.GraphHash) &&
+            string.Equals(
+                symbolGraph.GraphHash,
+                CSharpSymbolGraphFingerprint.Create(symbolGraph),
+                StringComparison.Ordinal);
 
+        return new CodebaseIndex
+        {
+            RootPath = resolvedRoot,
+            SourceFiles = sourceFiles,
+            TestFiles = testFiles,
+            Symbols = semanticAuthority ? ProjectSymbols(symbolGraph!) : [],
+            Dependencies = semanticAuthority ? ProjectDependencies(symbolGraph!) : new(),
+            SemanticAuthority = semanticAuthority,
+            SymbolGraphHash = semanticAuthority ? symbolGraph!.GraphHash : string.Empty,
+            Source = semanticAuthority ? "roslyn-symbol-graph" : "textual-file-inventory"
+        };
+    }
+
+    private static List<string> EnumerateCSharpFiles(string root)
+    {
         var enumerationOptions = new EnumerationOptions
         {
             RecurseSubdirectories = true,
@@ -65,80 +78,90 @@ public class CodebaseIndexer
                 FileAttributes.System |
                 FileAttributes.ReparsePoint
         };
-        var csFiles = Directory.EnumerateFiles(resolvedRoot, "*.cs", enumerationOptions)
-            .Where(file => !HasExcludedDirectory(resolvedRoot, file))
-            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+        return Directory.EnumerateFiles(root, "*.cs", enumerationOptions)
+            .Where(file => !HasExcludedDirectory(root, file))
+            .Select(file => Path.GetRelativePath(root, file).Replace('\\', '/'))
+            .OrderBy(file => file, StringComparer.Ordinal)
             .ToList();
-
-        foreach (var file in csFiles)
-        {
-            var relativePath = Path.GetRelativePath(resolvedRoot, file).Replace('\\', '/');
-
-            if (IsTestFile(relativePath))
-                testFiles.Add(relativePath);
-            else
-                sourceFiles.Add(relativePath);
-
-            var content = File.ReadAllText(file);
-            var fileSymbols = ExtractSymbols(content, relativePath);
-            symbols.AddRange(fileSymbols);
-
-            var usings = ExtractUsings(content);
-            dependencies[relativePath] = usings;
-        }
-
-        return new CodebaseIndex
-        {
-            RootPath = resolvedRoot,
-            SourceFiles = sourceFiles,
-            TestFiles = testFiles,
-            Symbols = symbols,
-            Dependencies = dependencies
-        };
     }
 
-    private static List<CodeSymbol> ExtractSymbols(string content, string filePath)
+    private static List<CodeSymbol> ProjectSymbols(CSharpSymbolGraph graph)
     {
-        var symbols = new List<CodeSymbol>();
-        var namespaceMatch = NamespaceRegex.Match(content);
-        var ns = namespaceMatch.Success ? namespaceMatch.Groups[1].Value : "";
-        var methods = MethodRegex.Matches(content)
-            .Select(match => match.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToList();
-
-        foreach (Match match in ClassRegex.Matches(content))
-        {
-            var kind = match.Value.Contains("interface") ? "interface"
-                : match.Value.Contains("enum") ? "enum"
-                : match.Value.Contains("struct") ? "struct"
-                : match.Value.Contains("record") ? "record"
-                : "class";
-
-            symbols.Add(new CodeSymbol
+        var nodes = graph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var contains = graph.Edges.Where(edge => edge.Kind == "contains")
+            .GroupBy(edge => edge.FromNodeId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(edge => edge.ToNodeId).ToList(),
+                StringComparer.Ordinal);
+        var inherits = graph.Edges.Where(edge => edge.Kind == "inherits")
+            .GroupBy(edge => edge.FromNodeId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(edge => edge.ToNodeId).ToList(),
+                StringComparer.Ordinal);
+        return graph.Nodes.Where(node => node.Kind == "type" && !node.IsExternal &&
+                node.FilePaths.Count > 0)
+            .OrderBy(node => node.Id, StringComparer.Ordinal)
+            .Select(node => new CodeSymbol
             {
-                Name = match.Groups[1].Value,
-                Kind = kind,
-                FilePath = filePath,
-                Namespace = ns,
-                Methods = methods
-            });
-        }
-
-        return symbols;
+                Id = node.Id,
+                Hash = node.Hash,
+                Name = node.Name,
+                Kind = node.TypeKind.ToLowerInvariant(),
+                FilePath = node.FilePaths[0],
+                Namespace = nodes.GetValueOrDefault(node.ContainingNodeId) is
+                    { Kind: "namespace" } containingNamespace
+                    ? containingNamespace.DisplayName
+                    : string.Empty,
+                BaseTypes = inherits.GetValueOrDefault(node.Id, [])
+                    .Select(id => nodes.GetValueOrDefault(id)?.DisplayName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Select(name => name!)
+                    .OrderBy(name => name, StringComparer.Ordinal)
+                    .ToList(),
+                Methods = contains.GetValueOrDefault(node.Id, [])
+                    .Select(id => nodes.GetValueOrDefault(id))
+                    .Where(member => member is { Kind: "member", MemberKind: "Method" })
+                    .Select(member => member!.Name)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(name => name, StringComparer.Ordinal)
+                    .ToList()
+            })
+            .ToList();
     }
 
-    private static List<string> ExtractUsings(string content)
+    private static Dictionary<string, List<string>> ProjectDependencies(CSharpSymbolGraph graph)
     {
-        return UsingRegex.Matches(content)
-            .Select(m => m.Groups[1].Value)
-            .ToList();
+        var nodes = graph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var edge in graph.Edges.Where(edge => edge.Kind == "references"))
+        {
+            if (!nodes.TryGetValue(edge.FromNodeId, out var source) ||
+                !nodes.TryGetValue(edge.ToNodeId, out var target))
+            {
+                continue;
+            }
+            foreach (var path in source.FilePaths)
+            {
+                if (!result.TryGetValue(path, out var dependencies))
+                {
+                    dependencies = new HashSet<string>(StringComparer.Ordinal);
+                    result[path] = dependencies;
+                }
+                dependencies.Add(target.DisplayName);
+            }
+        }
+        return result.OrderBy(item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                item => item.Key,
+                item => item.Value.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool IsTestFile(string path)
     {
-        var segments = path.Replace('\\', '/').Split('/');
+        var segments = path.Split('/');
         return segments.Any(segment =>
                 segment.Equals("test", StringComparison.OrdinalIgnoreCase) ||
                 segment.Equals("tests", StringComparison.OrdinalIgnoreCase) ||

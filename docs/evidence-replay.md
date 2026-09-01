@@ -19,13 +19,14 @@ O replay:
 2. confirma que o commit-base autenticado ainda existe;
 3. cria um worktree detached descartável exatamente nesse commit;
 4. compara versões de Git e .NET e reconstrói o `RepositorySnapshot` da baseline;
-5. compara os hashes esperado/observado e calcula arquivos adicionados, removidos ou alterados;
-6. repete o preflight de build/test;
-7. aplica no worktree apenas o diff persistido e assinado, sem interpretar a antiga resposta do agente;
-8. deriva novamente o `CandidateChangeSet` pelo Git e compara hash e arquivos;
-9. repete build, o gate legado `Tests` ou a matriz versionada `UnitTests`/`IntegrationTests`/`AcceptanceTests`, verificadores EB determinísticos disponíveis e evidências de aceite;
-10. compara definições e resultados dos comandos, gates e referências de artefatos;
-11. remove o worktree e confirma que HEAD, branch e index originais não mudaram.
+5. reconstrói o `CSharpSymbolGraph` com os limites originais e compara seu hash ao autenticado;
+6. compara os hashes esperado/observado do snapshot e calcula arquivos adicionados, removidos ou alterados;
+7. repete o preflight de build/test;
+8. aplica no worktree apenas o diff persistido e assinado, sem interpretar a antiga resposta do agente;
+9. deriva novamente o `CandidateChangeSet` pelo Git e compara hash e arquivos;
+10. repete build, o gate legado `Tests` ou a matriz versionada `UnitTests`/`IntegrationTests`/`AcceptanceTests`, verificadores EB determinísticos disponíveis e evidências de aceite;
+11. compara definições e resultados dos comandos, gates e referências de artefatos;
+12. remove o worktree e confirma que HEAD, branch e index originais não mudaram.
 
 O agente não é uma dependência do serviço de replay e nunca é chamado. O diff autenticado é a única entrada capaz de reconstruir o candidato.
 
@@ -33,13 +34,13 @@ O agente não é uma dependência do serviço de replay e nunca é chamado. O di
 
 | Resultado | Significado |
 | --- | --- |
-| `Reproduced` | snapshot, hash do candidato, ferramentas, comandos, gates e artefatos equivalentes coincidem |
+| `Reproduced` | snapshot, grafo semântico, hash do candidato, ferramentas, comandos, gates e artefatos equivalentes coincidem |
 | `BaselineUnavailable` | o commit-base não existe mais no repositório informado |
 | `CandidateDivergence` | o patch não aplica ou o Git deriva outro hash/conjunto de arquivos |
-| `EnvironmentDivergence` | o candidato é idêntico, mas snapshot, versão, comando, gate ou artefato diverge |
+| `EnvironmentDivergence` | o candidato é idêntico, mas snapshot, grafo semântico, versão, comando, gate ou artefato diverge |
 | `GateNotReproducible` | a execução exigia uma ferramenta ou gate indisponível no runtime de replay |
 | `Failed` | validação do repositório ou outra etapa operacional falhou de forma fechada |
 
-Uma evidência original válida recebe um `replayEvent` assinado com o resultado, comparações e timestamps. Para snapshots novos, o evento contém os hashes esperado/observado e um `RepositorySnapshotDiff` ordenado. O evento referencia a execução e o candidato originais e compartilha a mesma sequência global das promoções. Evidência adulterada é recusada antes da criação de qualquer novo evento confiável.
+Uma evidência original válida recebe um `replayEvent` assinado com o resultado, comparações e timestamps. Para snapshots e grafos novos, o evento contém os hashes esperado/observado do inventário e do grafo, além de um `RepositorySnapshotDiff` ordenado. O evento referencia a execução e o candidato originais e compartilha a mesma sequência global das promoções. Evidência adulterada é recusada antes da criação de qualquer novo evento confiável.
 
 O replay demonstra reprodutibilidade sob o contrato e os gates registrados. Ele não transforma um contrato incompleto em prova de correção, nem elimina fontes externas não fixadas, feeds mutáveis ou dependências removidas.

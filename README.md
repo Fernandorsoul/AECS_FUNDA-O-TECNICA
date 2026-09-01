@@ -39,6 +39,7 @@ O protótipo já inclui:
 - execução via Ollama e fallback para APIs compatíveis com OpenAI;
 - limites de tokens, custo, duração, tentativas e arquivos alterados;
 - `RepositorySnapshot` versionado e endereçado por conteúdo, com inventário da baseline e relações entre soluções e projetos;
+- `CSharpSymbolGraph` versionado e endereçado por conteúdo, extraído por Roslyn/MSBuild com tipos, membros, herança, implementação e referências;
 - preflight da baseline e gates versionados independentes para unitários, integração e aceite, com modos required/optional/disabled e contagem TRX;
 - critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
 - verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
@@ -391,6 +392,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Arquitetura atual](docs/architecture.md) — fluxo, componentes, fronteiras e limitações;
 - [Referência do TaskContract](docs/task-contract.md) — schema YAML e semântica dos campos;
 - [RepositorySnapshot determinístico](docs/repository-snapshot.md) — inventário da baseline, hashing, exclusões e diff;
+- [CSharpSymbolGraph determinístico](docs/csharp-symbol-graph.md) — carga Roslyn/MSBuild, fatos semânticos, hashes, limites e fallback;
 - [Promoção controlada](docs/controlled-promotion.md) — confirmação, invariantes, atomicidade e auditoria;
 - [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
 - [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;
@@ -407,7 +409,8 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - build, testes e aceite executável usam imagem Docker fixada por digest, sem rede por padrão e com limites de CPU, memória, PIDs e wall clock;
 - `execution.runtime: host` só é aceito pela CLI junto com `--allow-host-execution` e fica marcado na evidência como override de desenvolvimento;
 - `security_scan: required` executa scanners determinísticos de segredos, dependências e padrões; a snapshot de advisories é versionada e deliberadamente limitada;
-- o indexador de contexto atual é específico para arquivos C# e usa estimativa aproximada de quatro caracteres por token;
+- o grafo semântico atual cobre C#; outras linguagens ficam apenas no inventário, e a estimativa de contexto continua usando quatro caracteres por token;
+- a avaliação MSBuild de design time ocorre no processo do controlador e seu limite de memória é uma estimativa do payload, não uma cota rígida do working set;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.
 
 Essas limitações são deliberadamente explícitas: hoje o AECS é uma base de pesquisa executável, não um gate de produção pronto para uso autônomo.

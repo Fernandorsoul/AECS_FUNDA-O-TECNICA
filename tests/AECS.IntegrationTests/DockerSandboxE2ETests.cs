@@ -10,6 +10,7 @@ using FluentAssertions;
 
 namespace AECS.IntegrationTests;
 
+[Collection(RoslynMsBuildCollection.Name)]
 public sealed class DockerSandboxE2ETests
 {
     private const string AdversarialSecretName = "AECS_DOCKER_E2E_SECRET";
