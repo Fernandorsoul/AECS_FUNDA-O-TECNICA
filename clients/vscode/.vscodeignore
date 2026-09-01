@@ -1,0 +1,10 @@
+.github/**
+.gitignore
+src/**
+test/**
+out/test/**
+node_modules/@types/**
+node_modules/typescript/**
+tsconfig.json
+**/*.map
+**/*.ts

@@ -95,6 +95,13 @@ Para explorar o Jarvis sem chamar um modelo e sem aplicar blocos de código:
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- jarvis --repo . --mock
 ```
 
+### Cliente VS Code
+
+O cliente mínimo em `clients/vscode` inicia TaskContracts, restaura o vínculo após reinício, mostra
+diff, gates, critérios, budget e links de evidência, e registra aprovação/rejeição pelo backend. A
+extensão não aplica patches nem promove candidatos. Instalação, compatibilidade, protocolo
+autenticado e modelo de ameaças estão em [Cliente VS Code](docs/vscode-client.md).
+
 `run`, `experiment` e Jarvis resolvem o mesmo runtime. Use `--runtime-config
 aecs.runtime.local.json` para selecionar um arquivo versionado e `--show-effective-config` para
 ver valores e origens efetivas em JSON, sempre com segredos redigidos.
@@ -435,6 +442,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Adaptive Controller em shadow mode](docs/adaptive-shadow-controller.md) — histórico autenticado, fallbacks, invariantes e relatório offline;
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
+- [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
