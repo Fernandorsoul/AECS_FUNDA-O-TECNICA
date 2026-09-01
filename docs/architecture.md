@@ -194,6 +194,13 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 `IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. Snapshot e grafo semântico são nós próprios ligados à baseline, execução e contexto por referências explícitas. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
 
+O Jarvis reutiliza essa fronteira por meio de `DurableExecutionHistoryService`. `status`,
+`history`, `explain` e `context` carregam fatos autenticados do store mesmo após reinício,
+aplicam filtros e limite de 1–500 e distinguem fatos persistidos, cálculos derivados e resumo
+interpretativo determinístico. Evidência parcial permanece `Partial`; evidência inválida é
+omitida, nunca completada por inferência. Consulte
+[Histórico durável e explicações do Jarvis](jarvis-durable-history.md).
+
 ## Adaptive Controller em shadow mode
 
 Quando o store também implementa `IEvidenceGraphSource`, o pipeline calcula uma recomendação

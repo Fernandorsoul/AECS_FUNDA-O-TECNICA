@@ -423,6 +423,8 @@ internal static class EvidenceGraphProjection
         return builder.Build(new EvidenceGraphSummary
         {
             EvidenceId = evidence.Id,
+            SchemaVersion = envelope.SchemaVersion,
+            Authority = envelope.Seal.KeyId,
             RepositoryId = repositoryId,
             TaskId = evidence.TaskContract.Id,
             RunId = evidence.AgentRun.Id,
