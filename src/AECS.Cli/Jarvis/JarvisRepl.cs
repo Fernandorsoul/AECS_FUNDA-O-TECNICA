@@ -4,10 +4,12 @@ using AECS.Application.Experiments;
 using AECS.Application.Jarvis;
 using AECS.Application.Parsing;
 using AECS.Application.Promotion;
+using AECS.Application.ProactiveAlerts;
 using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
+using AECS.Infrastructure.Repositories;
 
 namespace AECS.Cli.Jarvis;
 
@@ -19,18 +21,28 @@ public class JarvisRepl
     private readonly RiskClassifier _riskClassifier = new();
     private readonly DurableExecutionHistoryService? _durableHistory;
     private readonly CandidatePromotionService _promotion;
+    private readonly string? _alertPolicyPath;
+    private readonly string _alertRoot;
 
     public EffectiveAecsRuntimeConfiguration RuntimeConfiguration => _runtime.Configuration;
 
     public JarvisRepl(
         string repoPath,
-        AecsExecutionRuntime runtime)
+        AecsExecutionRuntime runtime,
+        string? alertPolicyPath = null,
+        string? alertRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repoPath);
         ArgumentNullException.ThrowIfNull(runtime);
         _repoPath = repoPath;
         _runtime = runtime;
         _promotion = runtime.CreatePromotionService();
+        _alertPolicyPath = string.IsNullOrWhiteSpace(alertPolicyPath)
+            ? null
+            : Path.GetFullPath(alertPolicyPath);
+        _alertRoot = string.IsNullOrWhiteSpace(alertRoot)
+            ? JsonProactiveAlertStore.GetDefaultRootPath()
+            : Path.GetFullPath(alertRoot);
         if (_runtime.EvidenceStore is IEvidenceGraphSource graphSource)
         {
             _durableHistory = new DurableExecutionHistoryService(
@@ -126,6 +138,10 @@ public class JarvisRepl
                 await ExportCandidatePatch(argument, ct);
                 return false;
 
+            case "alerts":
+                await ManageAlerts(argument, ct);
+                return false;
+
             case "exit" or "quit":
                 Console.WriteLine("Goodbye.");
                 return true;
@@ -148,6 +164,7 @@ public class JarvisRepl
         Console.WriteLine("  context <task-id>   Show persisted context manifest (--json supported)");
         Console.WriteLine("  review <evidence>   Review, approve/reject and optionally promote a candidate");
         Console.WriteLine("  export-patch <evidence> <path>  Review and export without promotion");
+        Console.WriteLine("  alerts <evaluate|list|read|act|metrics>  Manage opt-in proactive alerts");
         Console.WriteLine("  filters: --task <id> --run <id> --candidate <id> --evidence <id> --limit <n>");
         Console.WriteLine("  exit                Quit AECS");
     }
@@ -167,6 +184,7 @@ public class JarvisRepl
         Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
         Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
         Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
+        await EvaluateConfiguredAlerts(ct);
     }
 
     private async Task RunExperiment(string tasksDir, CancellationToken ct)
@@ -192,7 +210,120 @@ public class JarvisRepl
         var report = await runner.RunAsync(_repoPath, taskFiles, ct);
 
         Console.WriteLine(ExperimentReportFormatter.Format(report));
+        await EvaluateConfiguredAlerts(ct);
 
+    }
+
+    private async Task ManageAlerts(string argument, CancellationToken cancellationToken)
+    {
+        const string usage =
+            "Usage: alerts <evaluate|list|read <id>|act <id> <action-ref>|metrics> [--json]";
+        if (_alertPolicyPath is null)
+        {
+            Console.WriteLine(
+                "Proactive alerts are opt-in. Start Jarvis with --alert-policy <policy.json>.");
+            return;
+        }
+        if (!TryCreateAlertService(out var service))
+        {
+            Console.WriteLine("Authenticated Evidence Graph support is required for proactive alerts.");
+            return;
+        }
+
+        var tokens = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        var json = tokens.Remove("--json");
+        if (tokens.Count == 0)
+        {
+            Console.WriteLine(usage);
+            return;
+        }
+        var operation = tokens[0].ToLowerInvariant();
+        if (operation == "evaluate" && tokens.Count == 1)
+        {
+            var report = await service.EvaluateAsync(LoadAlertPolicy(), cancellationToken);
+            Console.Write(json
+                ? ProactiveAlertPolicyJson.ToJson(report) + Environment.NewLine
+                : ProactiveAlertFormatter.EvaluationToText(report));
+            return;
+        }
+        if (operation == "list" && tokens.Count == 1)
+        {
+            var alerts = await service.ListAsync(cancellationToken);
+            Console.Write(json
+                ? ProactiveAlertPolicyJson.ToJson(alerts) + Environment.NewLine
+                : ProactiveAlertFormatter.AlertsToText(alerts));
+            return;
+        }
+        if (operation == "read" && tokens.Count == 2 && Guid.TryParse(tokens[1], out var readId))
+        {
+            var alert = await service.MarkReadAsync(
+                readId,
+                Environment.UserName,
+                cancellationToken);
+            Console.WriteLine($"Alert {alert.Id:N}: {alert.Status}; no approval was inferred.");
+            return;
+        }
+        if (operation == "act" && tokens.Count == 3 && Guid.TryParse(tokens[1], out var actionId))
+        {
+            var alert = await service.MarkActionedAsync(
+                actionId,
+                Environment.UserName,
+                tokens[2],
+                cancellationToken);
+            Console.WriteLine($"Alert {alert.Id:N}: {alert.Status}; no approval was granted.");
+            return;
+        }
+        if (operation == "metrics" && tokens.Count == 1)
+        {
+            var report = await service.MeasureAsync(LoadAlertPolicy(), cancellationToken);
+            Console.Write(json
+                ? ProactiveAlertPolicyJson.ToJson(report) + Environment.NewLine
+                : ProactiveAlertFormatter.EffectivenessToText(report));
+            return;
+        }
+        Console.WriteLine(usage);
+    }
+
+    private async Task EvaluateConfiguredAlerts(CancellationToken cancellationToken)
+    {
+        if (_alertPolicyPath is null || !TryCreateAlertService(out var service))
+            return;
+        try
+        {
+            var report = await service.EvaluateAsync(LoadAlertPolicy(), cancellationToken);
+            Console.Write(ProactiveAlertFormatter.EvaluationToText(report));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"WARNING: proactive alert evaluation failed closed ({ex.GetType().Name}).");
+        }
+    }
+
+    private ProactiveAlertPolicy LoadAlertPolicy() =>
+        ProactiveAlertPolicyJson.Load(_alertPolicyPath!);
+
+    private bool TryCreateAlertService(out ProactiveAlertService service)
+    {
+        if (_runtime.EvidenceStore is not IEvidenceGraphSource graphSource)
+        {
+            service = null!;
+            return false;
+        }
+        var store = new JsonProactiveAlertStore(_alertRoot);
+        var sink = new LocalJsonProactiveAlertSink(_alertRoot, _repoPath);
+        service = new ProactiveAlertService(
+            _runtime.EvidenceStore,
+            graphSource,
+            store,
+            sink,
+            _repoPath,
+            Environment.UserName);
+        return true;
     }
 
     private async Task ShowStatus(string argument, CancellationToken cancellationToken)

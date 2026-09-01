@@ -1261,6 +1261,8 @@ static async Task<int> RunVscodeServer(string[] args)
 static async Task<int> RunJarvis(string[] args)
 {
     string? repoPath = null;
+    string? alertPolicyPath = Environment.GetEnvironmentVariable("AECS_ALERT_POLICY");
+    string? alertRoot = null;
     var runtimeOptions = new RuntimeCliOptions();
     var invalidArgument = false;
 
@@ -1268,6 +1270,10 @@ static async Task<int> RunJarvis(string[] args)
     {
         if (args[i] == "--repo" && i + 1 < args.Length)
             repoPath = args[++i];
+        else if (args[i] == "--alert-policy" && i + 1 < args.Length)
+            alertPolicyPath = args[++i];
+        else if (args[i] == "--alert-root" && i + 1 < args.Length)
+            alertRoot = args[++i];
         else if (runtimeOptions.TryConsume(args, ref i))
         {
         }
@@ -1278,7 +1284,9 @@ static async Task<int> RunJarvis(string[] args)
     repoPath ??= ".";
     if (invalidArgument)
     {
-        Console.WriteLine("Usage: aecs jarvis [--repo <path>] " + RuntimeCliOptions.Usage);
+        Console.WriteLine(
+            "Usage: aecs jarvis [--repo <path>] [--alert-policy <policy.json>] " +
+            "[--alert-root <path>] " + RuntimeCliOptions.Usage);
         return 1;
     }
 
@@ -1287,7 +1295,7 @@ static async Task<int> RunJarvis(string[] args)
     using var runtime = createdRuntime;
     PrintEffectiveRuntime(runtime.Configuration, runtimeOptions.ShowEffectiveConfiguration);
 
-    var repl = new JarvisRepl(repoPath, runtime);
+    var repl = new JarvisRepl(repoPath, runtime, alertPolicyPath, alertRoot);
     return await repl.RunAsync(CancellationToken.None);
 }
 

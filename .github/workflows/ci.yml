@@ -239,3 +239,17 @@ jobs:
           printf '%s\n' "$vscode_output"
           grep -q '"protocol":"aecs.vscode/v1"' <<< "$vscode_output"
           grep -q '"ok":true' <<< "$vscode_output"
+
+          alert_output=$(printf 'alerts evaluate\nexit\n' | \
+            dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            jarvis \
+            --repo "${GITHUB_WORKSPACE}" \
+            --mock \
+            --alert-policy "${GITHUB_WORKSPACE}/aecs.alert-policy.example.json" \
+            --alert-root "${RUNNER_TEMP}/aecs-alerts-disabled")
+
+          printf '%s\n' "$alert_output"
+          grep -q 'Policy enabled: False' <<< "$alert_output"
+          grep -q 'no evidence was evaluated and no sink was called' <<< "$alert_output"
+          test ! -d "${RUNNER_TEMP}/aecs-alerts-disabled/inbox"
