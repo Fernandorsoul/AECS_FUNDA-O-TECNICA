@@ -47,7 +47,8 @@ O protótipo já inclui:
 - `CandidateChangeSet` derivado do Git e evidência canônica assinada em JSON ou PostgreSQL;
 - promoção controlada ou exportação do patch como operações separadas;
 - execução em lote com métricas como taxa de verificação e CPVC;
-- experimentos reproduzíveis por dataset versionado, variantes, repetições, checkpoints e comparação pareada;
+- experimentos reproduzíveis por dataset versionado, variantes, repetições, checkpoints,
+  comparação pareada e protocolo A/B pré-registrado para o Context Compiler;
 - REPL interativo, chamado Jarvis.
 
 Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes já conectados na CLI daqueles que ainda são fundação para etapas futuras. O fluxo e a matriz de fixtures de EB001–EB004 estão em [Verificação semântica](docs/semantic-verification.md), o ciclo do EB005 está em [Registro histórico](docs/historical-decision-registry.md) e a infraestrutura de A/B está em [Experiment Harness](docs/experiment-harness.md).

@@ -21,6 +21,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-015](ADR-015-baseline-candidate-semantic-verification.md) | Accepted | Comparar grafos da baseline e do candidato nos verificadores semânticos |
 | [ADR-016](ADR-016-versioned-historical-decision-registry.md) | Accepted | Alimentar EB005 por decisões históricas versionadas e revisadas |
 | [ADR-017](ADR-017-reproducible-experiment-datasets.md) | Accepted | Executar experimentos como datasets versionados e runs retomáveis |
+| [ADR-018](ADR-018-preregistered-context-ab.md) | Accepted | Pré-registrar o A/B pareado do Context Compiler e concluir H1 por regra explícita |
 
 ## Convenção para novos ADRs
 

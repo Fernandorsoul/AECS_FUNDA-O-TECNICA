@@ -1,12 +1,34 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using AECS.Domain.Models;
 
 namespace AECS.Application.ContextCompiler;
 
 public sealed class ContextSelectionOptions
 {
     public int DependencyDepth { get; init; } = 2;
+    public ContextSelectionMode Mode { get; init; } = ContextSelectionMode.GraphRanked;
+}
+
+public enum ContextSelectionMode
+{
+    GraphRanked,
+    NaivePathOrder
+}
+
+public static class ContextStrategyIds
+{
+    public const string GraphRanked = ContextManifestSchema.GraphStrategyId;
+    public const string NaivePathOrder = ContextManifestSchema.NaiveStrategyId;
+
+    public static bool IsSupported(string value) =>
+        value is GraphRanked or NaivePathOrder;
+
+    public static ContextSelectionMode Parse(string value) =>
+        value == NaivePathOrder
+            ? ContextSelectionMode.NaivePathOrder
+            : ContextSelectionMode.GraphRanked;
 }
 
 public sealed class ContextCandidate
@@ -76,6 +98,10 @@ public class ContextSelector
             .Where(path => forbidden.Count == 0 || !PathScopeMatcher.MatchesAny(path, forbidden))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
+
+        if (options.Mode == ContextSelectionMode.NaivePathOrder)
+            return SelectNaive(taskId, allFiles);
+
         var eligible = allFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var states = allFiles.ToDictionary(
             path => path,
@@ -187,6 +213,42 @@ public class ContextSelector
             EstimatedTokens = (int)Math.Min(int.MaxValue, estimatedTokens),
             EligibleFileCount = allFiles.Count,
             Strategy = strategy
+        };
+    }
+
+    private static ContextPackage SelectNaive(
+        string taskId,
+        IReadOnlyCollection<string> eligibleFiles)
+    {
+        var rankedFiles = eligibleFiles
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select((path, position) => new ContextCandidate
+            {
+                Path = path,
+                Rank = position + 1,
+                Score = 0,
+                Depth = -1,
+                Relation = ContextStrategyIds.NaivePathOrder,
+                Reasons = ["ordinal-path-order-only"]
+            })
+            .ToList();
+        var contextIdentity = new StringBuilder()
+            .AppendLine(taskId)
+            .AppendLine(ContextStrategyIds.NaivePathOrder);
+        foreach (var candidate in rankedFiles)
+            contextIdentity.AppendLine($"{candidate.Path}|{candidate.Rank}");
+        var contextHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(contextIdentity.ToString())))
+            .ToLowerInvariant();
+
+        return new ContextPackage
+        {
+            Id = $"CTX-{contextHash[..12]}",
+            TaskId = taskId,
+            SelectedFiles = rankedFiles.Select(candidate => candidate.Path).ToList(),
+            RankedFiles = rankedFiles,
+            EligibleFileCount = rankedFiles.Count,
+            Strategy = ContextStrategyIds.NaivePathOrder
         };
     }
 

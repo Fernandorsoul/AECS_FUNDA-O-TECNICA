@@ -776,7 +776,9 @@ static async Task<int> RunExperiment(string[] args)
                     agent,
                     evidenceStore,
                     allowHostExecution,
-                    new RepositoryContextCompiler(defaultOptions: definition.Variant.Context),
+                    new RepositoryContextCompiler(
+                        defaultOptions: definition.Variant.Context,
+                        selectionStrategy: definition.Variant.ContextStrategy),
                     new FixedModelExecutionController(definition.Variant.Model));
                 return await pipeline.RunAsync(
                     definition.RepositoryPath,
@@ -794,6 +796,7 @@ static async Task<int> RunExperiment(string[] args)
             Console.WriteLine($"JSON report: {artifacts.ReportPath}");
             Console.WriteLine($"CSV results: {artifacts.ResultsCsvPath}");
             Console.WriteLine($"CSV comparisons: {artifacts.ComparisonsCsvPath}");
+            Console.WriteLine($"CSV analysis: {artifacts.AnalysisCsvPath}");
             return datasetReport.Succeeded ? 0 : 1;
         }
         catch (Exception ex)

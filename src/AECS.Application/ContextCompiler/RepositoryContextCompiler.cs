@@ -48,17 +48,20 @@ public sealed class RepositoryContextCompiler
     private readonly ContextSelector _selector;
     private readonly ITokenCounterResolver _tokenCounterResolver;
     private readonly ContextCompilationOptions? _defaultOptions;
+    private readonly ContextSelectionMode _selectionMode;
 
     public RepositoryContextCompiler(
         ITokenCounterResolver? tokenCounterResolver = null,
         CodebaseIndexer? indexer = null,
         ContextSelector? selector = null,
-        ContextCompilationOptions? defaultOptions = null)
+        ContextCompilationOptions? defaultOptions = null,
+        string selectionStrategy = ContextStrategyIds.GraphRanked)
     {
         _tokenCounterResolver = tokenCounterResolver ?? new ModelTokenCounterResolver();
         _indexer = indexer ?? new CodebaseIndexer();
         _selector = selector ?? new ContextSelector();
         _defaultOptions = defaultOptions;
+        _selectionMode = ContextStrategyIds.Parse(selectionStrategy);
     }
 
     public CompiledRepositoryContext Compile(
@@ -94,7 +97,9 @@ public sealed class RepositoryContextCompiler
         var characterLimit = options.MaxCharacters;
         var perFileTokenLimit = Math.Min(options.MaxFileTokens, effectiveTokenLimit);
 
-        var index = _indexer.Index(resolvedRoot, symbolGraph);
+        var index = _indexer.Index(
+            resolvedRoot,
+            _selectionMode == ContextSelectionMode.GraphRanked ? symbolGraph : null);
         var package = _selector.Select(
             index,
             contract.Id,
@@ -102,7 +107,11 @@ public sealed class RepositoryContextCompiler
             contract.AcceptanceCriteria,
             contract.Scope.Allowed,
             contract.Scope.Forbidden,
-            new ContextSelectionOptions { DependencyDepth = options.DependencyDepth });
+            new ContextSelectionOptions
+            {
+                DependencyDepth = options.DependencyDepth,
+                Mode = _selectionMode
+            });
         var strategy = $"{package.Strategy}+{index.Source}";
         var header = BuildHeader(
             contract.Id,
@@ -246,7 +255,9 @@ public sealed class RepositoryContextCompiler
         var draft = new ContextManifest
         {
             SchemaVersion = ContextManifestSchema.CurrentVersion,
-            StrategyVersion = ContextManifestSchema.StrategyVersion,
+            StrategyVersion = _selectionMode == ContextSelectionMode.GraphRanked
+                ? ContextManifestSchema.StrategyVersion
+                : ContextManifestSchema.NaiveStrategyVersion,
             TaskId = contract.Id,
             BaselineCommit = baselineCommit,
             Source = SourceName,

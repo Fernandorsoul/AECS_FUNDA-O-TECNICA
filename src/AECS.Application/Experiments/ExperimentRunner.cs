@@ -292,6 +292,17 @@ public sealed class ExperimentRunner
             AgentAttempts = execution.AgentAttempts.ToList(),
             BudgetUsage = execution.BudgetUsage,
             RetryCount = execution.AgentRun.RetryCount,
+            VerifiedCodeChange = status == ExperimentResultStatus.Completed &&
+                execution.Decision.Decision == TaskDecision.Verified &&
+                execution.OriginalRepositoryUnchanged,
+            FirstPassVerified = status == ExperimentResultStatus.Completed &&
+                execution.Decision.Decision == TaskDecision.Verified &&
+                execution.OriginalRepositoryUnchanged &&
+                execution.AgentRun.RetryCount == 0,
+            ScopeViolationCount = execution.VerificationResults.Count(result =>
+                result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
+                result.Status == VerificationStatus.Fail),
+            ReworkCount = execution.AgentRun.RetryCount,
             EvidenceId = execution.EvidenceId,
             EvidenceLocation = execution.EvidenceLocation,
             OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
@@ -350,6 +361,15 @@ public sealed class ExperimentRunner
             AgentAttempts = execution.AgentAttempts.ToList(),
             BudgetUsage = execution.BudgetUsage,
             RetryCount = execution.AgentRun.RetryCount,
+            VerifiedCodeChange = execution.Decision.Decision == TaskDecision.Verified &&
+                execution.OriginalRepositoryUnchanged,
+            FirstPassVerified = execution.Decision.Decision == TaskDecision.Verified &&
+                execution.OriginalRepositoryUnchanged &&
+                execution.AgentRun.RetryCount == 0,
+            ScopeViolationCount = execution.VerificationResults.Count(result =>
+                result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
+                result.Status == VerificationStatus.Fail),
+            ReworkCount = execution.AgentRun.RetryCount,
             EvidenceId = execution.EvidenceId,
             EvidenceLocation = execution.EvidenceLocation,
             OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
@@ -367,6 +387,7 @@ public sealed class ExperimentRunner
             .ThenBy(result => result.Repetition)
             .ThenBy(result => result.VariantId, StringComparer.Ordinal)
             .ToList();
+        var comparisons = Compare(ordered, dataset.Manifest.ReferenceVariantId);
         return new ExperimentReport
         {
             ExperimentId = ExperimentDatasetFingerprint.ExperimentId(datasetHash),
@@ -381,9 +402,8 @@ public sealed class ExperimentRunner
             Repetitions = dataset.Manifest.Repetitions,
             Environment = environment,
             Results = ordered,
-            PairedComparisons = Compare(
-                ordered,
-                dataset.Manifest.ReferenceVariantId)
+            PairedComparisons = comparisons,
+            Analysis = ExperimentAnalyzer.Analyze(dataset.Manifest, ordered, comparisons)
         };
     }
 
@@ -419,12 +439,25 @@ public sealed class ExperimentRunner
                     CandidateStatus = candidate.Status,
                     BothCompleted = bothCompleted,
                     DecisionChanged = bothCompleted && reference.Decision != candidate.Decision,
-                    DurationDeltaSeconds = bothCompleted
-                        ? candidate.Duration.TotalSeconds - reference.Duration.TotalSeconds
-                        : 0,
-                    CostDelta = bothCompleted
-                        ? candidate.EstimatedCost - reference.EstimatedCost
-                        : 0,
+                    ReferenceVerifiedCodeChange = reference.VerifiedCodeChange,
+                    CandidateVerifiedCodeChange = candidate.VerifiedCodeChange,
+                    VerifiedCodeChangeDelta = Bool(candidate.VerifiedCodeChange) -
+                        Bool(reference.VerifiedCodeChange),
+                    ReferenceFirstPass = reference.FirstPassVerified,
+                    CandidateFirstPass = candidate.FirstPassVerified,
+                    FirstPassDelta = Bool(candidate.FirstPassVerified) -
+                        Bool(reference.FirstPassVerified),
+                    ReferenceTotalTokens = reference.TotalTokens,
+                    CandidateTotalTokens = candidate.TotalTokens,
+                    TotalTokenDelta = candidate.TotalTokens - reference.TotalTokens,
+                    ReferenceEstimatedCost = reference.EstimatedCost,
+                    CandidateEstimatedCost = candidate.EstimatedCost,
+                    DurationDeltaSeconds = candidate.Duration.TotalSeconds -
+                        reference.Duration.TotalSeconds,
+                    CostDelta = candidate.EstimatedCost - reference.EstimatedCost,
+                    ScopeViolationDelta = candidate.ScopeViolationCount -
+                        reference.ScopeViolationCount,
+                    ReworkDelta = candidate.ReworkCount - reference.ReworkCount,
                     ReferenceEvidenceId = reference.EvidenceId == Guid.Empty
                         ? null
                         : reference.EvidenceId,
@@ -443,4 +476,6 @@ public sealed class ExperimentRunner
             .ThenBy(pair => pair.CandidateVariantId, StringComparer.Ordinal)
             .ToList();
     }
+
+    private static int Bool(bool value) => value ? 1 : 0;
 }

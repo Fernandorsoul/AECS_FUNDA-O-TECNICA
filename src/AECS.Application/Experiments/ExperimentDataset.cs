@@ -13,8 +13,23 @@ namespace AECS.Application.Experiments;
 public static class ExperimentDatasetSchema
 {
     public const string Version = "aecs.experiment-dataset/v1";
-    public const string ReportVersion = "aecs.experiment-report/v1";
+    public const string ContextAbVersion = "aecs.experiment-dataset/v2";
+    public const string ReportVersion = "aecs.experiment-report/v2";
     public const string CheckpointVersion = "aecs.experiment-checkpoint/v1";
+}
+
+public static class ExperimentDesigns
+{
+    public const string PairedContextAb = "paired-context-ab";
+    public const string VccPerEstimatedCost = "vcc-per-estimated-cost";
+}
+
+public enum HypothesisConclusion
+{
+    NotEvaluated,
+    Maintain,
+    Adjust,
+    Abandon
 }
 
 public enum ExperimentProvider
@@ -39,8 +54,28 @@ public sealed class ExperimentDatasetManifest
     public ExperimentRepositoryDefinition Repository { get; init; } = new();
     public int Repetitions { get; init; } = 1;
     public string ReferenceVariantId { get; init; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExperimentProtocol? Protocol { get; init; }
     public List<ExperimentTaskDefinition> Tasks { get; init; } = [];
     public List<ExperimentVariantDefinition> Variants { get; init; } = [];
+}
+
+public sealed class ExperimentProtocol
+{
+    public string Design { get; init; } = string.Empty;
+    public string HypothesisId { get; init; } = string.Empty;
+    public string Hypothesis { get; init; } = string.Empty;
+    public string PrimaryMetric { get; init; } = string.Empty;
+    public int MinimumPairedSamples { get; init; }
+    public double ConfidenceLevel { get; init; } = 0.95;
+    public ExperimentDeathCriteria DeathCriteria { get; init; } = new();
+}
+
+public sealed class ExperimentDeathCriteria
+{
+    public double MinimumRelativeImprovement { get; init; }
+    public double MaximumCandidateFailureRate { get; init; }
+    public double MaximumCandidateScopeViolationRate { get; init; }
 }
 
 public sealed class ExperimentRepositoryDefinition
@@ -134,8 +169,21 @@ public sealed class ExperimentPairedComparison
     public ExperimentResultStatus CandidateStatus { get; init; }
     public bool BothCompleted { get; init; }
     public bool DecisionChanged { get; init; }
+    public bool ReferenceVerifiedCodeChange { get; init; }
+    public bool CandidateVerifiedCodeChange { get; init; }
+    public int VerifiedCodeChangeDelta { get; init; }
+    public bool ReferenceFirstPass { get; init; }
+    public bool CandidateFirstPass { get; init; }
+    public int FirstPassDelta { get; init; }
+    public int ReferenceTotalTokens { get; init; }
+    public int CandidateTotalTokens { get; init; }
+    public int TotalTokenDelta { get; init; }
+    public decimal ReferenceEstimatedCost { get; init; }
+    public decimal CandidateEstimatedCost { get; init; }
     public double DurationDeltaSeconds { get; init; }
     public decimal CostDelta { get; init; }
+    public int ScopeViolationDelta { get; init; }
+    public int ReworkDelta { get; init; }
     public Guid? ReferenceEvidenceId { get; init; }
     public Guid? CandidateEvidenceId { get; init; }
     public string Failure { get; init; } = string.Empty;
@@ -240,7 +288,8 @@ public static class ExperimentDatasetContract
     public static void Validate(ExperimentDatasetManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        if (manifest.SchemaVersion != ExperimentDatasetSchema.Version ||
+        if (manifest.SchemaVersion is not (
+                ExperimentDatasetSchema.Version or ExperimentDatasetSchema.ContextAbVersion) ||
             !ValidId(manifest.Id) ||
             string.IsNullOrWhiteSpace(manifest.Version) ||
             manifest.Version.Length > 100 ||
@@ -257,12 +306,72 @@ public static class ExperimentDatasetContract
             HasDuplicateIds(manifest.Variants.Select(variant => variant.Id)) ||
             !manifest.Variants.Any(variant => variant.Id.Equals(
                 manifest.ReferenceVariantId,
-                StringComparison.Ordinal)))
+                StringComparison.Ordinal)) ||
+            manifest.SchemaVersion == ExperimentDatasetSchema.Version &&
+            manifest.Protocol is not null ||
+            manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbVersion &&
+            InvalidContextAbProtocol(manifest))
         {
             throw new InvalidOperationException(
                 "Experiment dataset is incomplete, unsafe, or uses an unsupported schema.");
         }
     }
+
+    private static bool InvalidContextAbProtocol(ExperimentDatasetManifest manifest)
+    {
+        var protocol = manifest.Protocol;
+        if (protocol is null ||
+            protocol.Design != ExperimentDesigns.PairedContextAb ||
+            !protocol.HypothesisId.Equals("H1", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(protocol.Hypothesis) || protocol.Hypothesis.Length > 1000 ||
+            protocol.PrimaryMetric != ExperimentDesigns.VccPerEstimatedCost ||
+            protocol.MinimumPairedSamples < 2 ||
+            protocol.ConfidenceLevel != 0.95 ||
+            protocol.DeathCriteria is null ||
+            protocol.DeathCriteria.MinimumRelativeImprovement is < -1 or > 10 ||
+            protocol.DeathCriteria.MaximumCandidateFailureRate is < 0 or > 1 ||
+            protocol.DeathCriteria.MaximumCandidateScopeViolationRate is < 0 or > 1 ||
+            manifest.Variants.Count != 2 ||
+            manifest.Tasks.Count * manifest.Repetitions < protocol.MinimumPairedSamples ||
+            manifest.Variants.Any(variant =>
+                !ContextStrategyIds.IsSupported(variant.ContextStrategy)) ||
+            manifest.Variants.Count(variant =>
+                variant.ContextStrategy == ContextStrategyIds.GraphRanked) != 1 ||
+            manifest.Variants.Count(variant =>
+                variant.ContextStrategy == ContextStrategyIds.NaivePathOrder) != 1)
+        {
+            return true;
+        }
+
+        var reference = manifest.Variants.Single(variant => variant.Id.Equals(
+            manifest.ReferenceVariantId,
+            StringComparison.Ordinal));
+        var candidate = manifest.Variants.Single(variant => !variant.Id.Equals(
+            manifest.ReferenceVariantId,
+            StringComparison.Ordinal));
+        return reference.ContextStrategy != ContextStrategyIds.NaivePathOrder ||
+            candidate.ContextStrategy != ContextStrategyIds.GraphRanked ||
+            reference.Provider != candidate.Provider ||
+            !reference.Model.Equals(candidate.Model, StringComparison.Ordinal) ||
+            reference.RequiresRealProvider != candidate.RequiresRealProvider ||
+            reference.Seed != candidate.Seed ||
+            !Equivalent(reference.Context, candidate.Context) ||
+            !Equivalent(reference.Parameters, candidate.Parameters);
+    }
+
+    private static bool Equivalent(ContextCompilationOptions left, ContextCompilationOptions right) =>
+        left.MaxTokens == right.MaxTokens &&
+        left.MaxCharacters == right.MaxCharacters &&
+        left.MaxFileCharacters == right.MaxFileCharacters &&
+        left.MaxFileTokens == right.MaxFileTokens &&
+        left.DependencyDepth == right.DependencyDepth;
+
+    private static bool Equivalent(
+        IReadOnlyDictionary<string, string> left,
+        IReadOnlyDictionary<string, string> right) =>
+        left.Count == right.Count && left.All(parameter =>
+            right.TryGetValue(parameter.Key, out var value) &&
+            value.Equals(parameter.Value, StringComparison.Ordinal));
 
     public static bool BaselineMatches(string expected, string actual) =>
         expected.Equals("HEAD", StringComparison.Ordinal) ||

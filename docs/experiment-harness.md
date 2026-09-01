@@ -6,7 +6,10 @@ O modo legado `--repo/--tasks` continua disponível para execuções exploratór
 
 ## Manifesto do dataset
 
-O schema atual é `aecs.experiment-dataset/v1`. A identidade efetiva do dataset é o hash SHA-256 do manifesto mais a baseline resolvida. `HEAD` é aceito como referência portátil, mas é convertido para o commit exato antes do primeiro run; uma mudança posterior do HEAD invalida a retomada.
+O schema geral é `aecs.experiment-dataset/v1`; o contrato controlado de contexto A/B usa
+`aecs.experiment-dataset/v2`. A identidade efetiva do dataset é o hash SHA-256 do manifesto
+mais a baseline resolvida. `HEAD` é aceito como referência portátil, mas é convertido para o
+commit exato antes do primeiro run; uma mudança posterior do HEAD invalida a retomada.
 
 ```json
 {
@@ -31,7 +34,7 @@ O schema atual é `aecs.experiment-dataset/v1`. A identidade efetiva do dataset 
       "id": "control",
       "provider": "Mock",
       "model": "mock-control-v1",
-      "contextStrategy": "symbol-aware-control",
+      "contextStrategy": "graph-ranked",
       "context": {
         "maxTokens": 12000,
         "maxCharacters": 48000,
@@ -55,6 +58,23 @@ Cada variante fixa:
 - nome e limites da estratégia de contexto;
 - parâmetros suportados do provider;
 - seed inicial, quando o provider a aceita.
+
+Em v1, nomes históricos de estratégia continuam significando o compilador orientado ao grafo.
+Em v2, somente `naive-path-order` e `graph-ranked` são aceitos. A primeira variante ignora
+objetivo, símbolos e relações e inclui arquivos exclusivamente pela ordem ordinal dos caminhos;
+a segunda usa o ranqueamento semântico normal.
+
+## Protocolo A/B pré-registrado
+
+Um manifesto v2 exige exatamente duas variantes e o bloco `protocol`. O loader comprova antes
+da primeira chamada que provider, modelo, seed, parâmetros e todos os limites são idênticos.
+A referência deve ser `naive-path-order`, a candidata `graph-ranked`, e
+`tasks × repetitions` deve atingir `minimumPairedSamples`.
+
+O protocolo registra H1, métrica primária `vcc-per-estimated-cost`, confiança de 95%, efeito
+mínimo, taxa máxima de falhas e taxa máxima de violações de escopo. O benchmark canônico fica
+em [`experiments/context-compiler-h1`](../experiments/context-compiler-h1/README.md), com 30
+pares e provider real opt-in; ele não roda no smoke barato do CI.
 
 Seeds de variantes `Local` e `Cloud` são enviados ao Ollama/OpenAI-compatible provider. A repetição `n` usa `seed + n - 1`. O mock é determinístico e rejeita seed. Parâmetros desconhecidos falham, evitando configurações registradas mas não aplicadas.
 
@@ -94,11 +114,23 @@ O output contém:
 
 - `session.json`: hash do dataset e início da sessão;
 - `runs/*.json`: checkpoints individuais, inclusive falhas e skips;
-- `report.json`: relatório normalizado `aecs.experiment-report/v1`, ambiente e comparações pareadas;
+- `report.json`: relatório normalizado `aecs.experiment-report/v2`, ambiente, análise e comparações pareadas;
 - `results.csv`: uma linha por run, com modelo, contexto, seed, baseline, decisão e evidência;
-- `comparisons.csv`: uma linha por par referência/candidato e repetição.
+- `comparisons.csv`: uma linha por par e repetição, com deltas de VCC, first-pass, tokens,
+  custo estimado, latência, escopo e rework;
+- `analysis.csv`: uma linha por variante com amostra, taxas, custo e intervalos de confiança.
 
 O pareamento é sempre feito dentro da mesma tarefa e repetição. Falha de uma variante não some da agregação: o par permanece com `bothCompleted=false` e a razão de cada lado. Runs concluídos registram `EvidenceId` e localização do envelope autenticado que originou os números.
+
+VCC significa aqui uma decisão `Verified` produzida sem alterar o checkout original. First-pass
+exige VCC sem retry. `rework` é declarado estritamente como novas tentativas do agente dentro do
+run; não representa rework pós-merge. Custo continua identificado como estimativa do adapter.
+Valor ausente ou zero não vira custo infinito: torna a métrica primária inconclusiva.
+
+Para cada distribuição, o relatório preserva tamanho, mínimo, quartis, média, mediana, máximo,
+desvio-padrão e intervalo de confiança de 95% da média. A conclusão automática é `Maintain`
+somente quando o efeito mínimo é atingido e o intervalo pareado exclui zero; evidência faltante
+ou incerta produz `Adjust`; um critério de morte atingido produz `Abandon`.
 
 ## CI e providers reais
 

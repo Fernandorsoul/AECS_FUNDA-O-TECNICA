@@ -98,6 +98,25 @@ jobs:
           path: ${{ runner.temp }}/aecs-real-world-e2e/
           if-no-files-found: error
 
+      - name: Context A/B benchmark guard
+        shell: bash
+        run: |
+          benchmark_root="${RUNNER_TEMP}/context-compiler-h1-guard"
+          cp -R experiments/context-compiler-h1/repository "${benchmark_root}"
+          git -C "${benchmark_root}" init --initial-branch main
+          git -C "${benchmark_root}" config user.name "AECS CI"
+          git -C "${benchmark_root}" config user.email "aecs-ci@example.invalid"
+          git -C "${benchmark_root}" add -A
+          git -C "${benchmark_root}" commit -m "H1 benchmark baseline"
+          dotnet build "${benchmark_root}/Benchmark.csproj" --configuration Release --nologo
+
+          cp "${benchmark_root}/tasks/retention.yaml" "${benchmark_root}/src/Unexpected.txt"
+          if dotnet build "${benchmark_root}/Benchmark.csproj" \
+              --configuration Release --no-restore --nologo; then
+            echo "Expected the benchmark guard to reject an untracked source file."
+            exit 1
+          fi
+
       - name: Experiment harness smoke dataset
         shell: bash
         run: |
@@ -122,8 +141,9 @@ jobs:
           test -s "${output_root}/report.json"
           test -s "${output_root}/results.csv"
           test -s "${output_root}/comparisons.csv"
+          test -s "${output_root}/analysis.csv"
           test "$(find "${output_root}/runs" -name '*.json' | wc -l)" -eq 4
-          grep -q '"schemaVersion": "aecs.experiment-report/v1"' "${output_root}/report.json"
+          grep -q '"schemaVersion": "aecs.experiment-report/v2"' "${output_root}/report.json"
 
           dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
             --configuration Release --no-build -- \

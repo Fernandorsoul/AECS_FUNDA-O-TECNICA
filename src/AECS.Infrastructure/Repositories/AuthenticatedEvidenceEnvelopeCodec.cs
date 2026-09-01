@@ -855,7 +855,11 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                     evidence.TaskContract.Budget.MaxTokens) -
                 manifest.ReservedOutputTokens -
                 manifest.PromptOverheadTokens);
-        var invalid = manifest.StrategyVersion != ContextManifestSchema.StrategyVersion ||
+        var naiveStrategy = manifest.StrategyVersion ==
+            ContextManifestSchema.NaiveStrategyVersion;
+        var invalid = manifest.StrategyVersion is not (
+                ContextManifestSchema.StrategyVersion or
+                ContextManifestSchema.NaiveStrategyVersion) ||
             !string.Equals(manifest.TaskId, evidence.TaskContract.Id, StringComparison.Ordinal) ||
             !string.Equals(manifest.BaselineCommit, evidence.Baseline.Commit, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(manifest.Source) ||
@@ -950,6 +954,28 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                     symbolGraph.GraphHash))) ||
             (!string.IsNullOrEmpty(manifest.SymbolGraphHash) &&
                 string.IsNullOrEmpty(manifest.RepositorySnapshotHash));
+
+        invalid = invalid || (naiveStrategy && (
+            manifest.Strategy !=
+                $"{ContextManifestSchema.NaiveStrategyId}+textual-file-inventory" ||
+            manifest.SemanticIndex != "textual-file-inventory" ||
+            !string.IsNullOrEmpty(manifest.SymbolGraphHash) ||
+            !string.IsNullOrEmpty(manifest.RepositorySnapshotHash) ||
+            manifest.Selections is null ||
+            manifest.Selections.Any(selection =>
+                selection.Score != 0 ||
+                selection.Depth != -1 ||
+                selection.Relation != ContextManifestSchema.NaiveStrategyId ||
+                selection.RankingReasons is null ||
+                !selection.RankingReasons.SequenceEqual(
+                    ["ordinal-path-order-only"],
+                    StringComparer.Ordinal)) ||
+            !manifest.Selections.Select(selection => selection.Path).SequenceEqual(
+                manifest.Selections.Select(selection => selection.Path)
+                    .OrderBy(path => path, StringComparer.Ordinal),
+                StringComparer.Ordinal) ||
+            manifest.Files is null ||
+            manifest.Files.Any(file => file.Symbols is null || file.Symbols.Count != 0)));
 
         if (invalid)
         {

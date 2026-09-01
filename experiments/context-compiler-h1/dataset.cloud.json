@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "aecs.experiment-dataset/v2",
+  "id": "context-compiler-h1-cloud",
+  "version": "1.0.0",
+  "repository": {
+    "path": "repository",
+    "baseline": "HEAD"
+  },
+  "repetitions": 10,
+  "referenceVariantId": "naive",
+  "protocol": {
+    "design": "paired-context-ab",
+    "hypothesisId": "H1",
+    "hypothesis": "Graph-selected context improves verified code changes per estimated provider cost compared with naive ordinal context.",
+    "primaryMetric": "vcc-per-estimated-cost",
+    "minimumPairedSamples": 30,
+    "confidenceLevel": 0.95,
+    "deathCriteria": {
+      "minimumRelativeImprovement": 0.05,
+      "maximumCandidateFailureRate": 0.20,
+      "maximumCandidateScopeViolationRate": 0.00
+    }
+  },
+  "tasks": [
+    {
+      "id": "H1-RETENTION",
+      "contractPath": "tasks/retention.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "H1-INVOICE",
+      "contractPath": "tasks/invoice.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "H1-QUEUE",
+      "contractPath": "tasks/queue.yaml",
+      "expectedDecision": "Verified"
+    }
+  ],
+  "variants": [
+    {
+      "id": "naive",
+      "provider": "Cloud",
+      "model": "gpt-4o-mini",
+      "contextStrategy": "naive-path-order",
+      "context": {
+        "maxTokens": 1600,
+        "maxCharacters": 4000,
+        "maxFileCharacters": 400,
+        "maxFileTokens": 200,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 4200,
+      "parameters": {
+        "contextWindowTokens": "16384",
+        "maxOutputTokens": "1600",
+        "temperature": "0.2"
+      }
+    },
+    {
+      "id": "compiled",
+      "provider": "Cloud",
+      "model": "gpt-4o-mini",
+      "contextStrategy": "graph-ranked",
+      "context": {
+        "maxTokens": 1600,
+        "maxCharacters": 4000,
+        "maxFileCharacters": 400,
+        "maxFileTokens": 200,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 4200,
+      "parameters": {
+        "contextWindowTokens": "16384",
+        "maxOutputTokens": "1600",
+        "temperature": "0.2"
+      }
+    }
+  ]
+}
