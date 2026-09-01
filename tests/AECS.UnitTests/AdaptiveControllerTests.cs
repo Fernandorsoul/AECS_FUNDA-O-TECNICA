@@ -1,187 +1,336 @@
 using AECS.Application.AdaptiveController;
 using AECS.Domain.Enums;
+using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using FluentAssertions;
 
 namespace AECS.UnitTests;
 
-public class ExecutionHistoryStoreTests
+public sealed class AdaptiveControllerTests
 {
-    [Fact]
-    public void Add_IncreasesCount()
-    {
-        var store = new ExecutionHistoryStore();
-        store.Add(new ExecutionRecord { TaskId = "T1", Model = "codellama:3b", Risk = RiskLevel.R1, Decision = TaskDecision.Verified });
+    private static readonly string RepositoryPath = Path.GetTempPath();
 
-        store.Count.Should().Be(1);
+    [Fact]
+    public async Task RecommendAsync_ColdStart_UsesDeterministicFixedFallback()
+    {
+        var fixture = new HistoryFixture([]);
+        var controller = fixture.CreateController();
+        var fixedPlan = FixedPlan();
+
+        var result = await controller.RecommendAsync(
+            RepositoryPath,
+            Contract("Fix null handling"),
+            fixedPlan,
+            CancellationToken.None);
+
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.ColdStart);
+        result.RecommendedPlan.Model.Should().Be(fixedPlan.Model);
+        result.RecommendedPlan.Budget.Should().BeSameAs(fixedPlan.Budget);
+        result.SourceEvidenceIds.Should().BeEmpty();
     }
 
     [Fact]
-    public void GetByRisk_FiltersCorrectly()
+    public async Task RecommendAsync_SmallSample_UsesFixedFallback()
     {
-        var store = new ExecutionHistoryStore();
-        store.Add(new ExecutionRecord { TaskId = "T1", Risk = RiskLevel.R1, Model = "m1" });
-        store.Add(new ExecutionRecord { TaskId = "T2", Risk = RiskLevel.R2, Model = "m1" });
-        store.Add(new ExecutionRecord { TaskId = "T3", Risk = RiskLevel.R1, Model = "m1" });
+        var evidence = Enumerable.Range(0, 4)
+            .Select(index => Evidence(
+                $"Fix parser edge {index}",
+                "small-model",
+                TaskDecision.Verified,
+                index))
+            .ToList();
+        var controller = new HistoryFixture(evidence).CreateController();
 
-        var r1Records = store.GetByRisk(RiskLevel.R1);
+        var result = await controller.RecommendAsync(
+            RepositoryPath,
+            Contract("Fix another parser bug"),
+            FixedPlan(),
+            CancellationToken.None);
 
-        r1Records.Should().HaveCount(2);
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.InsufficientSample);
+        result.Inputs.MatchingRecords.Should().Be(4);
+        result.RecommendedPlan.Model.Should().Be("qwen2.5-coder:7b");
     }
 
     [Fact]
-    public void GetModelStats_GroupsByModel()
+    public async Task RecommendAsync_ReadyRecommendation_NeverExpandsBudgetOrCapabilities()
     {
-        var store = new ExecutionHistoryStore();
-        store.Add(new ExecutionRecord { Model = "m1", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.1m });
-        store.Add(new ExecutionRecord { Model = "m1", Risk = RiskLevel.R1, Decision = TaskDecision.Rejected, Cost = 0.2m });
-        store.Add(new ExecutionRecord { Model = "m2", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.05m });
-
-        var stats = store.GetModelStats();
-
-        stats.Should().HaveCount(2);
-        var m1 = stats.First(s => s.Model == "m1");
-        m1.TotalRuns.Should().Be(2);
-        m1.SuccessfulRuns.Should().Be(1);
-        m1.SuccessRate.Should().Be(0.5);
-    }
-}
-
-public class HeuristicModelSelectorTests
-{
-    [Fact]
-    public void SelectModel_InsufficientData_ReturnsDefault()
-    {
-        var store = new ExecutionHistoryStore();
-        var selector = new HeuristicModelSelector(store);
-
-        var model = selector.SelectModel(RiskLevel.R1, "Fix null handling");
-
-        model.Should().Be("codellama:3b");
-    }
-
-    [Fact]
-    public void SelectModel_WithData_SelectsBestModel()
-    {
-        var store = new ExecutionHistoryStore();
-        // m1: 2/3 success
-        store.Add(new ExecutionRecord { Model = "m1", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.1m });
-        store.Add(new ExecutionRecord { Model = "m1", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.1m });
-        store.Add(new ExecutionRecord { Model = "m1", Risk = RiskLevel.R1, Decision = TaskDecision.Rejected, Cost = 0.1m });
-        // m2: 1/2 success
-        store.Add(new ExecutionRecord { Model = "m2", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.05m });
-        store.Add(new ExecutionRecord { Model = "m2", Risk = RiskLevel.R1, Decision = TaskDecision.Rejected, Cost = 0.05m });
-
-        var selector = new HeuristicModelSelector(store, minSamples: 3);
-        var model = selector.SelectModel(RiskLevel.R1, "Fix null handling");
-
-        model.Should().Be("m1"); // Higher success rate
-    }
-
-    [Fact]
-    public void SelectModel_SameSuccessRate_PrefersCheaper()
-    {
-        var store = new ExecutionHistoryStore();
-        store.Add(new ExecutionRecord { Model = "expensive", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.5m });
-        store.Add(new ExecutionRecord { Model = "expensive", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.5m });
-        store.Add(new ExecutionRecord { Model = "cheap", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.01m });
-        store.Add(new ExecutionRecord { Model = "cheap", Risk = RiskLevel.R1, Decision = TaskDecision.Verified, Cost = 0.01m });
-
-        var selector = new HeuristicModelSelector(store, minSamples: 3);
-        var model = selector.SelectModel(RiskLevel.R1, "Fix null handling");
-
-        model.Should().Be("cheap");
-    }
-}
-
-public class HeuristicBudgetOptimizerTests
-{
-    [Fact]
-    public void Optimize_InsufficientData_ReturnsRequested()
-    {
-        var store = new ExecutionHistoryStore();
-        var optimizer = new HeuristicBudgetOptimizer(store);
-        var requested = ExecutionBudget.Default;
-
-        var optimized = optimizer.Optimize(RiskLevel.R1, requested);
-
-        optimized.Should().Be(requested);
-    }
-
-    [Fact]
-    public void Optimize_WithData_AdjustsBudget()
-    {
-        var store = new ExecutionHistoryStore();
-        // Successful runs using ~1000 tokens
-        for (int i = 0; i < 5; i++)
+        var evidence = Enumerable.Range(0, 6)
+            .Select(index => Evidence(
+                $"Fix distinct parser defect {index}",
+                index < 3 ? "best-local-model" : "qwen2.5-coder:7b",
+                TaskDecision.Verified,
+                index,
+                tokens: 800,
+                durationSeconds: 20))
+            .ToList();
+        var controller = new HistoryFixture(evidence).CreateController();
+        var fixedPlan = FixedPlan(new ExecutionBudget
         {
-            store.Add(new ExecutionRecord
+            MaxTokens = 10_000,
+            MaxCostUsd = 0.20m,
+            MaxRetries = 1,
+            MaxDurationSeconds = 120,
+            MaxFilesChanged = 10
+        });
+
+        var result = await controller.RecommendAsync(
+            RepositoryPath,
+            Contract("Fix parser regression"),
+            fixedPlan,
+            CancellationToken.None);
+
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.Ready);
+        result.RecommendedPlan.Model.Should().Be("best-local-model");
+        result.RecommendedPlan.Budget.MaxTokens.Should().BeLessThanOrEqualTo(10_000);
+        result.RecommendedPlan.Budget.MaxDurationSeconds.Should().BeLessThanOrEqualTo(120);
+        ExecutionCapabilityPolicyFingerprint.Create(result.RecommendedPlan.Capabilities)
+            .Should().Be(ExecutionCapabilityPolicyFingerprint.Create(fixedPlan.Capabilities));
+        result.SourceEvidenceIds.Should().HaveCount(6);
+    }
+
+    [Fact]
+    public async Task RecommendAsync_Drift_UsesFixedFallbackAndPersistsRates()
+    {
+        var evidence = Enumerable.Range(0, 6)
+            .Select(index => Evidence(
+                $"Fix unique drift defect {index}",
+                "model-a",
+                index < 3 ? TaskDecision.Verified : TaskDecision.Rejected,
+                index))
+            .ToList();
+        var controller = new HistoryFixture(evidence).CreateController();
+
+        var result = await controller.RecommendAsync(
+            RepositoryPath,
+            Contract("Fix drift defect"),
+            FixedPlan(),
+            CancellationToken.None);
+
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.DriftDetected);
+        result.Inputs.OlderSuccessRate.Should().Be(1d);
+        result.Inputs.RecentSuccessRate.Should().Be(0d);
+        result.RecommendedPlan.Model.Should().Be("qwen2.5-coder:7b");
+    }
+
+    [Fact]
+    public async Task RecommendAsync_ContradictoryHistory_UsesFixedFallback()
+    {
+        var evidence = Enumerable.Range(0, 5)
+            .Select(index => Evidence(
+                "Fix identical parser defect",
+                "model-a",
+                index % 2 == 0 ? TaskDecision.Verified : TaskDecision.Rejected,
+                index))
+            .ToList();
+        var controller = new HistoryFixture(evidence).CreateController();
+
+        var result = await controller.RecommendAsync(
+            RepositoryPath,
+            Contract("Fix another parser defect"),
+            FixedPlan(),
+            CancellationToken.None);
+
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.ContradictoryHistory);
+        result.RecommendedPlan.Model.Should().Be("qwen2.5-coder:7b");
+    }
+
+    [Fact]
+    public async Task RecommendAsync_IncompleteAndNonReproducibleHistory_IsExcluded()
+    {
+        var incomplete = Evidence("Fix incomplete", "model-a", TaskDecision.Verified, 0,
+            state: TaskState.Running);
+        var nonReproducible = Evidence("Fix missing hash", "model-a",
+            TaskDecision.Verified, 1, manifestHash: string.Empty);
+        var fixture = new HistoryFixture(
+            [incomplete, nonReproducible],
+            ["An evidence record was invalid and was omitted."]);
+
+        var result = await fixture.CreateController().RecommendAsync(
+            RepositoryPath,
+            Contract("Fix current defect"),
+            FixedPlan(),
+            CancellationToken.None);
+
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.InvalidHistory);
+        result.Inputs.ExcludedIncompleteRecords.Should().Be(1);
+        result.Inputs.ExcludedNonReproducibleRecords.Should().Be(1);
+        result.Inputs.InvalidOrTamperedRecords.Should().Be(1);
+        result.SourceEvidenceIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateReportAsync_GroupsOnlyShadowEvidenceByRiskAndTaskType()
+    {
+        var included = Evidence("Fix report bug", "model-a", TaskDecision.Verified, 0,
+            shadow: Shadow(RiskLevel.R1, "bugfix"));
+        var legacy = Evidence("Add report feature", "model-b", TaskDecision.Rejected, 1);
+        var controller = new HistoryFixture([included, legacy]).CreateController();
+
+        var report = await controller.CreateReportAsync(
+            RepositoryPath,
+            100,
+            CancellationToken.None);
+
+        report.AuthenticatedRecords.Should().Be(2);
+        report.IncludedShadowRecords.Should().Be(1);
+        report.ExcludedRecords.Should().Be(1);
+        report.Groups.Should().ContainSingle().Which.Should().Match<AdaptiveShadowReportGroup>(
+            group => group.Risk == RiskLevel.R1 &&
+                     group.TaskType == "bugfix" &&
+                     group.Executions == 1 &&
+                     group.VerifiedExecutions == 1);
+    }
+
+    private static TaskContract Contract(string objective) => new()
+    {
+        Id = "TASK-34",
+        Objective = objective,
+        Constraints = new TaskConstraints { SecurityRisk = RiskLevel.R1 },
+        Budget = ExecutionBudget.Default
+    };
+
+    private static ExecutionPlan FixedPlan(ExecutionBudget? budget = null) => new()
+    {
+        TaskId = "TASK-34",
+        Model = "qwen2.5-coder:7b",
+        Risk = RiskLevel.R1,
+        Budget = budget ?? ExecutionBudget.Default,
+        Verification = new VerificationProfile(),
+        Capabilities = ExecutionCapabilityPolicy.RestrictiveDefault()
+    };
+
+    private static ExecutionEvidence Evidence(
+        string objective,
+        string model,
+        TaskDecision decision,
+        int order,
+        int tokens = 1000,
+        int durationSeconds = 30,
+        TaskState? state = null,
+        string manifestHash = "sha256:context",
+        AdaptiveShadowEvidence? shadow = null)
+    {
+        var taskId = $"history-{order}";
+        return new ExecutionEvidence
+        {
+            Id = Guid.NewGuid(),
+            TaskContract = new TaskContract
             {
-                Risk = RiskLevel.R1,
-                Decision = TaskDecision.Verified,
-                InputTokens = 500,
-                OutputTokens = 500,
-                Duration = TimeSpan.FromSeconds(30),
-                Cost = 0.01m
-            });
+                Id = taskId,
+                Objective = objective,
+                Constraints = new TaskConstraints { SecurityRisk = RiskLevel.R1 }
+            },
+            AgentRun = new AgentRun
+            {
+                Id = Guid.NewGuid(),
+                TaskId = taskId,
+                Model = model,
+                InputTokens = tokens / 2,
+                OutputTokens = tokens - tokens / 2
+            },
+            AgentResult = new AgentRunResult
+            {
+                Success = decision == TaskDecision.Verified,
+                Duration = TimeSpan.FromSeconds(durationSeconds)
+            },
+            Baseline = new BaselineSnapshot
+            {
+                RepositoryPath = RepositoryPath,
+                Commit = new string('a', 40)
+            },
+            ContextManifest = new ContextManifest
+            {
+                Strategy = ContextManifestSchema.GraphStrategyId,
+                ManifestHash = manifestHash
+            },
+            CandidateChangeSet = new CandidateChangeSet
+            {
+                DiffHash = "sha256:diff"
+            },
+            FinalDecision = new FinalDecisionRecord
+            {
+                Decision = decision,
+                State = state ?? (decision == TaskDecision.Verified
+                    ? TaskState.Verified
+                    : TaskState.Rejected)
+            },
+            AdaptiveShadow = shadow,
+            CreatedAt = DateTime.UnixEpoch.AddMinutes(order)
+        };
+    }
+
+    private static AdaptiveShadowEvidence Shadow(RiskLevel risk, string taskType) => new()
+    {
+        Recommendation = new AdaptiveShadowRecommendation
+        {
+            DataStatus = AdaptiveShadowDataStatus.Ready,
+            Inputs = new AdaptiveShadowInputs { Risk = risk, TaskType = taskType }
+        },
+        Evaluation = new AdaptiveShadowEvaluation
+        {
+            FixedControllerDecision = TaskDecision.Verified,
+            DurationSeconds = 10,
+            RecommendationAgreedWithFixedModel = true
+        }
+    };
+
+    private sealed class HistoryFixture : IExecutionEvidenceStore, IEvidenceGraphSource
+    {
+        private readonly Dictionary<Guid, ExecutionEvidence> _evidence;
+        private readonly List<string> _diagnostics;
+
+        public HistoryFixture(
+            IEnumerable<ExecutionEvidence> evidence,
+            IEnumerable<string>? diagnostics = null)
+        {
+            _evidence = evidence.ToDictionary(item => item.Id);
+            _diagnostics = diagnostics?.ToList() ?? [];
         }
 
-        var optimizer = new HeuristicBudgetOptimizer(store, minSamples: 3);
-        var requested = new ExecutionBudget { MaxTokens = 500, MaxDurationSeconds = 60 };
-        var optimized = optimizer.Optimize(RiskLevel.R1, requested);
+        public AdaptiveController CreateController() => new(this, this);
 
-        // Should increase tokens since p75 * 1.5 > 500
-        optimized.MaxTokens.Should().BeGreaterThan(500);
-    }
-}
+        public void EnsureRepositoryIsolation(string repositoryPath) { }
 
-public class AdaptiveControllerTests
-{
-    [Fact]
-    public async Task PlanAsync_InsufficientData_UsesFallback()
-    {
-        var store = new ExecutionHistoryStore();
-        var controller = new AdaptiveController(store);
-        var contract = new TaskContract
-        {
-            Id = "T1",
-            Constraints = new TaskConstraints { SecurityRisk = RiskLevel.R1 }
-        };
+        public Task<ExecutionEvidence?> LoadAsync(
+            Guid evidenceId,
+            CancellationToken cancellationToken) => Task.FromResult(
+                _evidence.GetValueOrDefault(evidenceId));
 
-        var plan = await controller.PlanAsync(contract, CancellationToken.None);
-
-        plan.Model.Should().Be("qwen2.5-coder:7b"); // Fallback default
-    }
-
-    [Fact]
-    public async Task PlanAsync_WithData_UsesAdaptive()
-    {
-        var store = new ExecutionHistoryStore();
-        // Add enough data
-        for (int i = 0; i < 6; i++)
-        {
-            store.Add(new ExecutionRecord
+        public Task<EvidenceGraphQueryResult> QueryEvidenceGraphsAsync(
+            EvidenceGraphQuery query,
+            EvidenceReadScope scope,
+            CancellationToken cancellationToken) => Task.FromResult(new EvidenceGraphQueryResult
             {
-                Model = "custom-model",
-                Risk = RiskLevel.R1,
-                Decision = TaskDecision.Verified,
-                InputTokens = 100,
-                OutputTokens = 100,
-                Cost = 0.01m,
-                Duration = TimeSpan.FromSeconds(10)
+                Items = _evidence.Values
+                    .OrderByDescending(item => item.CreatedAt)
+                    .Take(query.Limit)
+                    .Select(item => new EvidenceGraphSummary
+                    {
+                        EvidenceId = item.Id,
+                        CreatedAt = item.CreatedAt
+                    })
+                    .ToList(),
+                Diagnostics = _diagnostics
             });
-        }
 
-        var controller = new AdaptiveController(store);
-        var contract = new TaskContract
-        {
-            Id = "T1",
-            Budget = ExecutionBudget.Default,
-            Constraints = new TaskConstraints { SecurityRisk = RiskLevel.R1 }
-        };
+        public Task<EvidenceGraph?> LoadEvidenceGraphAsync(
+            Guid evidenceId,
+            EvidenceReadScope scope,
+            CancellationToken cancellationToken) => Task.FromResult<EvidenceGraph?>(null);
 
-        var plan = await controller.PlanAsync(contract, CancellationToken.None);
+        public Task<string> SaveAsync(
+            ExecutionEvidence evidence,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        plan.Model.Should().Be("custom-model");
+        public Task AppendPromotionAsync(
+            Guid evidenceId,
+            CandidatePromotionEvidence promotion,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task AppendReplayAsync(
+            Guid evidenceId,
+            ExecutionReplayEvidence replay,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AECS.Application.ContextCompiler;
+using AECS.Application.AdaptiveController;
 using AECS.Domain.Enums;
 using AECS.Domain.Exceptions;
 using AECS.Domain.Models;
@@ -14,6 +15,62 @@ namespace AECS.IntegrationTests;
 
 public sealed class AuthenticatedEvidenceStoreTests
 {
+    [Fact]
+    public async Task AdaptiveShadow_UsesOnlyAuthenticatedHistory_AndSignalsTamperedRecord()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var repository = Path.Combine(fixture.RootPath, "repository");
+        Directory.CreateDirectory(repository);
+        var paths = new List<string>();
+        for (var index = 0; index < 5; index++)
+        {
+            var context = RepositoryContextCompiler.EmptyManifest(
+                "TASK-EVIDENCE-001",
+                "0123456789abcdef");
+            paths.Add(await fixture.Store.SaveAsync(
+                fixture.CreateEvidence(
+                    context,
+                    $"Fix authenticated defect {index}",
+                    "trusted-local-model",
+                    DateTime.UnixEpoch.AddMinutes(index)),
+                CancellationToken.None));
+        }
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(paths[0]))!.AsObject();
+        document["evidence"]!["agentRun"]!["model"] = "forged-model";
+        await File.WriteAllTextAsync(
+            paths[0],
+            document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        var capabilities = ExecutionCapabilityPolicy.RestrictiveDefault();
+        var fixedPlan = new ExecutionPlan
+        {
+            TaskId = "TASK-34",
+            Model = "qwen2.5-coder:7b",
+            Risk = RiskLevel.R0,
+            Budget = ExecutionBudget.Default,
+            Verification = new VerificationProfile(),
+            Capabilities = capabilities
+        };
+
+        var result = await new AdaptiveController(fixture.Store, fixture.Store)
+            .RecommendAsync(
+                repository,
+                new TaskContract
+                {
+                    Id = "TASK-34",
+                    Objective = "Fix current authenticated defect",
+                    Constraints = new TaskConstraints { SecurityRisk = RiskLevel.R0 }
+                },
+                fixedPlan,
+                CancellationToken.None);
+
+        result.DataStatus.Should().Be(AdaptiveShadowDataStatus.InsufficientSample);
+        result.Inputs.AuthenticatedRecords.Should().Be(4);
+        result.Inputs.InvalidOrTamperedRecords.Should().Be(1);
+        result.SourceEvidenceIds.Should().HaveCount(4);
+        result.RecommendedPlan.Model.Should().Be(fixedPlan.Model);
+        result.Diagnostics.Should().ContainSingle(message => message.Contains("invalid"));
+    }
+
     [Fact]
     public async Task Save_WritesSignedVersionedEnvelope_ThatSurvivesStoreRestart()
     {
@@ -543,7 +600,11 @@ public sealed class AuthenticatedEvidenceStoreTests
         public JsonExecutionEvidenceStore CreateRestartedStore() =>
             new(EvidencePath, KeyDirectoryPath);
 
-        public ExecutionEvidence CreateEvidence(ContextManifest? contextManifest = null)
+        public ExecutionEvidence CreateEvidence(
+            ContextManifest? contextManifest = null,
+            string objective = "Verify authenticated evidence",
+            string model = "",
+            DateTime? createdAt = null)
         {
             var taskId = "TASK-EVIDENCE-001";
             var runId = Guid.NewGuid();
@@ -553,10 +614,21 @@ public sealed class AuthenticatedEvidenceStoreTests
                 TaskContract = new TaskContract
                 {
                     Id = taskId,
-                    Objective = "Verify authenticated evidence"
+                    Objective = objective
                 },
-                AgentRun = new AgentRun { Id = runId, TaskId = taskId },
-                AgentResult = new AgentRunResult { Success = true },
+                AgentRun = new AgentRun
+                {
+                    Id = runId,
+                    TaskId = taskId,
+                    Model = model,
+                    InputTokens = 100,
+                    OutputTokens = 50
+                },
+                AgentResult = new AgentRunResult
+                {
+                    Success = true,
+                    Duration = TimeSpan.FromSeconds(5)
+                },
                 Baseline = new BaselineSnapshot
                 {
                     Commit = "0123456789abcdef",
@@ -578,7 +650,8 @@ public sealed class AuthenticatedEvidenceStoreTests
                     Decision = TaskDecision.Verified,
                     State = TaskState.Verified,
                     Reason = "all required gates passed"
-                }
+                },
+                CreatedAt = createdAt ?? DateTime.UtcNow
             };
         }
 

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AECS.Application;
+using AECS.Application.AdaptiveController;
 using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
 using AECS.Application.ContextCompiler;
@@ -47,8 +48,68 @@ else if (command == "replay")
     return await RunReplay(args[1..]);
 else if (command == "history")
     return await RunHistory(args[1..]);
+else if (command == "adaptive-report")
+    return await RunAdaptiveReport(args[1..]);
 else
     return await RunSingle(args);
+
+static async Task<int> RunAdaptiveReport(string[] args)
+{
+    const string usage =
+        "Usage: aecs adaptive-report --repo <path> [--limit <1-500>] " +
+        "[--format <text|json>] " + EvidenceStoreSelection.Usage;
+    string? repositoryPath = null;
+    var limit = 500;
+    var format = "text";
+    var selection = new EvidenceStoreSelection();
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--repo" && index + 1 < args.Length)
+            repositoryPath = args[++index];
+        else if (args[index] == "--limit" && index + 1 < args.Length &&
+                 int.TryParse(args[++index], out var parsedLimit))
+            limit = parsedLimit;
+        else if (args[index] == "--format" && index + 1 < args.Length)
+            format = args[++index];
+        else if (selection.TryConsume(args, ref index))
+        {
+        }
+        else
+        {
+            Console.WriteLine(usage);
+            return 1;
+        }
+    }
+    if (repositoryPath is null || limit is < 1 or > 500 ||
+        format is not ("text" or "json"))
+    {
+        Console.WriteLine(usage);
+        return 1;
+    }
+    if (!TryCreateEvidenceStore(selection, out var store))
+        return 1;
+    if (store is not IEvidenceGraphSource graphSource)
+    {
+        Console.WriteLine("ERROR: selected evidence store does not support authenticated history queries.");
+        return 1;
+    }
+    try
+    {
+        var report = await new AdaptiveController(store, graphSource).CreateReportAsync(
+            repositoryPath,
+            limit,
+            CancellationToken.None);
+        Console.Write(format == "json"
+            ? AdaptiveShadowReportFormatter.ToJson(report) + Environment.NewLine
+            : AdaptiveShadowReportFormatter.ToText(report));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERROR: adaptive shadow report failed closed: {ex.Message}");
+        return 1;
+    }
+}
 
 static async Task<int> RunHistory(string[] args)
 {
@@ -910,6 +971,9 @@ static async Task<int> RunSingle(string[] args)
             "       aecs evidence <show|list|trace> --repo <path> " +
             "[--evidence <id>] [--format <text|json|dot>] " +
             EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs adaptive-report --repo <path> [--limit <1-500>] " +
+            "[--format <text|json>] " + EvidenceStoreSelection.Usage);
         Console.WriteLine("       aecs evidence-key rotate [--key-directory <path>]");
         return 1;
     }
