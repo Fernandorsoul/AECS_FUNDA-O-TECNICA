@@ -7,7 +7,7 @@ O `CSharpSymbolGraph` transforma o inventário C# do `RepositorySnapshot` em fat
 | Campo | Valor atual | Papel |
 | --- | --- | --- |
 | `schemaVersion` | `aecs.csharp-symbol-graph/v1` | formato persistido e validado no store |
-| `strategyVersion` | `roslyn-msbuild-symbol-graph/v1` | estratégia de carga e extração semântica |
+| `strategyVersion` | `roslyn-msbuild-symbol-graph/v2` | estratégia de carga e extração semântica; v1 permanece aceito na leitura |
 | `graphHash` | SHA-256 | endereço do grafo canônico ordenado |
 | `repositorySnapshotHash` | SHA-256 | vínculo com o inventário que autorizou os arquivos |
 
@@ -26,10 +26,10 @@ O modelo representa:
 - projetos, arquivos, namespaces, tipos e membros;
 - classes, interfaces, structs, enums, delegates e records;
 - overloads, genéricos e declarações parciais;
-- contenção, declaração, herança, implementação e referências semânticas;
+- contenção, declaração, herança, implementação, construção de objetos e referências semânticas;
 - referências entre projetos e alvos externos conhecidos pelo compilador.
 
-IDs de projetos, nós, arestas e diagnósticos derivam de identidades canônicas. Hashes individuais cobrem os campos semânticos de cada elemento; `graphHash` cobre versões, opções, projetos, nós, arestas e diagnósticos ordenados. Overloads usam documentation IDs distintos, enquanto partes do mesmo tipo parcial convergem para um único nó com múltiplos caminhos.
+IDs de projetos, nós, arestas e diagnósticos derivam de identidades canônicas. Hashes individuais cobrem os campos semânticos de cada elemento; `graphHash` cobre versões, opções, projetos, nós, arestas e diagnósticos ordenados. Overloads usam documentation IDs distintos, enquanto partes do mesmo tipo parcial convergem para um único nó com múltiplos caminhos. A estratégia v2 também registra constraints dos parâmetros genéricos nos modificadores semânticos dos nós.
 
 ## Diagnósticos e fallback
 

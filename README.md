@@ -42,14 +42,14 @@ O protótipo já inclui:
 - `CSharpSymbolGraph` versionado e endereçado por conteúdo, extraído por Roslyn/MSBuild com tipos, membros, herança, implementação e referências;
 - preflight da baseline e gates versionados independentes para unitários, integração e aceite, com modos required/optional/disabled e contagem TRX;
 - critérios de aceite ligados a verificadores ou testes filtrados com resultado TRX;
-- verificadores semânticos EB001–EB005, com política para falhas críticas e gates explicitamente requeridos;
+- verificadores semânticos EB001–EB004 por diff de grafos Roslyn da baseline e do candidato, com evidência por regra e símbolo; EB005 permanece heurístico;
 - compilação seletiva e limitada de contexto em toda execução staged;
 - `CandidateChangeSet` derivado do Git e evidência canônica assinada em JSON ou PostgreSQL;
 - promoção controlada ou exportação do patch como operações separadas;
 - execução em lote com métricas como taxa de verificação e CPVC;
 - REPL interativo, chamado Jarvis.
 
-Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes já conectados na CLI daqueles que ainda são fundação para etapas futuras.
+Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes já conectados na CLI daqueles que ainda são fundação para etapas futuras. O fluxo e a matriz de fixtures de EB001–EB004 estão em [Verificação semântica](docs/semantic-verification.md).
 
 ## Pré-requisitos
 

@@ -17,35 +17,26 @@ public class EB004Verifier : IVerifier
     {
         try
         {
-            var diff = context.CandidateChangeSet.Diff;
-
-            if (string.IsNullOrEmpty(diff))
-            {
-                return new VerificationResult
-                {
-                    AgentRunId = context.AgentRunId,
-                    Verifier = Name,
-                    Status = VerificationStatus.Skip,
-                    Severity = Severity.Info,
-                    Message = "No diff available for missing change analysis"
-                };
-            }
-
-            var result = _verifier.Verify(context.RepoPath, diff);
+            var input = SemanticAnalysisInput.From(context);
+            var result = _verifier.Verify(input);
 
             if (result.HasMissingChanges)
             {
                 var messages = result.MissingChanges
                     .Take(5)
-                    .Select(mc => mc.Detail);
+                    .Select(mc => mc.Justification);
+
+                var hasErrors = result.MissingChanges.Any(change =>
+                    change.Severity >= RuleSeverity.Error);
 
                 return new VerificationResult
                 {
                     AgentRunId = context.AgentRunId,
                     Verifier = Name,
-                    Status = VerificationStatus.Pass, // Warnings don't block
-                    Severity = Severity.Warning,
-                    Message = $"Possible missing changes ({result.MissingChanges.Count}):\n{string.Join("\n", messages)}"
+                    Status = hasErrors ? VerificationStatus.Fail : VerificationStatus.Pass,
+                    Severity = hasErrors ? Severity.Error : Severity.Warning,
+                    Message = $"Possible missing changes ({result.MissingChanges.Count}):\n{string.Join("\n", messages)}",
+                    Semantic = SemanticEvidenceFactory.Create(input, result.MissingChanges)
                 };
             }
 
@@ -55,7 +46,8 @@ public class EB004Verifier : IVerifier
                 Verifier = Name,
                 Status = VerificationStatus.Pass,
                 Severity = Severity.Info,
-                Message = $"No missing changes detected ({result.FilesAnalyzed} files analyzed)"
+                Message = $"No missing changes detected ({result.FilesAnalyzed} impacted files analyzed)",
+                Semantic = SemanticEvidenceFactory.Create(input, [])
             };
         }
         catch (Exception ex)
@@ -65,7 +57,7 @@ public class EB004Verifier : IVerifier
                 AgentRunId = context.AgentRunId,
                 Verifier = Name,
                 Status = VerificationStatus.Error,
-                Severity = Severity.Warning,
+                Severity = Severity.Critical,
                 Message = $"EB004 verifier error: {ex.Message}"
             };
         }

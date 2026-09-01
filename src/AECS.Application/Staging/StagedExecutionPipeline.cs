@@ -3,6 +3,7 @@ using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
 using AECS.Application.ControlKernel;
 using AECS.Application.RepositorySnapshots;
+using AECS.Application.SemanticLinter;
 using AECS.Application.SymbolGraphs;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
@@ -292,6 +293,9 @@ public sealed class StagedExecutionPipeline
                 stagedProcessRunner,
                 verificationContext,
                 applicationResult,
+                repositorySnapshot,
+                symbolGraph,
+                baselineCommands,
                 BaselineSecurityFingerprints(baselineVerificationResults),
                 acceptanceCriteriaResults,
                 agentResult.FailureKind is AgentFailureKind.Cancelled or AgentFailureKind.BudgetExceeded
@@ -557,6 +561,9 @@ public sealed class StagedExecutionPipeline
         IProcessRunner stagedProcessRunner,
         VerificationContext context,
         FileApplicatorResult applicationResult,
+        RepositorySnapshot baselineSnapshot,
+        CSharpSymbolGraph baselineGraph,
+        IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
         IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteriaResults,
         CancellationToken cancellationToken,
@@ -640,6 +647,14 @@ public sealed class StagedExecutionPipeline
 
         if (prerequisitesPassed && buildPassed)
         {
+            var semanticContext = await SemanticVerificationContextFactory.CreateAsync(
+                context,
+                baselineSnapshot,
+                baselineGraph,
+                baselineCommands,
+                _repositorySnapshotBuilder,
+                _symbolGraphBuilder,
+                cancellationToken);
             var semanticVerifiers = new IVerifier[]
             {
                 new EB001Verifier(),
@@ -650,7 +665,7 @@ public sealed class StagedExecutionPipeline
             };
 
             foreach (var verifier in semanticVerifiers)
-                results.Add(await RunVerifierAsync(verifier, context, cancellationToken));
+                results.Add(await RunVerifierAsync(verifier, semanticContext, cancellationToken));
         }
 
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)

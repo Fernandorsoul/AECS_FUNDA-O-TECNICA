@@ -415,6 +415,8 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 "Test suite evidence is incomplete, inconsistent, or has an unsupported schema.");
         }
 
+        ValidateSemanticEvidence(evidence);
+
         var snapshot = evidence.RepositorySnapshot;
         if (snapshot is not null &&
             (snapshot.SchemaVersion != RepositorySnapshotSchema.SnapshotVersion ||
@@ -516,7 +518,8 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             var snapshotProjects = snapshot?.Projects.Select(project => project.Path).ToHashSet(
                 StringComparer.Ordinal) ?? [];
             if (symbolGraph.SchemaVersion != CSharpSymbolGraphSchema.GraphVersion ||
-                symbolGraph.StrategyVersion != CSharpSymbolGraphSchema.StrategyVersion ||
+                !CSharpSymbolGraphSchema.IsSupportedStrategyVersion(
+                    symbolGraph.StrategyVersion) ||
                 snapshot is null ||
                 !FixedTimeTextEquals(
                     symbolGraph.RepositorySnapshotHash,
@@ -587,7 +590,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                     !edge.Id.StartsWith("CSE-", StringComparison.Ordinal) ||
                     !IsSha256(edge.Hash) ||
                     edge.Kind is not ("contains" or "declares" or "inherits" or "implements" or
-                        "project-reference" or "references") ||
+                        "project-reference" or "references" or "constructs") ||
                     !nodeIds.Contains(edge.FromNodeId) ||
                     !nodeIds.Contains(edge.ToNodeId) ||
                     edge.Id != CSharpSymbolGraphFingerprint.StableEdgeId(
@@ -623,6 +626,64 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 throw new EvidenceIntegrityException(
                     "C# symbol graph is incomplete, inconsistent, or has an unsupported schema.");
             }
+        }
+    }
+
+    private static void ValidateSemanticEvidence(ExecutionEvidence evidence)
+    {
+        var semanticResults = evidence.BaselineVerificationResults
+            .Concat(evidence.VerificationResults)
+            .Where(result => result.Semantic is not null)
+            .Select(result => result.Semantic!)
+            .ToList();
+        if (semanticResults.Count == 0)
+            return;
+
+        var snapshot = evidence.RepositorySnapshot;
+        var symbolGraph = evidence.CSharpSymbolGraph;
+        var changedFiles = evidence.CandidateChangeSet.ChangedFiles
+            .Select(path => path.Replace('\\', '/').Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var invalid = snapshot is null ||
+            symbolGraph is null ||
+            semanticResults.Any(semantic =>
+                semantic.SchemaVersion != SemanticVerificationEvidenceSchema.Version ||
+                !string.Equals(
+                    semantic.BaselineCommit,
+                    evidence.Baseline.Commit,
+                    StringComparison.Ordinal) ||
+                !FixedTimeTextEquals(
+                    semantic.BaselineSnapshotHash,
+                    snapshot.SnapshotHash) ||
+                !FixedTimeTextEquals(
+                    semantic.BaselineGraphHash,
+                    symbolGraph.GraphHash) ||
+                !IsSha256(semantic.CandidateSnapshotHash) ||
+                !IsSha256(semantic.CandidateGraphHash) ||
+                semantic.ImpactedFiles is null ||
+                semantic.Findings is null ||
+                semantic.ImpactedFiles.Any(path =>
+                    !IsSafeRepositoryPath(path) || !changedFiles.Contains(path)) ||
+                semantic.ImpactedFiles.Distinct(StringComparer.OrdinalIgnoreCase).Count() !=
+                    semantic.ImpactedFiles.Count ||
+                semantic.ImpactedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    .SetEquals(changedFiles) == false ||
+                semantic.Findings.Any(finding =>
+                    string.IsNullOrWhiteSpace(finding.RuleId) ||
+                    string.IsNullOrWhiteSpace(finding.SymbolId) ||
+                    string.IsNullOrWhiteSpace(finding.Symbol) ||
+                    !IsSafeRepositoryPath(finding.FilePath) ||
+                    finding.Severity is not ("Info" or "Warning" or "Error" or "Critical") ||
+                    string.IsNullOrWhiteSpace(finding.Baseline) ||
+                    !string.Equals(
+                        finding.Baseline,
+                        semantic.BaselineCommit,
+                        StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(finding.Justification)));
+        if (invalid)
+        {
+            throw new EvidenceIntegrityException(
+                "Semantic verification evidence is incomplete, inconsistent, or has an unsupported schema.");
         }
     }
 

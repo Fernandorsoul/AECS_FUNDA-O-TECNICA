@@ -1,6 +1,7 @@
 using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Application.RepositorySnapshots;
+using AECS.Application.SemanticLinter;
 using AECS.Application.SymbolGraphs;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -271,6 +272,9 @@ public sealed class ExecutionReplayService
         var candidateResults = await VerifyCandidateAsync(
             stagedProcessRunner,
             candidateContext,
+            replaySnapshot,
+            replaySymbolGraph,
+            baselineCommands,
             BaselineSecurityFingerprints(baselineResults),
             acceptanceCriteria,
             cancellationToken);
@@ -483,6 +487,9 @@ public sealed class ExecutionReplayService
     private async Task<List<VerificationResult>> VerifyCandidateAsync(
         IProcessRunner stagedProcessRunner,
         VerificationContext context,
+        RepositorySnapshot? baselineSnapshot,
+        CSharpSymbolGraph? baselineGraph,
+        IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
         IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteria,
         CancellationToken cancellationToken)
@@ -561,13 +568,27 @@ public sealed class ExecutionReplayService
 
         if (prerequisitesPassed && buildPassed)
         {
+            var semanticContext = baselineSnapshot is not null && baselineGraph is not null
+                ? await SemanticVerificationContextFactory.CreateAsync(
+                    context,
+                    baselineSnapshot,
+                    baselineGraph,
+                    baselineCommands,
+                    _repositorySnapshotBuilder,
+                    _symbolGraphBuilder,
+                    cancellationToken)
+                : SemanticVerificationContextFactory.CreateError(
+                    context,
+                    baselineSnapshot,
+                    baselineGraph,
+                    "Authenticated replay has no baseline semantic snapshot.");
             IVerifier[] semanticVerifiers =
             [
                 new EB001Verifier(), new EB002Verifier(), new EB003Verifier(),
                 new EB004Verifier(), new EB005Verifier()
             ];
             foreach (var verifier in semanticVerifiers)
-                results.Add(await RunVerifierAsync(verifier, context, cancellationToken));
+                results.Add(await RunVerifierAsync(verifier, semanticContext, cancellationToken));
         }
 
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)

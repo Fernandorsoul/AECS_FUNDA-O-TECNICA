@@ -39,6 +39,41 @@ public sealed partial class RepositorySnapshotBuilder
         IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
         CancellationToken cancellationToken)
     {
+        return await BuildTreeAsync(
+            workspacePath,
+            baselineCommit,
+            baselineCommit,
+            contract,
+            baselineCommands,
+            cancellationToken);
+    }
+
+    public async Task<RepositorySnapshot> BuildCandidateAsync(
+        string workspacePath,
+        string baselineCommit,
+        TaskContract contract,
+        IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
+        CancellationToken cancellationToken)
+    {
+        var root = Path.GetFullPath(workspacePath);
+        var candidateTree = await WriteCandidateTreeAsync(root, cancellationToken);
+        return await BuildTreeAsync(
+            root,
+            candidateTree,
+            baselineCommit,
+            contract,
+            baselineCommands,
+            cancellationToken);
+    }
+
+    private async Task<RepositorySnapshot> BuildTreeAsync(
+        string workspacePath,
+        string treeish,
+        string baselineCommit,
+        TaskContract contract,
+        IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(baselineCommands);
         var root = Path.GetFullPath(workspacePath);
@@ -61,7 +96,10 @@ public sealed partial class RepositorySnapshotBuilder
             .ThenBy(path => path, StringComparer.Ordinal)
             .ToList();
 
-        var tree = await ReadGitTreeAsync(root, baselineCommit, cancellationToken);
+        if (!GitObjectIdRegex().IsMatch(treeish))
+            throw new InvalidOperationException("Repository snapshot requires a valid Git tree.");
+
+        var tree = await ReadGitTreeAsync(root, treeish, cancellationToken);
         var included = new List<TreeEntry>();
         var excludedEntryCount = 0;
         foreach (var entry in tree)
@@ -181,22 +219,43 @@ public sealed partial class RepositorySnapshotBuilder
         return WithHash(snapshot, RepositorySnapshotFingerprint.Create(snapshot));
     }
 
-    private async Task<List<TreeEntry>> ReadGitTreeAsync(
+    private async Task<string> WriteCandidateTreeAsync(
         string root,
-        string baselineCommit,
         CancellationToken cancellationToken)
     {
         var result = await _processRunner.RunAsync(new ProcessExecutionRequest
         {
             FileName = "git",
-            Arguments = ["ls-tree", "-r", "-l", "-z", "--full-tree", baselineCommit],
+            Arguments = ["write-tree"],
+            WorkingDirectory = root,
+            Timeout = GitTimeout
+        }, cancellationToken);
+        var tree = result.StandardOutput.Trim();
+        if (!result.Succeeded || !GitObjectIdRegex().IsMatch(tree))
+        {
+            throw new InvalidOperationException(
+                $"Could not materialize candidate Git tree: exit code {result.ExitCode}; " +
+                result.StandardError.Trim());
+        }
+        return tree;
+    }
+
+    private async Task<List<TreeEntry>> ReadGitTreeAsync(
+        string root,
+        string treeish,
+        CancellationToken cancellationToken)
+    {
+        var result = await _processRunner.RunAsync(new ProcessExecutionRequest
+        {
+            FileName = "git",
+            Arguments = ["ls-tree", "-r", "-l", "-z", "--full-tree", treeish],
             WorkingDirectory = root,
             Timeout = GitTimeout
         }, cancellationToken);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(
-                $"Could not inventory baseline Git tree: exit code {result.ExitCode}; " +
+                $"Could not inventory Git tree: exit code {result.ExitCode}; " +
                 result.StandardError.Trim());
         }
 

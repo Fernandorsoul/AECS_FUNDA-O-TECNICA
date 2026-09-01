@@ -666,6 +666,7 @@ static async Task<int> RunSingle(string[] args)
                 $"failed={result.TestSuite.Failed}, skipped={result.TestSuite.Skipped} " +
                 $"[{result.TestSuite.Target}]");
         }
+        PrintSemanticEvidence(result);
     }
     if (execution.BaselineVerificationResults.Count == 0)
         Console.WriteLine("  (not required)");
@@ -728,6 +729,7 @@ static async Task<int> RunSingle(string[] args)
                 $"failed={result.TestSuite.Failed}, skipped={result.TestSuite.Skipped} " +
                 $"[{result.TestSuite.Target}]");
         }
+        PrintSemanticEvidence(result);
     }
 
     var securityResults = execution.BaselineVerificationResults
@@ -770,6 +772,28 @@ static async Task<int> RunSingle(string[] args)
     Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
 
     return 0;
+}
+
+static void PrintSemanticEvidence(VerificationResult result)
+{
+    if (result.Semantic is null)
+        return;
+
+    Console.WriteLine(
+        $"    semantic baseline={result.Semantic.BaselineGraphHash} " +
+        $"candidate={result.Semantic.CandidateGraphHash} " +
+        $"impacted={result.Semantic.ImpactedFiles.Count}");
+    foreach (var finding in result.Semantic.Findings.Take(5))
+    {
+        Console.WriteLine(
+            $"    {finding.RuleId} [{finding.Severity}] {finding.Symbol} " +
+            $"@ {finding.FilePath}: {finding.Justification}");
+    }
+    if (result.Semantic.Findings.Count > 5)
+    {
+        Console.WriteLine(
+            $"    ({result.Semantic.Findings.Count - 5} additional semantic findings)");
+    }
 }
 
 static StagedExecutionPipeline CreatePipeline(

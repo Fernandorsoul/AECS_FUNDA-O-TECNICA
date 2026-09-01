@@ -84,6 +84,36 @@ public sealed class RepositorySnapshotTests
     }
 
     [Fact]
+    public async Task CandidateSnapshot_UsesStagedIndexWithoutMovingBaselineCommit()
+    {
+        await using var fixture = await SnapshotFixture.CreateAsync();
+        var builder = new RepositorySnapshotBuilder(fixture.Runner);
+        var baselineCommit = await fixture.HeadAsync();
+        var baseline = await builder.BuildAsync(
+            fixture.Path,
+            baselineCommit,
+            fixture.Contract(),
+            ToolCommands(),
+            CancellationToken.None);
+
+        await fixture.StageCandidateAsync();
+        var candidate = await builder.BuildCandidateAsync(
+            fixture.Path,
+            baselineCommit,
+            fixture.Contract(),
+            ToolCommands(),
+            CancellationToken.None);
+        var difference = RepositorySnapshotComparer.Compare(baseline, candidate);
+
+        candidate.BaselineCommit.Should().Be(baselineCommit);
+        candidate.SnapshotHash.Should().NotBe(baseline.SnapshotHash);
+        difference.AddedFiles.Should().Equal("src/Core/NewType.cs");
+        difference.RemovedFiles.Should().Equal("src/Core/CoreType.cs");
+        difference.ChangedFiles.Should().Equal("src/App/Program.cs");
+        (await fixture.HeadAsync()).Should().Be(baselineCommit);
+    }
+
+    [Fact]
     public async Task Compare_DetectsAddedRemovedAndChangedFiles_WhileIgnoringExcludedContent()
     {
         await using var fixture = await SnapshotFixture.CreateAsync();
@@ -295,6 +325,14 @@ public sealed class RepositorySnapshotTests
             await WriteAsync("src/Core/NewType.cs", "namespace Core; public sealed class NewType { }\n");
             await GitAsync("add", "-A", "--");
             await GitAsync("commit", "-m", "change inventory");
+        }
+
+        public async Task StageCandidateAsync()
+        {
+            await WriteAsync("src/App/Program.cs", "Console.WriteLine(\"candidate\");\n");
+            File.Delete(System.IO.Path.Combine(Path, "src", "Core", "CoreType.cs"));
+            await WriteAsync("src/Core/NewType.cs", "namespace Core; public sealed class NewType { }\n");
+            await GitAsync("add", "-A", "--");
         }
 
         public async Task ChangeOnlyExcludedContentAsync()

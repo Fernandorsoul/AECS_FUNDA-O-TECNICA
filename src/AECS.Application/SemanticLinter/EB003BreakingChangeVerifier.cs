@@ -1,15 +1,6 @@
-using System.Text.RegularExpressions;
+using AECS.Domain.Models;
 
 namespace AECS.Application.SemanticLinter;
-
-public class BreakingChangeRule
-{
-    public string Id { get; init; } = string.Empty;
-    public string Name { get; init; } = string.Empty;
-    public string Description { get; init; } = string.Empty;
-    public BreakingChangeType Type { get; init; }
-    public RuleSeverity Severity { get; init; } = RuleSeverity.Warning;
-}
 
 public enum BreakingChangeType
 {
@@ -23,252 +14,121 @@ public enum BreakingChangeType
     RemovedClass
 }
 
-public class BreakingChange
-{
-    public string RuleId { get; init; } = string.Empty;
-    public string RuleName { get; init; } = string.Empty;
-    public string FilePath { get; init; } = string.Empty;
-    public string Detail { get; init; } = string.Empty;
-    public RuleSeverity Severity { get; init; }
-    public BreakingChangeType Type { get; init; }
-    public string SymbolName { get; init; } = string.Empty;
-}
-
-public class EB003Result
+public sealed class EB003Result
 {
     public bool HasBreakingChanges => BreakingChanges.Count > 0;
-    public List<BreakingChange> BreakingChanges { get; init; } = [];
+    public List<SemanticRuleFinding> BreakingChanges { get; init; } = [];
     public int FilesAnalyzed { get; init; }
 }
 
-public class EB003BreakingChangeVerifier
+public sealed class EB003BreakingChangeVerifier
 {
-    private static readonly Regex PublicMethodRegex = new(
-        @"(?:public)\s+(?:static\s+)?(?:virtual\s+)?(?:override\s+)?(?:async\s+)?[\w<>\[\]?,\s]+\s+(\w+)\s*\(",
-        RegexOptions.Compiled);
-
-    private static readonly Regex PublicPropertyRegex = new(
-        @"(?:public)\s+(?:static\s+)?(?:virtual\s+)?(?:override\s+)?[\w<>\[\]?]+\s+(\w+)\s*\{",
-        RegexOptions.Compiled);
-
-    private static readonly Regex PublicClassRegex = new(
-        @"(?:public)\s+(?:static\s+)?(?:partial\s+)?(?:abstract\s+)?(?:class|interface|enum|struct|record)\s+(\w+)",
-        RegexOptions.Compiled);
-
-    private static readonly Regex EnumValueRegex = new(
-        @"^\s*(\w+)\s*[=,]",
-        RegexOptions.Compiled);
-
-    public EB003Result Verify(string repoPath, string diffContent)
+    public EB003Result Verify(SemanticAnalysisInput input)
     {
-        var breakingChanges = new List<BreakingChange>();
-        var filesAnalyzed = 0;
-
-        // Parse diff to find removed/changed lines
-        var removedLines = ParseRemovedLines(diffContent);
-        var addedLines = ParseAddedLines(diffContent);
-
-        // Check for removed public methods
-        foreach (var (file, lines) in removedLines)
+        ArgumentNullException.ThrowIfNull(input);
+        var candidateApi = input.CandidateGraph.Nodes
+            .Where(node => input.IsPublicApi(node, input.CandidateGraph))
+            .GroupBy(ApiIdentity, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderBy(node => node.Id, StringComparer.Ordinal).First(),
+                StringComparer.Ordinal);
+        var findings = new List<SemanticRuleFinding>();
+        foreach (var baseline in input.ImpactedBaselineNodes()
+                     .Where(node => input.IsPublicApi(node, input.BaselineGraph))
+                     .OrderBy(node => node.Id, StringComparer.Ordinal))
         {
-            filesAnalyzed++;
-            var relativePath = file.Replace('\\', '/');
-
-            foreach (var line in lines)
+            var identity = ApiIdentity(baseline);
+            if (!candidateApi.TryGetValue(identity, out var candidate))
             {
-                // Removed public method
-                var methodMatch = PublicMethodRegex.Match(line);
-                if (methodMatch.Success)
+                findings.Add(Removed(input, baseline));
+                continue;
+            }
+            var baselineSignature = ApiSignature(baseline);
+            var candidateSignature = ApiSignature(candidate);
+            if (!string.Equals(baselineSignature, candidateSignature, StringComparison.Ordinal))
+            {
+                findings.Add(new SemanticRuleFinding
                 {
-                    var methodName = methodMatch.Groups[1].Value;
-                    // Check if it was added back (moved, not removed)
-                    if (!IsMethodAddedBack(addedLines, file, methodName))
-                    {
-                        breakingChanges.Add(new BreakingChange
-                        {
-                            RuleId = "EB003-REMOVED-METHOD",
-                            RuleName = "Removed Public Method",
-                            FilePath = relativePath,
-                            Detail = $"Public method '{methodName}' was removed. This may break consumers.",
-                            Severity = RuleSeverity.Error,
-                            Type = BreakingChangeType.RemovedPublicMethod,
-                            SymbolName = methodName
-                        });
-                    }
-                }
-
-                // Removed public property
-                var propMatch = PublicPropertyRegex.Match(line);
-                if (propMatch.Success)
-                {
-                    var propName = propMatch.Groups[1].Value;
-                    if (!IsPropertyAddedBack(addedLines, file, propName))
-                    {
-                        breakingChanges.Add(new BreakingChange
-                        {
-                            RuleId = "EB003-REMOVED-PROPERTY",
-                            RuleName = "Removed Public Property",
-                            FilePath = relativePath,
-                            Detail = $"Public property '{propName}' was removed. This may break consumers.",
-                            Severity = RuleSeverity.Error,
-                            Type = BreakingChangeType.RemovedPublicProperty,
-                            SymbolName = propName
-                        });
-                    }
-                }
-
-                // Removed class/interface
-                var classMatch = PublicClassRegex.Match(line);
-                if (classMatch.Success)
-                {
-                    var className = classMatch.Groups[1].Value;
-                    if (!IsClassAddedBack(addedLines, file, className))
-                    {
-                        breakingChanges.Add(new BreakingChange
-                        {
-                            RuleId = "EB003-REMOVED-CLASS",
-                            RuleName = "Removed Public Class/Interface",
-                            FilePath = relativePath,
-                            Detail = $"Public type '{className}' was removed. This is a breaking change.",
-                            Severity = RuleSeverity.Critical,
-                            Type = BreakingChangeType.RemovedClass,
-                            SymbolName = className
-                        });
-                    }
-                }
+                    RuleId = "EB003-CHANGED-SIGNATURE",
+                    RuleName = "Changed Public API Signature",
+                    SymbolId = candidate.Id,
+                    Symbol = candidate.DisplayName,
+                    FilePath = SemanticAnalysisInput.Location(candidate),
+                    Severity = RuleSeverity.Critical,
+                    Baseline = input.BaselineSnapshot.BaselineCommit,
+                    Category = BreakingChangeType.ChangedMethodSignature.ToString(),
+                    Justification =
+                        $"Public API changed semantically from '{baselineSignature}' " +
+                        $"to '{candidateSignature}'."
+                });
             }
         }
-
-        // Check for method signature changes
-        CheckMethodSignatureChanges(removedLines, addedLines, breakingChanges);
-
         return new EB003Result
         {
-            BreakingChanges = breakingChanges,
-            FilesAnalyzed = filesAnalyzed
+            BreakingChanges = findings
+                .DistinctBy(finding => $"{finding.RuleId}|{finding.SymbolId}|{finding.Justification}")
+                .OrderBy(finding => finding.RuleId, StringComparer.Ordinal)
+                .ThenBy(finding => finding.FilePath, StringComparer.Ordinal)
+                .ThenBy(finding => finding.SymbolId, StringComparer.Ordinal)
+                .ToList(),
+            FilesAnalyzed = input.ChangedFiles.Count(path => path.EndsWith(
+                ".cs",
+                StringComparison.OrdinalIgnoreCase))
         };
     }
 
-    private static void CheckMethodSignatureChanges(
-        Dictionary<string, List<string>> removedLines,
-        Dictionary<string, List<string>> addedLines,
-        List<BreakingChange> breakingChanges)
+    private static SemanticRuleFinding Removed(
+        SemanticAnalysisInput input,
+        CSharpSymbolGraphNode node)
     {
-        foreach (var (file, removed) in removedLines)
-        {
-            if (!addedLines.TryGetValue(file, out var added))
-                continue;
-
-            var removedMethods = removed
-                .Select(l => PublicMethodRegex.Match(l))
-                .Where(m => m.Success)
-                .ToDictionary(m => m.Groups[1].Value, m => m.Value);
-
-            var addedMethods = added
-                .Select(l => PublicMethodRegex.Match(l))
-                .Where(m => m.Success)
-                .ToDictionary(m => m.Groups[1].Value, m => m.Value);
-
-            // Find methods that exist in both but with different signatures
-            foreach (var (methodName, removedSig) in removedMethods)
+        var isType = node.Kind == "type";
+        var changeType = isType
+            ? node.TypeKind == "Interface"
+                ? BreakingChangeType.RemovedInterface
+                : BreakingChangeType.RemovedClass
+            : node.MemberKind switch
             {
-                if (addedMethods.TryGetValue(methodName, out var addedSig))
-                {
-                    if (removedSig != addedSig)
-                    {
-                        breakingChanges.Add(new BreakingChange
-                        {
-                            RuleId = "EB003-CHANGED-SIGNATURE",
-                            RuleName = "Changed Method Signature",
-                            FilePath = file.Replace('\\', '/'),
-                            Detail = $"Method '{methodName}' signature changed from '{removedSig.Trim()}' to '{addedSig.Trim()}'",
-                            Severity = RuleSeverity.Error,
-                            Type = BreakingChangeType.ChangedMethodSignature,
-                            SymbolName = methodName
-                        });
-                    }
-                }
-            }
-        }
+                "Method" => BreakingChangeType.RemovedPublicMethod,
+                "Property" => BreakingChangeType.RemovedPublicProperty,
+                _ => BreakingChangeType.ChangedVisibility
+            };
+        return new SemanticRuleFinding
+        {
+            RuleId = isType ? "EB003-REMOVED-TYPE" : "EB003-REMOVED-MEMBER",
+            RuleName = isType ? "Removed Public Type" : "Removed Public Member",
+            SymbolId = node.Id,
+            Symbol = node.DisplayName,
+            FilePath = SemanticAnalysisInput.Location(node),
+            Severity = RuleSeverity.Critical,
+            Baseline = input.BaselineSnapshot.BaselineCommit,
+            Category = changeType.ToString(),
+            Justification =
+                $"Public API '{ApiSignature(node)}' from baseline " +
+                $"'{input.BaselineSnapshot.BaselineCommit}' has no equivalent resolved symbol " +
+                "in the candidate graph."
+        };
     }
 
-    private static Dictionary<string, List<string>> ParseRemovedLines(string diff)
-    {
-        var result = new Dictionary<string, List<string>>();
-        var currentFile = "";
+    private static string ApiIdentity(CSharpSymbolGraphNode node) =>
+        string.IsNullOrWhiteSpace(node.DocumentationId)
+            ? $"{node.ProjectPath}|{node.Kind}|{node.ContainingNodeId}|{node.Name}|{node.Arity}|{node.MemberKind}"
+            : $"{node.ProjectPath}|{node.DocumentationId}";
 
-        foreach (var line in diff.Split('\n'))
-        {
-            if (line.StartsWith("--- a/"))
+    private static string ApiSignature(CSharpSymbolGraphNode node)
+    {
+        var semanticModifiers = node.Modifiers
+            .Where(modifier => modifier.StartsWith("constraint:", StringComparison.Ordinal))
+            .OrderBy(modifier => modifier, StringComparer.Ordinal);
+        return string.Join(
+            "|",
+            new[]
             {
-                currentFile = line[6..].Trim();
-                if (!result.ContainsKey(currentFile))
-                    result[currentFile] = [];
-            }
-            else if (line.StartsWith("-") && !line.StartsWith("---") && !string.IsNullOrEmpty(currentFile))
-            {
-                result[currentFile].Add(line[1..]);
-            }
-        }
-
-        return result;
-    }
-
-    private static Dictionary<string, List<string>> ParseAddedLines(string diff)
-    {
-        var result = new Dictionary<string, List<string>>();
-        var currentFile = "";
-
-        foreach (var line in diff.Split('\n'))
-        {
-            if (line.StartsWith("+++ b/"))
-            {
-                currentFile = line[6..].Trim();
-                if (!result.ContainsKey(currentFile))
-                    result[currentFile] = [];
-            }
-            else if (line.StartsWith("+") && !line.StartsWith("+++") && !string.IsNullOrEmpty(currentFile))
-            {
-                result[currentFile].Add(line[1..]);
-            }
-        }
-
-        return result;
-    }
-
-    private static bool IsMethodAddedBack(Dictionary<string, List<string>> addedLines, string file, string methodName)
-    {
-        if (!addedLines.TryGetValue(file, out var lines))
-            return false;
-
-        return lines.Any(l =>
-        {
-            var match = PublicMethodRegex.Match(l);
-            return match.Success && match.Groups[1].Value == methodName;
-        });
-    }
-
-    private static bool IsPropertyAddedBack(Dictionary<string, List<string>> addedLines, string file, string propName)
-    {
-        if (!addedLines.TryGetValue(file, out var lines))
-            return false;
-
-        return lines.Any(l =>
-        {
-            var match = PublicPropertyRegex.Match(l);
-            return match.Success && match.Groups[1].Value == propName;
-        });
-    }
-
-    private static bool IsClassAddedBack(Dictionary<string, List<string>> addedLines, string file, string className)
-    {
-        if (!addedLines.TryGetValue(file, out var lines))
-            return false;
-
-        return lines.Any(l =>
-        {
-            var match = PublicClassRegex.Match(l);
-            return match.Success && match.Groups[1].Value == className;
-        });
+                node.DisplayName,
+                node.Accessibility,
+                node.TypeKind,
+                node.MemberKind,
+                $"arity:{node.Arity}"
+            }.Concat(semanticModifiers));
     }
 }
