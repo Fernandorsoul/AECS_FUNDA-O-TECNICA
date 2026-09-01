@@ -14,17 +14,21 @@ public class OllamaAdapter : IAgentAdapter
     private readonly string _baseUrl;
     private readonly int _contextWindowTokens;
     private readonly int? _seed;
+    private readonly LocalComputeCostPolicy _localCostPolicy;
 
     public OllamaAdapter(
         HttpClient httpClient,
         string baseUrl = "http://localhost:11434",
         int contextWindowTokens = 32_768,
-        int? seed = null)
+        int? seed = null,
+        LocalComputeCostPolicy? localCostPolicy = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
         _contextWindowTokens = contextWindowTokens;
         _seed = seed;
+        _localCostPolicy = localCostPolicy ?? new LocalComputeCostPolicy();
+        _localCostPolicy.Validate();
     }
 
     public AgentContextProfile GetContextProfile(AgentExecutionRequest request) =>
@@ -52,12 +56,22 @@ public class OllamaAdapter : IAgentAdapter
                 profile.EffectiveTotalTokens(request.Budget) - estimatedInputTokens);
             if (maximumOutputTokens <= 0)
             {
+                var duration = stopwatch.Elapsed;
+                var accounting = Accounting(
+                    request.Model,
+                    estimatedInputTokens,
+                    0,
+                    providerInputTokens: null,
+                    providerOutputTokens: null,
+                    duration);
                 return new AgentRunResult
                 {
                     Success = false,
                     StdErr = "No token budget remains for an Ollama request",
                     ExitCode = -1,
-                    Duration = stopwatch.Elapsed,
+                    Duration = duration,
+                    EstimatedCost = accounting.LocalResourceEstimatedCostUsd ?? 0m,
+                    UsageAccounting = accounting,
                     ExitReason = "BudgetExceeded",
                     FailureKind = AgentFailureKind.BudgetExceeded
                 };
@@ -82,12 +96,22 @@ public class OllamaAdapter : IAgentAdapter
             if (!response.IsSuccessStatusCode)
             {
                 var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                var duration = stopwatch.Elapsed;
+                var accounting = Accounting(
+                    request.Model,
+                    estimatedInputTokens,
+                    maximumOutputTokens,
+                    providerInputTokens: null,
+                    providerOutputTokens: null,
+                    duration);
                 return new AgentRunResult
                 {
                     Success = false,
                     StdErr = $"Ollama API error {(int)response.StatusCode}: {errorBody}",
                     ExitCode = (int)response.StatusCode,
-                    Duration = stopwatch.Elapsed,
+                    Duration = duration,
+                    EstimatedCost = accounting.LocalResourceEstimatedCostUsd ?? 0m,
+                    UsageAccounting = accounting,
                     ExitReason = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests
                         ? "RateLimited"
                         : "ApiError",
@@ -103,17 +127,36 @@ public class OllamaAdapter : IAgentAdapter
 
             if (ollamaResponse is null)
             {
+                var accounting = Accounting(
+                    request.Model,
+                    estimatedInputTokens,
+                    maximumOutputTokens,
+                    providerInputTokens: null,
+                    providerOutputTokens: null,
+                    stopwatch.Elapsed);
                 return new AgentRunResult
                 {
                     Success = false,
                     StdErr = "Failed to deserialize Ollama response",
                     ExitCode = -1,
                     Duration = stopwatch.Elapsed,
+                    EstimatedCost = accounting.LocalResourceEstimatedCostUsd ?? 0m,
+                    UsageAccounting = accounting,
                     ExitReason = "DeserializationError"
                 };
             }
 
             var filesChanged = ExtractModifiedFiles(ollamaResponse.Response);
+            var inputTokens = ollamaResponse.PromptEvalCount ?? estimatedInputTokens;
+            var outputTokens = ollamaResponse.EvalCount ??
+                ConservativeTokenCounter.Count(ollamaResponse.Response ?? string.Empty);
+            var successAccounting = Accounting(
+                request.Model,
+                estimatedInputTokens,
+                maximumOutputTokens,
+                ollamaResponse.PromptEvalCount,
+                ollamaResponse.EvalCount,
+                stopwatch.Elapsed);
 
             return new AgentRunResult
             {
@@ -122,9 +165,10 @@ public class OllamaAdapter : IAgentAdapter
                 StdErr = string.Empty,
                 ExitCode = 0,
                 Duration = stopwatch.Elapsed,
-                InputTokens = ollamaResponse.PromptEvalCount,
-                OutputTokens = ollamaResponse.EvalCount,
-                EstimatedCost = 0m, // Local LLM = $0
+                InputTokens = inputTokens,
+                OutputTokens = outputTokens,
+                EstimatedCost = successAccounting.LocalResourceEstimatedCostUsd ?? 0m,
+                UsageAccounting = successAccounting,
                 FilesChanged = filesChanged,
                 ExitReason = "Completed"
             };
@@ -132,12 +176,15 @@ public class OllamaAdapter : IAgentAdapter
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
+            var accounting = UnavailableAccounting(request, stopwatch.Elapsed);
             return new AgentRunResult
             {
                 Success = false,
                 StdErr = "Execution timed out or was cancelled",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
+                EstimatedCost = accounting.LocalResourceEstimatedCostUsd ?? 0m,
+                UsageAccounting = accounting,
                 ExitReason = cancellationToken.IsCancellationRequested ? "Cancelled" : "Timeout",
                 FailureKind = cancellationToken.IsCancellationRequested
                     ? AgentFailureKind.Cancelled
@@ -147,12 +194,15 @@ public class OllamaAdapter : IAgentAdapter
         catch (HttpRequestException ex)
         {
             stopwatch.Stop();
+            var accounting = UnavailableAccounting(request, stopwatch.Elapsed);
             return new AgentRunResult
             {
                 Success = false,
                 StdErr = $"Failed to connect to Ollama at {_baseUrl}: {ex.Message}",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
+                EstimatedCost = accounting.LocalResourceEstimatedCostUsd ?? 0m,
+                UsageAccounting = accounting,
                 ExitReason = "ConnectionError",
                 FailureKind = AgentFailureKind.Transient
             };
@@ -227,6 +277,39 @@ public class OllamaAdapter : IAgentAdapter
 
         return sb.ToString();
     }
+
+    private AgentUsageAccounting UnavailableAccounting(
+        AgentExecutionRequest request,
+        TimeSpan duration) => Accounting(
+            request.Model,
+            ConservativeTokenCounter.Count(BuildPrompt(request)),
+            reservedOutputTokens: null,
+            providerInputTokens: null,
+            providerOutputTokens: null,
+            duration);
+
+    private AgentUsageAccounting Accounting(
+        string model,
+        int estimatedInputTokens,
+        int? reservedOutputTokens,
+        int? providerInputTokens,
+        int? providerOutputTokens,
+        TimeSpan duration) => new()
+        {
+            Adapter = nameof(OllamaAdapter),
+            Model = model,
+            EstimatedInputTokens = estimatedInputTokens,
+            ReservedOutputTokens = reservedOutputTokens,
+            ProviderInputTokens = providerInputTokens,
+            ProviderOutputTokens = providerOutputTokens,
+            LocalResourceEstimatedCostUsd = _localCostPolicy.Estimate(duration),
+            CostComplete = true,
+            LocalCostPolicyVersion = _localCostPolicy.Version,
+            LocalPowerWatts = _localCostPolicy.PowerWatts,
+            LocalElectricityUsdPerKwh = _localCostPolicy.ElectricityUsdPerKwh,
+            LocalHardwareCostUsd = _localCostPolicy.HardwareCostUsd,
+            LocalHardwareLifetimeHours = _localCostPolicy.HardwareLifetimeHours
+        };
 
     private static List<string> ExtractModifiedFiles(string? response)
     {
@@ -322,10 +405,10 @@ internal class OllamaResponse
     public string? Response { get; set; }
 
     [JsonPropertyName("prompt_eval_count")]
-    public int PromptEvalCount { get; set; }
+    public int? PromptEvalCount { get; set; }
 
     [JsonPropertyName("eval_count")]
-    public int EvalCount { get; set; }
+    public int? EvalCount { get; set; }
 
     [JsonPropertyName("total_duration")]
     public long TotalDuration { get; set; }

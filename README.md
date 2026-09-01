@@ -241,7 +241,10 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- experiment `
   --mock
 ```
 
-O relatório inclui decisão por tarefa, duração, custo estimado, quantidade de arquivos, taxa de verificação na primeira tentativa e **Cost per Verified Change (CPVC)**.
+O relatório inclui decisão por tarefa, duração, uso estimado/final, custo de rate card ou recurso
+local, reconciliação opcional, quantidade de arquivos, taxa de verificação na primeira tentativa
+e **Cost per Verified Code Change (CPVC)** auditável. Custo ausente e nenhum VCC aparecem como
+indisponíveis; consulte [Contabilidade de custo, VCC e CPVC](docs/cost-accounting.md).
 
 ## Contratos de tarefa
 

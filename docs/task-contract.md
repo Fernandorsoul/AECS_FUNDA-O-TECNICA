@@ -212,7 +212,7 @@ O backoff exponencial começa em um segundo e é limitado a 30 segundos. Quando 
 
 O wall clock começa no início do pipeline e é compartilhado por preflight, agente, build, testes e testes de aceite filtrados. Cada subprocesso recebe somente o tempo global restante; timeout ou cancelamento encerra toda a árvore de processos. As etapas de limpeza do worktree e persistência de evidência continuam fora do token cancelado para preservar isolamento e auditabilidade.
 
-Tokens e custo são acumulados entre todas as tentativas. Antes de cada chamada o adaptador recebe apenas o saldo restante; os adaptadores HTTP limitam a geração ao saldo de tokens/custo estimado. Caso a telemetria final ainda informe consumo excedente, a execução falha fechada e nenhuma nova tentativa é iniciada. O custo do Ollama é registrado como zero; o adaptador cloud usa uma estimativa baseada em tokens e numa tabela interna, não uma fatura do provedor.
+Tokens e custo são acumulados entre todas as tentativas. Antes de cada chamada o adaptador recebe apenas o saldo restante; os adaptadores HTTP limitam a geração ao saldo de tokens/custo estimado. Caso a telemetria final ainda informe consumo excedente, a execução falha fechada e nenhuma nova tentativa é iniciada. O Ollama registra uma estimativa mensurável de energia e amortização; o adapter cloud usa uma tabela versionada e preserva separadamente uso estimado e uso reportado. Nenhuma dessas estimativas é apresentada como fatura. A política e a reconciliação estão em [Contabilidade de custo, VCC e CPVC](cost-accounting.md).
 
 Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` menor ou igual a zero são rejeitados pelo parser.
 

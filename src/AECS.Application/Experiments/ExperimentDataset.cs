@@ -14,7 +14,7 @@ public static class ExperimentDatasetSchema
 {
     public const string Version = "aecs.experiment-dataset/v1";
     public const string ContextAbVersion = "aecs.experiment-dataset/v2";
-    public const string ReportVersion = "aecs.experiment-report/v2";
+    public const string ReportVersion = "aecs.experiment-report/v3";
     public const string CheckpointVersion = "aecs.experiment-checkpoint/v1";
 }
 

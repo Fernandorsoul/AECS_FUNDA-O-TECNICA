@@ -82,7 +82,8 @@ public class FallbackAdapterTests
             Success = false,
             StdErr = "Connection refused",
             Duration = TimeSpan.FromSeconds(2),
-            ExitReason = "ConnectionError"
+            ExitReason = "ConnectionError",
+            UsageAccounting = Accounting("local", localCost: 0.01m)
         };
 
         var cloudResult = new AgentRunResult
@@ -90,7 +91,8 @@ public class FallbackAdapterTests
             Success = true,
             FilesChanged = ["src/Fixed.cs"],
             Duration = TimeSpan.FromSeconds(5),
-            ExitReason = "Completed"
+            ExitReason = "Completed",
+            UsageAccounting = Accounting("cloud", rateCardCost: 0.02m)
         };
 
         var local = new MockAgentAdapter { PresetResult = localResult };
@@ -102,6 +104,9 @@ public class FallbackAdapterTests
         result.Success.Should().BeTrue();
         result.FilesChanged.Should().Contain("src/Fixed.cs");
         result.ExitReason.Should().Be("CompletedViaFallback");
+        result.UsageAccounting!.Components.Should().HaveCount(2);
+        result.UsageAccounting.AccountedCostUsd.Should().Be(0.03m);
+        result.UsageAccounting.AccountedCostBasis.Should().Be("mixed-estimates");
     }
 
     [Fact]
@@ -133,6 +138,39 @@ public class FallbackAdapterTests
         result.Success.Should().BeTrue();
         result.ExitReason.Should().Be("CompletedViaFallback");
         result.Duration.Should().Be(TimeSpan.FromSeconds(128)); // 120 + 8
+    }
+
+    [Fact]
+    public async Task MissingPrimaryAccounting_DoesNotBecomeZeroDuringFallback()
+    {
+        var local = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = false,
+                ExitReason = "ConnectionError",
+                FailureKind = AgentFailureKind.Transient
+            }
+        };
+        var cloud = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = true,
+                ExitReason = "Completed",
+                FilesChanged = ["src/Fixed.cs"],
+                UsageAccounting = Accounting("cloud", rateCardCost: 0.02m)
+            }
+        };
+
+        var result = await new FallbackAdapter(local, cloud).ExecuteAsync(
+            CreateRequest(),
+            CancellationToken.None);
+
+        result.UsageAccounting.Should().NotBeNull();
+        result.UsageAccounting!.CostComplete.Should().BeFalse();
+        result.UsageAccounting.RateCardEstimatedCostUsd.Should().Be(0.02m);
+        result.UsageAccounting.AccountedCostUsd.Should().BeNull();
     }
 
     [Fact]
@@ -193,4 +231,16 @@ public class FallbackAdapterTests
         result.FilesChanged.Should().Contain("src/Cloud.cs");
         result.ExitReason.Should().Be("CompletedViaFallback");
     }
+
+    private static AgentUsageAccounting Accounting(
+        string model,
+        decimal? rateCardCost = null,
+        decimal? localCost = null) => new()
+        {
+            Adapter = model == "local" ? nameof(OllamaAdapter) : nameof(CloudAdapter),
+            Model = model,
+            RateCardEstimatedCostUsd = rateCardCost,
+            LocalResourceEstimatedCostUsd = localCost,
+            CostComplete = true
+        };
 }

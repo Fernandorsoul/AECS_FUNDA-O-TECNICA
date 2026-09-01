@@ -39,6 +39,8 @@ public class TaskExperimentResult
     public int InputTokens { get; init; }
     public int OutputTokens { get; init; }
     public decimal EstimatedCost { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentUsageAccounting? UsageAccounting { get; init; }
     public int FilesChanged { get; init; }
     public Dictionary<string, VerificationStatus> Verifications { get; init; } = new();
     public List<AcceptanceCriterionResult> AcceptanceCriteria { get; init; } = [];
@@ -58,6 +60,8 @@ public class TaskExperimentResult
     public Guid EvidenceId { get; init; }
     public string EvidenceLocation { get; init; } = string.Empty;
     public bool OriginalRepositoryUnchanged { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? FinishedAtUtc { get; init; }
 }
 
 public class ExperimentReport
@@ -77,6 +81,9 @@ public class ExperimentReport
         ExperimentEnvironment.Capture();
     public List<TaskExperimentResult> Results { get; init; } = [];
     public List<ExperimentPairedComparison> PairedComparisons { get; init; } = [];
+    public List<ExperimentCostRecord> CostRecords { get; init; } = [];
+    public ExperimentCostEfficiencyAnalysis CostEfficiency { get; init; } = new();
+    public ExperimentCostReconciliationMetadata CostReconciliation { get; init; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExperimentHypothesisAnalysis? Analysis { get; init; }
 
@@ -84,9 +91,7 @@ public class ExperimentReport
     public int CompletedCount => Results.Count(r => r.Status == ExperimentResultStatus.Completed);
     public int FailedCount => Results.Count(r => r.Status == ExperimentResultStatus.Failed);
     public int SkippedCount => Results.Count(r => r.Status == ExperimentResultStatus.Skipped);
-    public int VerifiedCount => Results.Count(r =>
-        r.Status == ExperimentResultStatus.Completed &&
-        r.Decision == TaskDecision.Verified);
+    public int VerifiedCount => Results.Count(VerifiedCodeChangePolicy.IsVerified);
     public int RejectedCount => Results.Count(r =>
         r.Status == ExperimentResultStatus.Completed &&
         r.Decision == TaskDecision.Rejected);
@@ -94,9 +99,11 @@ public class ExperimentReport
         r.Status == ExperimentResultStatus.Completed &&
         r.Decision == TaskDecision.HumanReviewRequired);
     public TimeSpan TotalDuration => Results.Aggregate(TimeSpan.Zero, (acc, r) => acc + r.Duration);
-    public decimal TotalCost => Results.Sum(r => r.EstimatedCost);
-    public decimal Cpvc => VerifiedCount > 0 ? TotalCost / VerifiedCount : 0;
-    public int FirstPassVerifiedCount => Results.Count(result => result.FirstPassVerified);
+    public decimal TotalEstimatedCost => Results.Sum(r => r.EstimatedCost);
+    public decimal? TotalCost => OverallCostEfficiency?.TotalEffectiveCostUsd;
+    public decimal? Cpvc => OverallCostEfficiency?.CpvcUsd;
+    public int FirstPassVerifiedCount => Results.Count(result =>
+        VerifiedCodeChangePolicy.IsVerified(result) && result.RetryCount == 0);
     public double FirstPassRate => CompletedCount > 0
         ? (double)FirstPassVerifiedCount / CompletedCount * 100
         : 0;
@@ -107,4 +114,9 @@ public class ExperimentReport
     public bool Succeeded => Results.Count > 0 &&
         Results.All(result => result.Status == ExperimentResultStatus.Completed &&
             result.MatchesExpected);
+
+    [JsonIgnore]
+    private ExperimentCostEfficiencyAggregate? OverallCostEfficiency =>
+        CostEfficiency.Aggregates.SingleOrDefault(aggregate =>
+            aggregate.Dimension == "overall" && aggregate.Value == "all");
 }

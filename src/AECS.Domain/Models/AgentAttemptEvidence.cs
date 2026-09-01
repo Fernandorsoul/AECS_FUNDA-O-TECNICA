@@ -1,5 +1,7 @@
 namespace AECS.Domain.Models;
 
+using System.Text.Json.Serialization;
+
 public enum AgentFailureKind
 {
     None = 0,
@@ -25,6 +27,8 @@ public sealed class AgentAttemptEvidence
     public int InputTokens { get; init; }
     public int OutputTokens { get; init; }
     public decimal EstimatedCost { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentUsageAccounting? UsageAccounting { get; init; }
     public TimeSpan Duration { get; init; }
     public TimeSpan? RetryAfter { get; init; }
     public TimeSpan? RetryDelay { get; init; }
