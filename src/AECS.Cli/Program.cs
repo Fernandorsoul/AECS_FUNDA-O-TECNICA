@@ -18,6 +18,7 @@ using AECS.Application.Verification;
 using AECS.Cli;
 using AECS.Cli.Jarvis;
 using AECS.Cli.Runtime;
+using AECS.Cli.Vscode;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -36,6 +37,8 @@ if (command == "experiment")
     return await RunExperiment(args[1..]);
 else if (command == "jarvis")
     return await RunJarvis(args[1..]);
+else if (command == "vscode-server")
+    return await RunVscodeServer(args[1..]);
 else if (command == "promote")
     return await RunPromotion(args[1..]);
 else if (command == "export-patch")
@@ -700,7 +703,8 @@ static bool TryCreateEvidenceStore(
 
 static bool TryCreateRuntime(
     RuntimeCliOptions options,
-    out AecsExecutionRuntime runtime)
+    out AecsExecutionRuntime runtime,
+    TextWriter? errorWriter = null)
 {
     try
     {
@@ -711,7 +715,8 @@ static bool TryCreateRuntime(
     catch (Exception ex)
     {
         runtime = null!;
-        Console.WriteLine($"ERROR: runtime configuration failed closed: {ex.Message}");
+        (errorWriter ?? Console.Out).WriteLine(
+            $"ERROR: runtime configuration failed closed: {ex.Message}");
         return false;
     }
 }
@@ -1168,6 +1173,88 @@ static void PrintSemanticEvidence(VerificationResult result)
                 $"    {conflict.RuleId} [{conflict.Severity}] {conflict.Symbol} " +
                 $"@ {conflict.FilePath}{suppression}: {conflict.Justification}");
         }
+    }
+}
+
+static async Task<int> RunVscodeServer(string[] args)
+{
+    string? repositoryPath = null;
+    string? stateDirectory = null;
+    var runtimeOptions = new RuntimeCliOptions();
+    var invalidArgument = false;
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--repo" && index + 1 < args.Length)
+            repositoryPath = args[++index];
+        else if (args[index] == "--state-dir" && index + 1 < args.Length)
+            stateDirectory = args[++index];
+        else if (runtimeOptions.TryConsume(args, ref index))
+        {
+        }
+        else
+            invalidArgument = true;
+    }
+
+    var token = Environment.GetEnvironmentVariable(
+        VscodeProtocolConstants.TokenEnvironmentVariable);
+    if (invalidArgument || runtimeOptions.ShowEffectiveConfiguration ||
+        string.IsNullOrWhiteSpace(repositoryPath) ||
+        string.IsNullOrWhiteSpace(stateDirectory) ||
+        string.IsNullOrWhiteSpace(token) || token.Length < 32)
+    {
+        Console.Error.WriteLine(
+            "Usage: aecs vscode-server --repo <path> --state-dir <path> " +
+            RuntimeCliOptions.Usage.Replace(" [--show-effective-config]", string.Empty));
+        Console.Error.WriteLine(
+            $"{VscodeProtocolConstants.TokenEnvironmentVariable} must contain a session token of at least 32 characters.");
+        return 1;
+    }
+
+    try
+    {
+        repositoryPath = Path.GetFullPath(repositoryPath);
+        stateDirectory = Path.GetFullPath(stateDirectory);
+        if (!Directory.Exists(repositoryPath))
+            throw new DirectoryNotFoundException("The repository directory does not exist.");
+        Directory.CreateDirectory(stateDirectory);
+
+        if (!TryCreateRuntime(runtimeOptions, out var runtime, Console.Error))
+            return 1;
+        using (runtime)
+        {
+            var operations = new VscodeOperationStore(stateDirectory);
+            await using var backend = new VscodeExecutionBackend(
+                repositoryPath,
+                runtime,
+                operations);
+            await backend.RecoverAsync(CancellationToken.None);
+            var session = new VscodeProtocolSession(token, backend);
+            using var shutdown = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                shutdown.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+            try
+            {
+                await session.RunAsync(Console.In, Console.Out, shutdown.Token);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+        }
+        return 0;
+    }
+    catch (OperationCanceledException)
+    {
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"ERROR: VS Code backend failed closed: {ex.Message}");
+        return 1;
     }
 }
 

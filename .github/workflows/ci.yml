@@ -43,6 +43,19 @@ jobs:
             8.0.x
             9.0.x
 
+      - name: Set up Node.js for VS Code client
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: clients/vscode/package-lock.json
+
+      - name: Test VS Code client
+        working-directory: clients/vscode
+        run: |
+          npm ci
+          npm test
+
       - name: Restore
         run: dotnet restore AECS.slnx
 
@@ -209,3 +222,20 @@ jobs:
 
           grep -q "requires the secret environment variable" <<< "$postgres_output"
           test ! -e "${RUNNER_TEMP}/must-not-exist.patch"
+
+          vscode_token="ci-vscode-session-token-with-at-least-32-characters"
+          vscode_request=$(printf '{"protocol":"aecs.vscode/v1","id":"ci-init","method":"initialize","token":"%s","parameters":{}}\n' "$vscode_token")
+          vscode_output=$(printf '%s' "$vscode_request" | \
+            AECS_VSCODE_SESSION_TOKEN="$vscode_token" \
+            dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            vscode-server \
+            --repo "${GITHUB_WORKSPACE}" \
+            --state-dir "${RUNNER_TEMP}/aecs-vscode-state" \
+            --mock \
+            --evidence-root "${RUNNER_TEMP}/aecs-vscode-evidence" \
+            --key-directory "${RUNNER_TEMP}/aecs-vscode-keys")
+
+          printf '%s\n' "$vscode_output"
+          grep -q '"protocol":"aecs.vscode/v1"' <<< "$vscode_output"
+          grep -q '"ok":true' <<< "$vscode_output"
