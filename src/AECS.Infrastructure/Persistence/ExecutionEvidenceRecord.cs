@@ -41,3 +41,33 @@ public sealed class ReplayEvidenceRecord
     public DateTime SignedAt { get; set; }
     public ExecutionEvidenceRecord ExecutionEvidence { get; set; } = null!;
 }
+
+public sealed class HistoricalDecisionStorageRecord
+{
+    public string Id { get; set; } = string.Empty;
+    public int Version { get; set; }
+    public string SchemaVersion { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public string Authority { get; set; } = string.Empty;
+    public int ReviewStatus { get; set; }
+    public int Enforcement { get; set; }
+    public DateTime ValidFrom { get; set; }
+    public DateTime? ValidUntil { get; set; }
+    public string ContentHash { get; set; } = string.Empty;
+    public string DecisionJson { get; set; } = "{}";
+    public DateTime CreatedAt { get; set; }
+}
+
+public sealed class HistoricalDecisionSuppressionStorageRecord
+{
+    public string Id { get; set; } = string.Empty;
+    public int Version { get; set; }
+    public string SchemaVersion { get; set; } = string.Empty;
+    public string DecisionId { get; set; } = string.Empty;
+    public int DecisionVersion { get; set; }
+    public string Actor { get; set; } = string.Empty;
+    public DateTime ExpiresAt { get; set; }
+    public string ContentHash { get; set; } = string.Empty;
+    public string SuppressionJson { get; set; } = "{}";
+    public DateTime CreatedAt { get; set; }
+}

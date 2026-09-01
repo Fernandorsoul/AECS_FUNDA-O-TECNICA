@@ -416,6 +416,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         }
 
         ValidateSemanticEvidence(evidence);
+        ValidateHistoricalEvidence(evidence);
 
         var snapshot = evidence.RepositorySnapshot;
         if (snapshot is not null &&
@@ -685,6 +686,137 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new EvidenceIntegrityException(
                 "Semantic verification evidence is incomplete, inconsistent, or has an unsupported schema.");
         }
+    }
+
+    private static void ValidateHistoricalEvidence(ExecutionEvidence evidence)
+    {
+        var historical = evidence.BaselineVerificationResults
+            .Concat(evidence.VerificationResults)
+            .Where(result => result.Historical is not null)
+            .Select(result => result.Historical!)
+            .ToList();
+        if (historical.Any(item => !ValidHistoricalEvidence(item)))
+        {
+            throw new EvidenceIntegrityException(
+                "Historical decision verification evidence is incomplete, inconsistent, or has an unsupported schema.");
+        }
+    }
+
+    private static bool ValidHistoricalEvidence(
+        HistoricalDecisionVerificationEvidence evidence)
+    {
+        if (evidence.SchemaVersion !=
+                HistoricalDecisionSchema.VerificationEvidenceVersion ||
+            !Enum.IsDefined(evidence.Status) ||
+            evidence.EvaluatedAt.Kind != DateTimeKind.Utc ||
+            string.IsNullOrWhiteSpace(evidence.Message) ||
+            evidence.Decisions is null ||
+            evidence.Suppressions is null ||
+            evidence.Conflicts is null ||
+            evidence.Status == HistoricalDecisionSelectionStatus.Selected &&
+                evidence.Decisions.Count == 0 ||
+            evidence.Status == HistoricalDecisionSelectionStatus.Ambiguous &&
+                (evidence.Decisions.Count == 0 || evidence.Suppressions.Count != 0) ||
+            evidence.Status is HistoricalDecisionSelectionStatus.NoHistory or
+                HistoricalDecisionSelectionStatus.Unavailable &&
+                (evidence.Decisions.Count != 0 || evidence.Suppressions.Count != 0 ||
+                 evidence.Conflicts.Count != 0) ||
+            evidence.Status != HistoricalDecisionSelectionStatus.Selected &&
+                evidence.Conflicts.Count != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var decision in evidence.Decisions)
+                HistoricalDecisionContract.Validate(decision);
+            foreach (var suppression in evidence.Suppressions)
+                HistoricalDecisionContract.Validate(suppression);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (evidence.Decisions.Select(decision => $"{decision.Id}\n{decision.Version}")
+                .Distinct(StringComparer.Ordinal).Count() != evidence.Decisions.Count ||
+            evidence.Suppressions.Select(suppression =>
+                    $"{suppression.Id}\n{suppression.Version}")
+                .Distinct(StringComparer.Ordinal).Count() != evidence.Suppressions.Count)
+        {
+            return false;
+        }
+
+        var decisions = evidence.Decisions.ToDictionary(
+            decision => $"{decision.Id}\n{decision.Version}",
+            StringComparer.Ordinal);
+        var suppressions = evidence.Suppressions.ToDictionary(
+            suppression => $"{suppression.Id}\n{suppression.Version}",
+            StringComparer.Ordinal);
+        if (decisions.Values.Any(decision =>
+                decision.Review.Status != HistoricalDecisionReviewStatus.Approved ||
+                decision.ValidFrom > evidence.EvaluatedAt ||
+                decision.ValidUntil is { } validUntil && validUntil <= evidence.EvaluatedAt) ||
+            suppressions.Values.Any(suppression =>
+                !decisions.ContainsKey(
+                    $"{suppression.DecisionId}\n{suppression.DecisionVersion}") ||
+                suppression.ExpiresAt <= evidence.EvaluatedAt))
+        {
+            return false;
+        }
+
+        return evidence.Conflicts.All(conflict =>
+        {
+            if (!decisions.TryGetValue(
+                    $"{conflict.DecisionId}\n{conflict.DecisionVersion}",
+                    out var decision))
+            {
+                return false;
+            }
+            var valid = !string.IsNullOrWhiteSpace(conflict.RuleId) &&
+                conflict.RuleId.StartsWith("EB005-", StringComparison.Ordinal) &&
+                conflict.RuleId.Equals(
+                    $"EB005-{decision.Type.ToString().ToUpperInvariant()}-CONFLICT",
+                    StringComparison.Ordinal) &&
+                string.Equals(conflict.Source, decision.Source, StringComparison.Ordinal) &&
+                string.Equals(
+                    conflict.SourceVersion,
+                    decision.SourceVersion,
+                    StringComparison.Ordinal) &&
+                string.Equals(conflict.SourceHash, decision.SourceHash, StringComparison.Ordinal) &&
+                string.Equals(conflict.Authority, decision.Authority, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(conflict.SymbolId) &&
+                !string.IsNullOrWhiteSpace(conflict.Symbol) &&
+                IsSafeRepositoryPath(conflict.FilePath) &&
+                conflict.Severity is "Warning" or "Error" &&
+                decision.ProhibitedPatterns.Concat(decision.RequiredPatterns).Any(pattern =>
+                    conflict.Pattern.Equals(
+                        $"{pattern.Kind}:{pattern.Value}",
+                        StringComparison.Ordinal)) &&
+                conflict.Severity ==
+                    (decision.Enforcement == HistoricalDecisionEnforcement.Blocking
+                        ? "Error"
+                        : "Warning") &&
+                !string.IsNullOrWhiteSpace(conflict.Justification);
+            if (!valid)
+                return false;
+            if (!conflict.Suppressed)
+            {
+                return string.IsNullOrEmpty(conflict.SuppressionId) &&
+                    conflict.SuppressionVersion is null;
+            }
+            return conflict.SuppressionVersion is { } version &&
+                suppressions.TryGetValue(
+                    $"{conflict.SuppressionId}\n{version}",
+                    out var suppression) &&
+                suppression.DecisionId.Equals(conflict.DecisionId, StringComparison.Ordinal) &&
+                suppression.DecisionVersion == conflict.DecisionVersion &&
+                (string.IsNullOrEmpty(suppression.SymbolId) ||
+                 suppression.SymbolId.Equals(conflict.SymbolId, StringComparison.Ordinal)) &&
+                (string.IsNullOrEmpty(suppression.FilePath) ||
+                 suppression.FilePath.Equals(conflict.FilePath, StringComparison.OrdinalIgnoreCase));
+        });
     }
 
     private static bool ValidSymbolGraphLimits(CSharpSymbolGraphLimits limits) =>

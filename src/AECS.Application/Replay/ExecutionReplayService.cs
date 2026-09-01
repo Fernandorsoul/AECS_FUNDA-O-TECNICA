@@ -275,6 +275,10 @@ public sealed class ExecutionReplayService
             replaySnapshot,
             replaySymbolGraph,
             baselineCommands,
+            HistoricalDecisionSelector.FromEvidence(
+                original.VerificationResults.FirstOrDefault(result => result.Verifier ==
+                    "EB005-HistoricalConflict")?.Historical,
+                DateTime.UtcNow),
             BaselineSecurityFingerprints(baselineResults),
             acceptanceCriteria,
             cancellationToken);
@@ -490,6 +494,7 @@ public sealed class ExecutionReplayService
         RepositorySnapshot? baselineSnapshot,
         CSharpSymbolGraph? baselineGraph,
         IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
+        HistoricalDecisionSelection historicalSelection,
         IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteria,
         CancellationToken cancellationToken)
@@ -585,10 +590,14 @@ public sealed class ExecutionReplayService
             IVerifier[] semanticVerifiers =
             [
                 new EB001Verifier(), new EB002Verifier(), new EB003Verifier(),
-                new EB004Verifier(), new EB005Verifier()
+                new EB004Verifier()
             ];
             foreach (var verifier in semanticVerifiers)
                 results.Add(await RunVerifierAsync(verifier, semanticContext, cancellationToken));
+            results.Add(await RunVerifierAsync(
+                new EB005Verifier(historicalSelection),
+                semanticContext,
+                cancellationToken));
         }
 
         if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)
@@ -788,6 +797,12 @@ public sealed class ExecutionReplayService
         {
             return actual.TestSuite is not null &&
                 TestSuiteEvidenceEquals(expected.TestSuite, actual.TestSuite);
+        }
+        if (expected.Historical is not null)
+        {
+            return actual.Historical is not null &&
+                JsonSerializer.Serialize(expected.Historical) ==
+                JsonSerializer.Serialize(actual.Historical);
         }
         if (expected.SecurityScan is null)
             return true;

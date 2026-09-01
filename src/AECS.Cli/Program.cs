@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using AECS.Application;
 using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
@@ -7,6 +9,7 @@ using AECS.Application.EvidenceGraph;
 using AECS.Application.Parsing;
 using AECS.Application.Promotion;
 using AECS.Application.Replay;
+using AECS.Application.SemanticLinter;
 using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Cli;
@@ -40,8 +43,200 @@ else if (command == "evidence")
     return await RunEvidenceQuery(args[1..]);
 else if (command == "replay")
     return await RunReplay(args[1..]);
+else if (command == "history")
+    return await RunHistory(args[1..]);
 else
     return await RunSingle(args);
+
+static async Task<int> RunHistory(string[] args)
+{
+    const string usage =
+        "Usage: aecs history <ingest|review|suppress|list> " +
+        "[--file <decision.json>] [--id <id>] [--version <n>] " +
+        "[--actor <actor>] [--reason <reason>] [--approve|--reject] " +
+        "[--blocking|--advisory] [--decision <id>] [--decision-version <n>] " +
+        "[--expires <ISO-8601>] [--symbol <id>] [--path <repo-path>] " +
+        "[--format <text|json>] " + EvidenceStoreSelection.Usage;
+    if (args.Length == 0 || args[0] is not ("ingest" or "review" or "suppress" or "list"))
+    {
+        Console.WriteLine(usage);
+        return 1;
+    }
+
+    var operation = args[0];
+    string? file = null;
+    string? id = null;
+    string? actor = null;
+    string? reason = null;
+    string? decisionId = null;
+    string? expires = null;
+    string? symbolId = null;
+    string? filePath = null;
+    var version = 0;
+    var decisionVersion = 0;
+    bool? approved = null;
+    var enforcement = HistoricalDecisionEnforcement.Advisory;
+    var format = "text";
+    var evidenceStoreSelection = new EvidenceStoreSelection();
+    for (var index = 1; index < args.Length; index++)
+    {
+        if (args[index] == "--file" && index + 1 < args.Length)
+            file = args[++index];
+        else if (args[index] == "--id" && index + 1 < args.Length)
+            id = args[++index];
+        else if (args[index] == "--version" && index + 1 < args.Length &&
+                 int.TryParse(args[++index], out var parsedVersion))
+            version = parsedVersion;
+        else if (args[index] == "--actor" && index + 1 < args.Length)
+            actor = args[++index];
+        else if (args[index] == "--reason" && index + 1 < args.Length)
+            reason = args[++index];
+        else if (args[index] == "--decision" && index + 1 < args.Length)
+            decisionId = args[++index];
+        else if (args[index] == "--decision-version" && index + 1 < args.Length &&
+                 int.TryParse(args[++index], out var parsedDecisionVersion))
+            decisionVersion = parsedDecisionVersion;
+        else if (args[index] == "--expires" && index + 1 < args.Length)
+            expires = args[++index];
+        else if (args[index] == "--symbol" && index + 1 < args.Length)
+            symbolId = args[++index];
+        else if (args[index] == "--path" && index + 1 < args.Length)
+            filePath = args[++index].Replace('\\', '/');
+        else if (args[index] == "--approve")
+            approved = true;
+        else if (args[index] == "--reject")
+            approved = false;
+        else if (args[index] == "--blocking")
+            enforcement = HistoricalDecisionEnforcement.Blocking;
+        else if (args[index] == "--advisory")
+            enforcement = HistoricalDecisionEnforcement.Advisory;
+        else if (args[index] == "--format" && index + 1 < args.Length)
+            format = args[++index];
+        else if (evidenceStoreSelection.TryConsume(args, ref index))
+        {
+        }
+        else
+        {
+            Console.WriteLine(usage);
+            return 1;
+        }
+    }
+
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var executionStore))
+        return 1;
+    if (executionStore is not IHistoricalDecisionStore historyStore)
+    {
+        Console.WriteLine("ERROR: selected operational store has no historical registry.");
+        return 1;
+    }
+
+    var registry = new HistoricalDecisionRegistry(historyStore);
+    var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true
+    };
+    jsonOptions.Converters.Add(new JsonStringEnumConverter());
+    try
+    {
+        if (operation == "ingest")
+        {
+            if (file is null || !File.Exists(file))
+            {
+                Console.WriteLine(usage);
+                return 1;
+            }
+            var decision = JsonSerializer.Deserialize<HistoricalDecision>(
+                    await File.ReadAllTextAsync(file),
+                    jsonOptions) ??
+                throw new InvalidOperationException("Historical decision input is empty.");
+            var location = await registry.IngestAsync(
+                decision,
+                DateTime.UtcNow,
+                CancellationToken.None);
+            Console.WriteLine($"Draft historical decision persisted: {location}");
+            return 0;
+        }
+
+        if (operation == "review")
+        {
+            if (id is null || version <= 0 || actor is null || reason is null ||
+                approved is null)
+            {
+                Console.WriteLine(usage);
+                return 1;
+            }
+            var location = await registry.ReviewAsync(
+                id,
+                version,
+                actor,
+                reason,
+                approved.Value,
+                enforcement,
+                DateTime.UtcNow,
+                CancellationToken.None);
+            Console.WriteLine($"Human review revision persisted: {location}");
+            return 0;
+        }
+
+        if (operation == "suppress")
+        {
+            if (id is null || version <= 0 || decisionId is null || decisionVersion <= 0 ||
+                actor is null || reason is null ||
+                !DateTimeOffset.TryParse(expires, out var parsedExpiration))
+            {
+                Console.WriteLine(usage);
+                return 1;
+            }
+            var location = await registry.SuppressAsync(new HistoricalDecisionSuppression
+            {
+                Id = id,
+                Version = version,
+                DecisionId = decisionId,
+                DecisionVersion = decisionVersion,
+                Actor = actor,
+                Reason = reason,
+                SymbolId = symbolId ?? string.Empty,
+                FilePath = filePath ?? string.Empty,
+                CreatedAt = DateTime.UtcNow,
+                ExpiresAt = parsedExpiration.UtcDateTime
+            }, CancellationToken.None);
+            Console.WriteLine($"Versioned suppression persisted: {location}");
+            return 0;
+        }
+
+        if (format is not ("text" or "json"))
+        {
+            Console.WriteLine(usage);
+            return 1;
+        }
+        var decisions = await registry.ListAsync(CancellationToken.None);
+        if (format == "json")
+        {
+            Console.WriteLine(JsonSerializer.Serialize(decisions, jsonOptions));
+        }
+        else if (decisions.Count == 0)
+        {
+            Console.WriteLine("No historical decisions are registered.");
+        }
+        else
+        {
+            foreach (var decision in decisions)
+            {
+                Console.WriteLine(
+                    $"{decision.Id} v{decision.Version} {decision.Type} " +
+                    $"{decision.Review.Status}/{decision.Enforcement} " +
+                    $"{decision.Source}@{decision.SourceVersion}");
+            }
+        }
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERROR: historical registry operation failed closed: {ex.Message}");
+        return 1;
+    }
+}
 
 static async Task<int> RunEvidenceQuery(string[] args)
 {
@@ -776,23 +971,40 @@ static async Task<int> RunSingle(string[] args)
 
 static void PrintSemanticEvidence(VerificationResult result)
 {
-    if (result.Semantic is null)
-        return;
-
-    Console.WriteLine(
-        $"    semantic baseline={result.Semantic.BaselineGraphHash} " +
-        $"candidate={result.Semantic.CandidateGraphHash} " +
-        $"impacted={result.Semantic.ImpactedFiles.Count}");
-    foreach (var finding in result.Semantic.Findings.Take(5))
+    if (result.Semantic is not null)
     {
         Console.WriteLine(
-            $"    {finding.RuleId} [{finding.Severity}] {finding.Symbol} " +
-            $"@ {finding.FilePath}: {finding.Justification}");
+            $"    semantic baseline={result.Semantic.BaselineGraphHash} " +
+            $"candidate={result.Semantic.CandidateGraphHash} " +
+            $"impacted={result.Semantic.ImpactedFiles.Count}");
+        foreach (var finding in result.Semantic.Findings.Take(5))
+        {
+            Console.WriteLine(
+                $"    {finding.RuleId} [{finding.Severity}] {finding.Symbol} " +
+                $"@ {finding.FilePath}: {finding.Justification}");
+        }
+        if (result.Semantic.Findings.Count > 5)
+        {
+            Console.WriteLine(
+                $"    ({result.Semantic.Findings.Count - 5} additional semantic findings)");
+        }
     }
-    if (result.Semantic.Findings.Count > 5)
+
+    if (result.Historical is not null)
     {
         Console.WriteLine(
-            $"    ({result.Semantic.Findings.Count - 5} additional semantic findings)");
+            $"    history={result.Historical.Status} " +
+            $"decisions={result.Historical.Decisions.Count} " +
+            $"conflicts={result.Historical.Conflicts.Count}");
+        foreach (var conflict in result.Historical.Conflicts.Take(5))
+        {
+            var suppression = conflict.Suppressed
+                ? $" suppressed={conflict.SuppressionId}/v{conflict.SuppressionVersion}"
+                : string.Empty;
+            Console.WriteLine(
+                $"    {conflict.RuleId} [{conflict.Severity}] {conflict.Symbol} " +
+                $"@ {conflict.FilePath}{suppression}: {conflict.Justification}");
+        }
     }
 }
 

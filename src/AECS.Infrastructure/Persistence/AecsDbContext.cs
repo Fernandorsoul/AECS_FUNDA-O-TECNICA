@@ -13,6 +13,11 @@ public class AecsDbContext : DbContext
         Set<PromotionEvidenceRecord>();
     public DbSet<ReplayEvidenceRecord> ReplayEvidenceRecords =>
         Set<ReplayEvidenceRecord>();
+    public DbSet<HistoricalDecisionStorageRecord> HistoricalDecisionRecords =>
+        Set<HistoricalDecisionStorageRecord>();
+    public DbSet<HistoricalDecisionSuppressionStorageRecord>
+        HistoricalDecisionSuppressionRecords =>
+        Set<HistoricalDecisionSuppressionStorageRecord>();
 
 
     public AecsDbContext(DbContextOptions<AecsDbContext> options) : base(options) { }
@@ -103,6 +108,60 @@ public class AecsDbContext : DbContext
                 .WithMany(evidence => evidence.ReplayEvents)
                 .HasForeignKey(record => record.ExecutionEvidenceId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<HistoricalDecisionStorageRecord>(entity =>
+        {
+            entity.ToTable("historical_decisions", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_historical_decisions_version",
+                    "\"Version\" > 0");
+                table.HasCheckConstraint(
+                    "ck_historical_decisions_schema_version",
+                    $"\"SchemaVersion\" = '{HistoricalDecisionSchema.DecisionVersion}'");
+            });
+            entity.HasKey(record => new { record.Id, record.Version });
+            entity.Property(record => record.Id).HasMaxLength(200);
+            entity.Property(record => record.SchemaVersion).HasMaxLength(64);
+            entity.Property(record => record.Source).HasMaxLength(1000);
+            entity.Property(record => record.Authority).HasMaxLength(200);
+            entity.Property(record => record.ContentHash).HasMaxLength(71);
+            entity.Property(record => record.DecisionJson).HasColumnType("jsonb");
+            entity.Property(record => record.ValidFrom).HasColumnType("timestamp with time zone");
+            entity.Property(record => record.ValidUntil).HasColumnType("timestamp with time zone");
+            entity.Property(record => record.CreatedAt).HasColumnType("timestamp with time zone");
+            entity.HasIndex(record => record.ReviewStatus);
+            entity.HasIndex(record => record.ValidUntil);
+            entity.HasIndex(record => record.Source);
+        });
+
+        modelBuilder.Entity<HistoricalDecisionSuppressionStorageRecord>(entity =>
+        {
+            entity.ToTable("historical_decision_suppressions", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_historical_decision_suppressions_version",
+                    "\"Version\" > 0");
+                table.HasCheckConstraint(
+                    "ck_historical_decision_suppressions_schema_version",
+                    $"\"SchemaVersion\" = '{HistoricalDecisionSchema.SuppressionVersion}'");
+            });
+            entity.HasKey(record => new { record.Id, record.Version });
+            entity.Property(record => record.Id).HasMaxLength(200);
+            entity.Property(record => record.SchemaVersion).HasMaxLength(64);
+            entity.Property(record => record.DecisionId).HasMaxLength(200);
+            entity.Property(record => record.Actor).HasMaxLength(200);
+            entity.Property(record => record.ContentHash).HasMaxLength(71);
+            entity.Property(record => record.SuppressionJson).HasColumnType("jsonb");
+            entity.Property(record => record.ExpiresAt).HasColumnType("timestamp with time zone");
+            entity.Property(record => record.CreatedAt).HasColumnType("timestamp with time zone");
+            entity.HasIndex(record => new { record.DecisionId, record.DecisionVersion });
+            entity.HasIndex(record => record.ExpiresAt);
+            entity.HasOne<HistoricalDecisionStorageRecord>()
+                .WithMany()
+                .HasForeignKey(record => new { record.DecisionId, record.DecisionVersion })
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

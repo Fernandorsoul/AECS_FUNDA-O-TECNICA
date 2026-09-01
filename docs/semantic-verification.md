@@ -38,7 +38,7 @@ O store autenticado valida schema, hashes, vínculo com a baseline, caminhos imp
 
 Regex e busca textual não participam da decisão de EB001–EB004. O campo legado `PatternRule.Pattern` é mantido apenas para compatibilidade e não é consumido pelo verificador. O fallback do indexador só inventaria arquivos; se uma alteração C# exige autoridade semântica, ele falha fechado.
 
-EB005 continua sendo uma heurística histórica separada, probabilística e não bloqueante na configuração padrão. Seus matches textuais produzem avisos e não são reutilizados como fatos de EB001–EB004.
+EB005 é um verificador histórico separado. Desde o registro versionado, ele também usa somente seletores de símbolos e relações resolvidas; extrações heurísticas permanecem em draft até revisão, e enforcement bloqueante exige aprovação humana. Consulte [Registro histórico do EB005](historical-decision-registry.md).
 
 ## Medição das fixtures
 

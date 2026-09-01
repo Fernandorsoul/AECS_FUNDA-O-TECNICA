@@ -2,6 +2,8 @@
 
 O backend PostgreSQL implementa `IExecutionEvidenceStore` sem alterar o envelope autenticado. A execução completa fica em JSONB canônico e assinado; cada exportação, promoção ou replay ocupa uma linha append-only com sequência, assinatura anterior e selo próprio.
 
+O mesmo backend implementa `IHistoricalDecisionStore`. Decisões e supressões do EB005 ficam em tabelas versionadas append-only, com chaves compostas, vínculo entre supressão e versão da decisão, hashes de conteúdo e índices de revisão, fonte e expiração. A migration `AddHistoricalDecisionRegistry` cria esse registro sem converter decisões hardcoded ou inventar histórico.
+
 ## Modelo e garantias
 
 `execution_evidence` mantém o agregado imutável, o selo inicial, a cabeça atual da cadeia e projeções indexadas de tarefa, `AgentRun` e candidato. O JSONB inclui contrato, tentativas, orçamento, baseline, comandos, contexto, critérios, verificações, decisão e transições.

@@ -13,23 +13,40 @@ internal static class SemanticGraphFixture
         IEnumerable<CSharpSymbolGraphEdge>? baselineEdges = null,
         IEnumerable<CSharpSymbolGraphEdge>? candidateEdges = null,
         IEnumerable<string>? changedFiles = null,
+        IEnumerable<RepositorySnapshotProject>? projects = null) =>
+        SemanticAnalysisInput.From(Context(
+            baselineNodes,
+            candidateNodes,
+            baselineEdges,
+            candidateEdges,
+            changedFiles,
+            projects));
+
+    internal static VerificationContext Context(
+        IEnumerable<CSharpSymbolGraphNode> baselineNodes,
+        IEnumerable<CSharpSymbolGraphNode> candidateNodes,
+        IEnumerable<CSharpSymbolGraphEdge>? baselineEdges = null,
+        IEnumerable<CSharpSymbolGraphEdge>? candidateEdges = null,
+        IEnumerable<string>? changedFiles = null,
         IEnumerable<RepositorySnapshotProject>? projects = null)
     {
+        var baselineNodeList = baselineNodes.ToList();
+        var candidateNodeList = candidateNodes.ToList();
         var changed = (changedFiles ?? ["src/App/Changed.cs"]).ToList();
         var projectList = (projects ?? [Project("src/App/App.csproj")]).ToList();
-        var baselineSnapshot = Snapshot("sha256:baseline", baselineNodes, projectList);
-        var candidateSnapshot = Snapshot("sha256:candidate", candidateNodes, projectList);
+        var baselineSnapshot = Snapshot("sha256:baseline", baselineNodeList, projectList);
+        var candidateSnapshot = Snapshot("sha256:candidate", candidateNodeList, projectList);
         var baselineGraph = Graph(
             "sha256:baseline-graph",
             baselineSnapshot.SnapshotHash,
-            baselineNodes,
+            baselineNodeList,
             baselineEdges);
         var candidateGraph = Graph(
             "sha256:candidate-graph",
             candidateSnapshot.SnapshotHash,
-            candidateNodes,
+            candidateNodeList,
             candidateEdges);
-        return SemanticAnalysisInput.From(new VerificationContext
+        return new VerificationContext
         {
             CandidateChangeSet = new CandidateChangeSet
             {
@@ -42,7 +59,7 @@ internal static class SemanticGraphFixture
             CandidateRepositorySnapshot = candidateSnapshot,
             BaselineCSharpSymbolGraph = baselineGraph,
             CandidateCSharpSymbolGraph = candidateGraph
-        });
+        };
     }
 
     internal static CSharpSymbolGraphNode Node(
