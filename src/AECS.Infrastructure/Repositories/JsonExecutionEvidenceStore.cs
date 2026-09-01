@@ -273,7 +273,7 @@ public sealed partial class JsonExecutionEvidenceStore :
                 .Take(query.Limit)
                 .Select(item => item.Summary)
                 .ToList(),
-            Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToList()
+            Diagnostics = diagnostics
         };
     }
 

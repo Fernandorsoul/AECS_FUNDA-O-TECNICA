@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using AECS.Domain.Enums;
 using AECS.Domain.Exceptions;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -417,6 +418,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
 
         ValidateSemanticEvidence(evidence);
         ValidateHistoricalEvidence(evidence);
+        ValidateAdaptiveShadowEvidence(evidence);
 
         var snapshot = evidence.RepositorySnapshot;
         if (snapshot is not null &&
@@ -629,6 +631,138 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             }
         }
     }
+
+    private static void ValidateAdaptiveShadowEvidence(ExecutionEvidence evidence)
+    {
+        var shadow = evidence.AdaptiveShadow;
+        if (shadow is null)
+            return;
+        var recommendation = shadow.Recommendation;
+        var evaluation = shadow.Evaluation;
+        if (recommendation is null || evaluation is null ||
+            recommendation.SchemaVersion != AdaptiveShadowSchema.EvidenceVersion ||
+            recommendation.StrategyVersion != AdaptiveShadowSchema.StrategyVersion ||
+            recommendation.Inputs is null ||
+            recommendation.FixedPlan is null ||
+            recommendation.RecommendedPlan is null ||
+            recommendation.SourceEvidenceIds is null ||
+            recommendation.Diagnostics is null ||
+            string.IsNullOrWhiteSpace(recommendation.Justification) ||
+            !IsSha256(recommendation.Inputs.ObjectiveFingerprint) ||
+            string.IsNullOrWhiteSpace(recommendation.Inputs.TaskType) ||
+            recommendation.Inputs.Risk != evidence.TaskContract.Constraints.SecurityRisk ||
+            recommendation.Inputs.AuthenticatedRecords < 0 ||
+            recommendation.Inputs.EligibleRecords < 0 ||
+            recommendation.Inputs.MatchingRecords < 0 ||
+            recommendation.Inputs.ExcludedIncompleteRecords < 0 ||
+            recommendation.Inputs.ExcludedNonReproducibleRecords < 0 ||
+            recommendation.Inputs.InvalidOrTamperedRecords < 0 ||
+            recommendation.Inputs.EligibleRecords > recommendation.Inputs.AuthenticatedRecords ||
+            recommendation.Inputs.MatchingRecords > recommendation.Inputs.EligibleRecords ||
+            !IsRate(recommendation.Inputs.OlderSuccessRate) ||
+            !IsRate(recommendation.Inputs.RecentSuccessRate) ||
+            recommendation.SourceEvidenceIds.Any(id => id == Guid.Empty) ||
+            recommendation.SourceEvidenceIds.Distinct().Count() !=
+                recommendation.SourceEvidenceIds.Count ||
+            recommendation.SourceEvidenceIds.Count !=
+                recommendation.Inputs.MatchingRecords ||
+            recommendation.Diagnostics.Any(string.IsNullOrWhiteSpace) ||
+            !IsValidShadowPlan(recommendation.FixedPlan) ||
+            !IsValidShadowPlan(recommendation.RecommendedPlan) ||
+            recommendation.RecommendedPlan.Budget.MaxTokens >
+                recommendation.FixedPlan.Budget.MaxTokens ||
+            recommendation.RecommendedPlan.Budget.MaxCostUsd >
+                recommendation.FixedPlan.Budget.MaxCostUsd ||
+            recommendation.RecommendedPlan.Budget.MaxRetries >
+                recommendation.FixedPlan.Budget.MaxRetries ||
+            recommendation.RecommendedPlan.Budget.MaxDurationSeconds >
+                recommendation.FixedPlan.Budget.MaxDurationSeconds ||
+            recommendation.RecommendedPlan.Budget.MaxFilesChanged >
+                recommendation.FixedPlan.Budget.MaxFilesChanged ||
+            !FixedTimeTextEquals(
+                ExecutionCapabilityPolicyFingerprint.Create(
+                    recommendation.FixedPlan.Capabilities),
+                ExecutionCapabilityPolicyFingerprint.Create(
+                    recommendation.RecommendedPlan.Capabilities)) ||
+            evaluation.CounterfactualExecuted ||
+            !evaluation.FixedPlanPreserved ||
+            string.IsNullOrWhiteSpace(evaluation.ExecutedModel) ||
+            string.IsNullOrWhiteSpace(evaluation.ExecutedContextStrategy) ||
+            evaluation.InputTokens < 0 ||
+            evaluation.OutputTokens < 0 ||
+            evaluation.AccountedCostUsd < 0 ||
+            evaluation.DurationSeconds < 0 ||
+            !IsValidBudget(evaluation.ExecutedBudget) ||
+            evaluation.FixedControllerDecision != evidence.FinalDecision.Decision ||
+            evaluation.FixedControllerState != evidence.FinalDecision.State ||
+            evaluation.FixedControllerSucceeded !=
+                (evidence.FinalDecision.Decision == TaskDecision.Verified) ||
+            !string.Equals(
+                evaluation.ExecutedModel,
+                evidence.AgentRun.Model,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                evaluation.ExecutedModel,
+                recommendation.FixedPlan.Model,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                evaluation.ExecutedContextStrategy,
+                evidence.ContextManifest.Strategy,
+                StringComparison.Ordinal) ||
+            !BudgetEquals(
+                evaluation.ExecutedBudget,
+                recommendation.FixedPlan.Budget) ||
+            !BudgetEquals(
+                evaluation.ExecutedBudget,
+                evidence.TaskContract.Budget) ||
+            !FixedTimeTextEquals(
+                ExecutionCapabilityPolicyFingerprint.Create(
+                    recommendation.FixedPlan.Capabilities),
+                ExecutionCapabilityPolicyFingerprint.Create(
+                    evidence.TaskContract.Execution.EffectiveCapabilities)) ||
+            evaluation.InputTokens != evidence.AgentResult.InputTokens ||
+            evaluation.OutputTokens != evidence.AgentResult.OutputTokens ||
+            evaluation.AccountedCostUsd !=
+                evidence.AgentResult.UsageAccounting?.AccountedCostUsd ||
+            evaluation.DurationSeconds != evidence.AgentResult.Duration.TotalSeconds ||
+            evaluation.RecommendationAgreedWithFixedModel != string.Equals(
+                recommendation.RecommendedPlan.Model,
+                evaluation.ExecutedModel,
+                StringComparison.Ordinal) ||
+            evaluation.RecommendationAgreedWithFixedContext != string.Equals(
+                recommendation.RecommendedPlan.ContextStrategy,
+                evaluation.ExecutedContextStrategy,
+                StringComparison.Ordinal))
+        {
+            throw new EvidenceIntegrityException(
+                "Adaptive shadow evidence is incomplete, unsafe, or has an unsupported schema.");
+        }
+    }
+
+    private static bool IsValidShadowPlan(AdaptiveShadowPlan plan) =>
+        !string.IsNullOrWhiteSpace(plan.Model) &&
+        !string.IsNullOrWhiteSpace(plan.ContextStrategy) &&
+        plan.Budget is not null &&
+        IsValidBudget(plan.Budget) &&
+        plan.Verification is not null &&
+        plan.Capabilities is not null;
+
+    private static bool IsValidBudget(ExecutionBudget budget) =>
+        budget.MaxTokens >= 0 &&
+        budget.MaxCostUsd >= 0 &&
+        budget.MaxRetries >= 0 &&
+        budget.MaxDurationSeconds >= 0 &&
+        budget.MaxFilesChanged >= 0;
+
+    private static bool BudgetEquals(ExecutionBudget left, ExecutionBudget right) =>
+        left.MaxTokens == right.MaxTokens &&
+        left.MaxCostUsd == right.MaxCostUsd &&
+        left.MaxRetries == right.MaxRetries &&
+        left.MaxDurationSeconds == right.MaxDurationSeconds &&
+        left.MaxFilesChanged == right.MaxFilesChanged;
+
+    private static bool IsRate(double? value) =>
+        value is null || value is >= 0d and <= 1d;
 
     private static void ValidateSemanticEvidence(ExecutionEvidence evidence)
     {

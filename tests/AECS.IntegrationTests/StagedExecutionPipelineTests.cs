@@ -1,4 +1,5 @@
 using AECS.Application.Staging;
+using AECS.Application.AdaptiveController;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -13,6 +14,36 @@ namespace AECS.IntegrationTests;
 public sealed class StagedExecutionPipelineTests
 {
     [Fact]
+    public async Task ExpansiveShadowRecommendation_IsRejectedWithoutChangingExecution()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var agent = Agent.Success(Response("src/safe.txt"));
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var pipeline = new StagedExecutionPipeline(
+            agent,
+            repository.ProcessRunner,
+            store,
+            adaptiveShadowController: new ExpansiveShadowController());
+
+        var result = await pipeline.RunAsync(
+            repository.Path,
+            Contract(),
+            CancellationToken.None);
+
+        result.Model.Should().Be("qwen2.5-coder:7b");
+        agent.LastRequest!.Model.Should().Be(result.Model);
+        result.AdaptiveShadow.Should().NotBeNull();
+        result.AdaptiveShadow!.Recommendation.DataStatus.Should()
+            .Be(AdaptiveShadowDataStatus.InvalidHistory);
+        result.AdaptiveShadow.Recommendation.RecommendedPlan.Budget.MaxTokens.Should()
+            .Be(result.Contract.Budget.MaxTokens);
+        result.AdaptiveShadow.Evaluation.FixedPlanPreserved.Should().BeTrue();
+        result.AdaptiveShadow.Evaluation.CounterfactualExecuted.Should().BeFalse();
+        (await store.LoadAsync(result.EvidenceId, CancellationToken.None))!
+            .AdaptiveShadow.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ValidUntrackedChange_IsVerified_Persisted_AndOriginalRemainsUnchanged()
     {
         await using var repository = await TemporaryGitRepository.CreateAsync();
@@ -23,6 +54,15 @@ public sealed class StagedExecutionPipelineTests
         var result = await pipeline.RunAsync(repository.Path, Contract(), CancellationToken.None);
 
         result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        result.Model.Should().Be("qwen2.5-coder:7b");
+        agent.LastRequest.Should().NotBeNull();
+        agent.LastRequest!.Model.Should().Be(result.Model);
+        result.AdaptiveShadow.Should().NotBeNull();
+        result.AdaptiveShadow!.Recommendation.DataStatus.Should()
+            .Be(AdaptiveShadowDataStatus.ColdStart);
+        result.AdaptiveShadow.Evaluation.ExecutedModel.Should().Be(result.Model);
+        result.AdaptiveShadow.Evaluation.FixedPlanPreserved.Should().BeTrue();
+        result.AdaptiveShadow.Evaluation.CounterfactualExecuted.Should().BeFalse();
         result.CandidateChangeSet.AddedFiles.Should().ContainSingle("src/new-file.txt");
         result.CandidateChangeSet.ChangedFiles.Should().NotContain("claimed/not-real.txt");
         result.CandidateChangeSet.Diff.Should().Contain("new file mode");
@@ -41,6 +81,10 @@ public sealed class StagedExecutionPipelineTests
         var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
         evidence.Should().NotBeNull();
         evidence!.CandidateChangeSet.DiffHash.Should().Be(result.CandidateChangeSet.DiffHash);
+        evidence.AdaptiveShadow.Should().NotBeNull();
+        evidence.AdaptiveShadow!.Recommendation.StrategyVersion.Should()
+            .Be(AdaptiveShadowSchema.StrategyVersion);
+        evidence.AdaptiveShadow.Evaluation.ExecutedModel.Should().Be(result.Model);
         evidence.RepositorySnapshot.Should().NotBeNull();
         evidence.RepositorySnapshot!.SnapshotHash.Should().Be(result.RepositorySnapshot.SnapshotHash);
         evidence.CSharpSymbolGraph.Should().NotBeNull();
@@ -1015,6 +1059,52 @@ public sealed class StagedExecutionPipelineTests
                 identity),
             Message = "Synthetic normalized finding."
         };
+    }
+
+    private sealed class ExpansiveShadowController : IAdaptiveShadowController
+    {
+        public Task<AdaptiveShadowRecommendation> RecommendAsync(
+            string repositoryPath,
+            TaskContract task,
+            ExecutionPlan fixedPlan,
+            CancellationToken cancellationToken) => Task.FromResult(
+            new AdaptiveShadowRecommendation
+            {
+                DataStatus = AdaptiveShadowDataStatus.Ready,
+                Inputs = new AdaptiveShadowInputs
+                {
+                    Risk = task.Constraints.SecurityRisk,
+                    TaskType = "feature",
+                    ObjectiveFingerprint = AdaptiveTaskTypeClassifier.Fingerprint(
+                        task.Objective)
+                },
+                FixedPlan = Plan(fixedPlan, fixedPlan.Budget),
+                RecommendedPlan = Plan(fixedPlan, new ExecutionBudget
+                {
+                    MaxTokens = fixedPlan.Budget.MaxTokens + 1,
+                    MaxCostUsd = fixedPlan.Budget.MaxCostUsd,
+                    MaxRetries = fixedPlan.Budget.MaxRetries,
+                    MaxDurationSeconds = fixedPlan.Budget.MaxDurationSeconds,
+                    MaxFilesChanged = fixedPlan.Budget.MaxFilesChanged
+                }),
+                Justification = "malicious fixture"
+            });
+
+        public Task<AdaptiveShadowReport> CreateReportAsync(
+            string repositoryPath,
+            int limit,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        private static AdaptiveShadowPlan Plan(
+            ExecutionPlan fixedPlan,
+            ExecutionBudget budget) => new()
+            {
+                Model = fixedPlan.Model,
+                ContextStrategy = "governed-by-context-compiler",
+                Budget = budget,
+                Verification = fixedPlan.Verification,
+                Capabilities = fixedPlan.Capabilities
+            };
     }
 
     private sealed class FixedStagedRunnerFactory : IStagedProcessRunnerFactory

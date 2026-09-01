@@ -15,9 +15,10 @@ Uma resposta do modelo nunca é autoridade sobre quais arquivos realmente mudara
 
 ```mermaid
 flowchart TD
-    A[TaskContract] --> B[RiskClassifier e ExecutionController]
+    A[TaskContract] --> B[RiskClassifier e ExecutionController fixo]
     B --> C[Captura de commit, branch e status]
-    C --> D[Worktree descartável de preflight]
+    C --> AS[Adaptive Controller somente em shadow]
+    AS --> D[Worktree descartável de preflight]
     D --> S[RepositorySnapshot da baseline]
     S --> SG[CSharpSymbolGraph via Roslyn/MSBuild]
     SG --> E{Build/testes da baseline}
@@ -39,7 +40,7 @@ O pipeline executa as seguintes etapas:
 
 1. `TaskContractParser` converte o YAML, e `RiskClassifier` pode elevar o risco declarado.
 2. `ExecutionBudgetScope` inicia um wall clock compartilhado por preflight, agente, retries e verificações.
-3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada.
+3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada; em seguida o Adaptive Controller calcula somente uma recomendação shadow a partir de evidências autenticadas, sem substituir o plano fixo.
 4. `RepositorySnapshotBuilder` lê exclusivamente a árvore Git do commit no worktree detached e produz o inventário versionado e endereçado por conteúdo da baseline.
 5. `RoslynSymbolGraphBuilder` abre soluções e projetos C# autorizados pelo snapshot e produz o grafo semântico versionado, com opções, versões, diagnósticos, limites e hashes estáveis.
 6. O mesmo worktree temporário executa build e a matriz de suites da baseline conforme o perfil do contrato. Somente falha de gate obrigatório impede a chamada do agente; gates opcionais permanecem na evidência.
@@ -170,6 +171,7 @@ Cada documento preserva:
 - manifesto de contexto;
 - `CandidateChangeSet`, comandos do candidato e resultados dos verificadores;
 - matriz de suites com descoberta/contagens, matriz de critérios de aceite, decisão final e transições de estado;
+- estratégia, inputs, fontes, recomendação shadow e avaliação contra o resultado do controlador fixo, quando o backend suporta consultas autenticadas;
 - exportações, promoções e replays posteriores.
 
 A criação inicial produz um envelope `aecs.execution-evidence/v1`: JSON canônico, SHA-256 e assinatura RSA-PSS/SHA-256 identificada pelo hash da chave pública. Promoções, exportações e replays são eventos assinados numa única sequência ligada à assinatura anterior, e uma cabeça também assinada cobre a quantidade de eventos e a última assinatura. A leitura rejeita schema legado, campo desconhecido ou duplicado, hash divergente, chave não confiável e cadeia inválida antes de entregar `ExecutionEvidence` ao consumidor.
@@ -192,6 +194,18 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 `IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. Snapshot e grafo semântico são nós próprios ligados à baseline, execução e contexto por referências explícitas. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
 
+## Adaptive Controller em shadow mode
+
+Quando o store também implementa `IEvidenceGraphSource`, o pipeline calcula uma recomendação
+adaptativa depois de autenticar e limitar o histórico ao mesmo repositório. Apenas execuções
+terminais, completas e reproduzíveis fornecem features. Cold start, amostra pequena, drift,
+contradição ou integridade inválida retornam deterministicamente o plano fixo. Mesmo quando há
+dados suficientes, a recomendação não é aplicada: modelo, contexto, orçamento e capabilities
+executados continuam sob seus controladores determinísticos. A evidência assinada preserva a
+estratégia, as fontes e a avaliação honesta do resultado fixo; o comando `adaptive-report`
+agrupa essas observações offline por risco e tipo. Detalhes estão em
+[Adaptive Controller em shadow mode](adaptive-shadow-controller.md).
+
 ## Experiment Harness
 
 O modo versionado do Experiment Harness lê datasets v1 gerais e o protocolo de contexto A/B
@@ -208,7 +222,7 @@ CPVC por dimensão, distribuições, incerteza, conclusão H1 e links para todas
 | `AECS.Domain` | contratos, candidatos, evidências, decisões e interfaces sem dependência de infraestrutura |
 | `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão, replay e promoção |
 | `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, stores autenticados JSON/PostgreSQL e fundações Docker |
-| `AECS.Cli` | `run`, `experiment`, `jarvis`, `evidence`, `replay`, `promote` e `export-patch` |
+| `AECS.Cli` | `run`, `experiment`, `jarvis`, `evidence`, `adaptive-report`, `replay`, `promote` e `export-patch` |
 | `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
 | `AECS.IntegrationTests` | Git e PostgreSQL reais, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 

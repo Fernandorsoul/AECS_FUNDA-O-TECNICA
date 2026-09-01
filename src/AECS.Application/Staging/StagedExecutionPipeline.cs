@@ -1,4 +1,5 @@
 using AECS.Application.Classification;
+using AECS.Application.AdaptiveController;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
 using AECS.Application.ControlKernel;
@@ -36,10 +37,12 @@ public sealed class StagedExecutionResult
     public Guid EvidenceId { get; init; }
     public string EvidenceLocation { get; init; } = string.Empty;
     public bool OriginalRepositoryUnchanged { get; init; }
+    public AdaptiveShadowEvidence? AdaptiveShadow { get; init; }
 }
 
 public sealed class StagedExecutionPipeline
 {
+    private static readonly TimeSpan AdaptiveShadowTimeout = TimeSpan.FromSeconds(5);
     private readonly IAgentAdapter _agentAdapter;
     private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
     private readonly IExecutionEvidenceStore _evidenceStore;
@@ -54,6 +57,7 @@ public sealed class StagedExecutionPipeline
     private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
     private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
     private readonly IHistoricalDecisionStore? _historicalDecisionStore;
+    private readonly IAdaptiveShadowController? _adaptiveShadowController;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -67,7 +71,8 @@ public sealed class StagedExecutionPipeline
         RepositorySnapshotBuilder? repositorySnapshotBuilder = null,
         ICSharpSymbolGraphBuilder? symbolGraphBuilder = null,
         IHistoricalDecisionStore? historicalDecisionStore = null,
-        IExecutionController? executionController = null)
+        IExecutionController? executionController = null,
+        IAdaptiveShadowController? adaptiveShadowController = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -82,6 +87,12 @@ public sealed class StagedExecutionPipeline
         _historicalDecisionStore = historicalDecisionStore ??
             evidenceStore as IHistoricalDecisionStore;
         _executionController = executionController ?? new ExecutionController();
+        _adaptiveShadowController = adaptiveShadowController ??
+            (evidenceStore is IEvidenceGraphSource graphSource
+                ? new AECS.Application.AdaptiveController.AdaptiveController(
+                    evidenceStore,
+                    graphSource)
+                : null);
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -93,15 +104,12 @@ public sealed class StagedExecutionPipeline
         TaskContract inputContract,
         CancellationToken cancellationToken)
     {
-        using var budgetScope = new ExecutionBudgetScope(
-            inputContract.Budget,
-            cancellationToken);
         var stateMachine = new TaskStateMachine();
         stateMachine.TransitionTo(TaskState.ContractReady);
 
         var risk = _riskClassifier.Classify(inputContract);
         var contract = WithRisk(inputContract, risk);
-        var plan = await _executionController.PlanAsync(contract, budgetScope.Token);
+        var plan = await _executionController.PlanAsync(contract, cancellationToken);
         CapabilityPolicyGuard.EnsureNoExpansion(
             contract.Execution.EffectiveCapabilities,
             plan.Capabilities);
@@ -109,8 +117,16 @@ public sealed class StagedExecutionPipeline
 
         var baseline = await _workspaceManager.CaptureBaselineAsync(
             repositoryPath,
-            budgetScope.Token);
+            cancellationToken);
         _evidenceStore.EnsureRepositoryIsolation(baseline.RepositoryPath);
+        var shadowRecommendation = await RecommendInShadowAsync(
+            baseline.RepositoryPath,
+            contract,
+            plan,
+            cancellationToken);
+        using var budgetScope = new ExecutionBudgetScope(
+            inputContract.Budget,
+            cancellationToken);
 
         var agentRunId = Guid.NewGuid().ToString("N");
         var startedAt = DateTime.UtcNow;
@@ -188,6 +204,7 @@ public sealed class StagedExecutionPipeline
                 contract,
                 risk,
                 plan.Model,
+                shadowRecommendation,
                 baseline,
                 repositorySnapshot,
                 symbolGraph,
@@ -321,6 +338,7 @@ public sealed class StagedExecutionPipeline
             contract,
             risk,
             plan.Model,
+            shadowRecommendation,
             baseline,
             repositorySnapshot,
             symbolGraph,
@@ -345,6 +363,7 @@ public sealed class StagedExecutionPipeline
         TaskContract contract,
         RiskLevel risk,
         string model,
+        AdaptiveShadowRecommendation? shadowRecommendation,
         BaselineSnapshot baseline,
         RepositorySnapshot repositorySnapshot,
         CSharpSymbolGraph symbolGraph,
@@ -391,18 +410,28 @@ public sealed class StagedExecutionPipeline
         var baselineFailed = RequiredBaselineFailures(
             contract,
             baselineVerificationResults).Count > 0;
+        var budgetEvidence = CreateBudgetEvidence(
+            contract.Budget,
+            budgetScope,
+            agentResult,
+            agentAttempts,
+            budgetExhaustionReason);
+        var adaptiveShadow = shadowRecommendation is null
+            ? null
+            : EvaluateShadow(
+                shadowRecommendation,
+                contract,
+                model,
+                contextManifest,
+                agentResult,
+                decision);
         var evidence = new ExecutionEvidence
         {
             TaskContract = contract,
             AgentRun = agentRun,
             AgentResult = agentResult,
             AgentAttempts = agentAttempts,
-            BudgetUsage = CreateBudgetEvidence(
-                contract.Budget,
-                budgetScope,
-                agentResult,
-                agentAttempts,
-                budgetExhaustionReason),
+            BudgetUsage = budgetEvidence,
             Baseline = baseline,
             RepositorySnapshot = repositorySnapshot,
             CSharpSymbolGraph = symbolGraph,
@@ -425,6 +454,7 @@ public sealed class StagedExecutionPipeline
                     .ToList(),
                 DecidedAt = DateTime.UtcNow
             },
+            AdaptiveShadow = adaptiveShadow,
             StateTransitions = stateMachine.History
                 .Select(item => $"{item.From}->{item.To}@{item.At:O}")
                 .ToList()
@@ -444,6 +474,7 @@ public sealed class StagedExecutionPipeline
             AgentResult = agentResult,
             AgentAttempts = agentAttempts,
             BudgetUsage = evidence.BudgetUsage,
+            AdaptiveShadow = adaptiveShadow,
             Baseline = baseline,
             RepositorySnapshot = repositorySnapshot,
             CSharpSymbolGraph = symbolGraph,
@@ -461,6 +492,138 @@ public sealed class StagedExecutionPipeline
             OriginalRepositoryUnchanged = true
         };
     }
+
+    private async Task<AdaptiveShadowRecommendation?> RecommendInShadowAsync(
+        string repositoryPath,
+        TaskContract contract,
+        ExecutionPlan fixedPlan,
+        CancellationToken cancellationToken)
+    {
+        if (_adaptiveShadowController is null)
+            return null;
+        using var shadowTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+        shadowTimeout.CancelAfter(AdaptiveShadowTimeout);
+        try
+        {
+            var recommendation = await _adaptiveShadowController.RecommendAsync(
+                repositoryPath,
+                contract,
+                fixedPlan,
+                shadowTimeout.Token);
+            EnsureShadowRecommendationSafe(fixedPlan, recommendation);
+            return recommendation;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new AdaptiveShadowRecommendation
+            {
+                DataStatus = AdaptiveShadowDataStatus.InvalidHistory,
+                Inputs = new AdaptiveShadowInputs
+                {
+                    Risk = contract.Constraints.SecurityRisk,
+                    TaskType = AdaptiveTaskTypeClassifier.Classify(contract.Objective),
+                    ObjectiveFingerprint = AdaptiveTaskTypeClassifier.Fingerprint(
+                        contract.Objective),
+                    InvalidOrTamperedRecords = 1
+                },
+                FixedPlan = Snapshot(fixedPlan),
+                RecommendedPlan = Snapshot(fixedPlan),
+                Justification =
+                    "Shadow analysis failed closed; the deterministic fixed plan is recommended.",
+                Diagnostics = ["Adaptive shadow history was unavailable and was not used."]
+            };
+        }
+    }
+
+    private static AdaptiveShadowEvidence EvaluateShadow(
+        AdaptiveShadowRecommendation recommendation,
+        TaskContract contract,
+        string executedModel,
+        ContextManifest context,
+        AgentRunResult result,
+        DecisionResult decision)
+    {
+        var fixedPlan = recommendation.FixedPlan;
+        var capabilitiesPreserved = string.Equals(
+            ExecutionCapabilityPolicyFingerprint.Create(fixedPlan.Capabilities),
+            ExecutionCapabilityPolicyFingerprint.Create(
+                contract.Execution.EffectiveCapabilities),
+            StringComparison.Ordinal);
+        return new AdaptiveShadowEvidence
+        {
+            Recommendation = recommendation,
+            Evaluation = new AdaptiveShadowEvaluation
+            {
+                FixedControllerDecision = decision.Decision,
+                FixedControllerState = decision.TargetState,
+                FixedControllerSucceeded = decision.Decision == TaskDecision.Verified,
+                ExecutedModel = executedModel,
+                ExecutedContextStrategy = context.Strategy,
+                ExecutedBudget = contract.Budget,
+                InputTokens = result.InputTokens,
+                OutputTokens = result.OutputTokens,
+                AccountedCostUsd = result.UsageAccounting?.AccountedCostUsd,
+                DurationSeconds = result.Duration.TotalSeconds,
+                RecommendationAgreedWithFixedModel = string.Equals(
+                    recommendation.RecommendedPlan.Model,
+                    executedModel,
+                    StringComparison.Ordinal),
+                RecommendationAgreedWithFixedContext = string.Equals(
+                    recommendation.RecommendedPlan.ContextStrategy,
+                    context.Strategy,
+                    StringComparison.Ordinal),
+                FixedPlanPreserved = string.Equals(
+                        fixedPlan.Model,
+                        executedModel,
+                        StringComparison.Ordinal) &&
+                    BudgetEquals(fixedPlan.Budget, contract.Budget) &&
+                    capabilitiesPreserved,
+                CounterfactualExecuted = false
+            }
+        };
+    }
+
+    private static void EnsureShadowRecommendationSafe(
+        ExecutionPlan fixedPlan,
+        AdaptiveShadowRecommendation recommendation)
+    {
+        ArgumentNullException.ThrowIfNull(recommendation);
+        ArgumentNullException.ThrowIfNull(recommendation.RecommendedPlan);
+        CapabilityPolicyGuard.EnsureNoExpansion(
+            fixedPlan.Capabilities,
+            recommendation.RecommendedPlan.Capabilities);
+        var budget = recommendation.RecommendedPlan.Budget;
+        if (budget.MaxTokens > fixedPlan.Budget.MaxTokens ||
+            budget.MaxCostUsd > fixedPlan.Budget.MaxCostUsd ||
+            budget.MaxRetries > fixedPlan.Budget.MaxRetries ||
+            budget.MaxDurationSeconds > fixedPlan.Budget.MaxDurationSeconds ||
+            budget.MaxFilesChanged > fixedPlan.Budget.MaxFilesChanged)
+        {
+            throw new InvalidOperationException(
+                "Adaptive shadow recommendation attempted to expand the fixed budget.");
+        }
+    }
+
+    private static AdaptiveShadowPlan Snapshot(ExecutionPlan plan) => new()
+    {
+        Model = plan.Model,
+        ContextStrategy = "governed-by-context-compiler",
+        Budget = plan.Budget,
+        Verification = plan.Verification,
+        Capabilities = plan.Capabilities
+    };
+
+    private static bool BudgetEquals(ExecutionBudget left, ExecutionBudget right) =>
+        left.MaxTokens == right.MaxTokens &&
+        left.MaxCostUsd == right.MaxCostUsd &&
+        left.MaxRetries == right.MaxRetries &&
+        left.MaxDurationSeconds == right.MaxDurationSeconds &&
+        left.MaxFilesChanged == right.MaxFilesChanged;
 
     private async Task<List<VerificationResult>> VerifyBaselineAsync(
         IProcessRunner stagedProcessRunner,

@@ -33,6 +33,8 @@ public class ExecutionEvidence
     public List<AcceptanceCriterionResult> AcceptanceCriteriaResults { get; init; } = [];
     public List<ExecutionCommandEvidence> CandidateCommands { get; init; } = [];
     public FinalDecisionRecord FinalDecision { get; init; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AdaptiveShadowEvidence? AdaptiveShadow { get; init; }
     public List<CandidatePromotionEvidence> Promotions { get; init; } = [];
     public List<string> StateTransitions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

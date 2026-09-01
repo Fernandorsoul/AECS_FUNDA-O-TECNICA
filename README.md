@@ -38,6 +38,8 @@ O protótipo já inclui:
 - seleção de modelos locais por risco;
 - execução via Ollama e fallback para APIs compatíveis com OpenAI;
 - limites de tokens, custo, duração, tentativas e arquivos alterados;
+- Adaptive Controller em shadow mode, alimentado somente por evidências autenticadas e sem
+  alterar modelo, contexto, orçamento ou capabilities da execução fixa;
 - `RepositorySnapshot` versionado e endereçado por conteúdo, com inventário da baseline e relações entre soluções e projetos;
 - `CSharpSymbolGraph` versionado e endereçado por conteúdo, extraído por Roslyn/MSBuild com tipos, membros, herança, implementação e referências;
 - preflight da baseline e gates versionados independentes para unitários, integração e aceite, com modos required/optional/disabled e contagem TRX;
@@ -360,6 +362,7 @@ A referência de campos, capabilities preventivas, padrões de escopo, valores p
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
 | Replay | `replay --repo <path> --evidence <id> --evidence-store <json\|postgres>` | Reproduz candidato e gates sem chamar o agente |
 | Evidence Graph | `evidence <show\|list\|trace> --repo <path> [--evidence <id>] [--format <text\|json\|dot>]` | Consulta e exporta causalidade autenticada |
+| Adaptive report | `adaptive-report --repo <path> [--limit <1-500>] [--format <text\|json>]` | Avalia recomendações shadow offline por risco e tipo de tarefa |
 | Rotação de chave | `evidence-key rotate [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
 
 Comandos disponíveis dentro do Jarvis:
@@ -402,6 +405,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Integridade das evidências](docs/evidence-integrity.md) — envelope assinado, keyring, rotação e limites;
 - [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;
 - [Evidence Graph](docs/evidence-graph.md) — consultas, IDs/arestas estáveis, autorização e exportação JSON/DOT;
+- [Adaptive Controller em shadow mode](docs/adaptive-shadow-controller.md) — histórico autenticado, fallbacks, invariantes e relatório offline;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.

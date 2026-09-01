@@ -341,7 +341,7 @@ public sealed partial class PostgreSqlExecutionEvidenceStore :
                 .Take(query.Limit)
                 .Select(item => item.Summary)
                 .ToList(),
-            Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToList()
+            Diagnostics = diagnostics
         };
     }
 
