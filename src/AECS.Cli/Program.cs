@@ -684,7 +684,10 @@ static async Task<int> RunSingle(string[] args)
         $"(loaded={execution.CSharpSymbolGraph.LoadSucceeded})");
     Console.WriteLine($"Context: {execution.ContextManifest.Id}");
     Console.WriteLine($"Context files: {execution.ContextManifest.Files.Count} " +
-        $"({execution.ContextManifest.EstimatedTokens} estimated tokens)");
+        $"included, {execution.ContextManifest.OmittedFileCount} omitted");
+    Console.WriteLine($"Context tokens: {execution.ContextManifest.EstimatedTokens}/" +
+        $"{execution.ContextManifest.MaxTokens} via " +
+        $"{execution.ContextManifest.Tokenizer}@{execution.ContextManifest.TokenizerVersion}");
     Console.WriteLine($"Context hash: {execution.ContextManifest.ManifestHash}");
     Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
     Console.WriteLine($"Diff hash: {execution.CandidateChangeSet.DiffHash}");

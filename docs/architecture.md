@@ -106,12 +106,14 @@ Toda execução que ultrapassa o preflight chama `RepositoryContextCompiler` no 
 
 - usa o `CSharpSymbolGraph` Roslyn válido como única autoridade para tipos, membros, namespaces, herança e referências; em falha de carga, mantém apenas inventário textual de arquivos, sem inferir semântica por regex;
 - restringe os arquivos aos padrões de `scope.allowed` e exclui `scope.forbidden`;
-- ranqueia por objetivo, critérios de aceite, caminhos, símbolos e testes relacionados;
+- cria sementes por objetivo, critérios de aceite, escopo, caminhos e símbolos; depois expande dependências, referências reversas, tipos parciais e testes pelo grafo até profundidade configurável, com proteção contra ciclos;
 - omite arquivos sensíveis como `.env*`, `secrets.json`, chaves e certificados;
-- limita por padrão a 12 mil tokens estimados, 48 mil caracteres totais e 16 mil por arquivo, sempre respeitando um orçamento de tokens menor;
-- registra hash do conteúdo original, hash do trecho incluído, símbolos, truncamento, arquivos omitidos e hash do manifesto.
+- resolve um contador por adaptador/modelo e usa, na ausência de tokenizer exato, o número de bytes UTF-8 como limite superior conservador;
+- calcula o orçamento efetivo como o menor teto entre configuração, contrato e janela do modelo menos saída reservada e overhead do prompt;
+- limita por padrão o contexto a 12 mil tokens, 48 mil caracteres totais, 4 mil tokens e 16 mil caracteres por arquivo;
+- registra para cada arquivo elegível a posição, pontuação, relação, motivos, decisão (`included`, `truncated` ou `omitted`), tokens e hashes original/incluído.
 
-A estimativa usa quatro caracteres por token e não substitui a telemetria do provedor. O manifesto registra a origem semântica e, quando autoritativa, o hash do grafo também participa de seu próprio hash. Um escopo `allowed` vazio produz contexto de código vazio; o cabeçalho e o manifesto ainda são determinísticos. Em falha de preflight, a evidência contém um manifesto `not-compiled`. Detalhes estão em [CSharpSymbolGraph determinístico](csharp-symbol-graph.md).
+O pacote nunca ultrapassa o orçamento efetivo calculado pelo contador resolvido. Se nem o cabeçalho mínimo couber, o prompt fica vazio e as omissões continuam explícitas no manifesto. O `ContextManifest` v2 é fingerprintado por inteiro e liga baseline, snapshot, grafo, perfil do modelo, tokenizer e decisões; a leitura da evidência recalcula esses vínculos. Um escopo `allowed` vazio produz contexto de código vazio. Em falha de preflight, a evidência contém um manifesto `not-compiled`. Detalhes estão em [Context Compiler orientado ao grafo](context-compiler.md) e [CSharpSymbolGraph determinístico](csharp-symbol-graph.md).
 
 ## Gates e comportamento fail-closed
 
@@ -205,7 +207,7 @@ A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-mon
 - operações Git e verificadores estruturais permanecem no host; comandos do repositório usam Docker por padrão, mas `runtime: host` continua disponível como override explícito de desenvolvimento confiável;
 - egress por destino específico ainda não possui enforcer: a rede fica negada ou exige a concessão explícita e ampla `"*"` para usar Docker `bridge`;
 - ambos os stores assinam a evidência, mas o keyring local não é um HSM/KMS e PostgreSQL, sozinho, não é uma âncora externa imutável capaz de detectar rollback coordenado de banco e chaves;
-- o grafo semântico cobre C#; outras linguagens permanecem apenas no inventário do snapshot, e a tokenização de contexto ainda é aproximada;
+- o grafo semântico cobre C#; outras linguagens permanecem apenas no inventário do snapshot, e modelos sem contador registrado usam o limite superior conservador por bytes UTF-8;
 - a avaliação MSBuild de design time ocorre no processo do controlador; o limite de memória do grafo cobre o payload estimado, não o working set rígido do processo;
 - unit e integration tests compartilham um único comando/verificador;
 - a base de vulnerabilidades do `SecurityScan` é uma snapshot local pequena e versionada, não uma réplica completa e atualizada continuamente do GitHub Advisory Database;

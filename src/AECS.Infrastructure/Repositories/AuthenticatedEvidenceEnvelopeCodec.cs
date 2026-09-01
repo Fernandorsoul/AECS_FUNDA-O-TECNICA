@@ -490,6 +490,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         }
 
         var symbolGraph = evidence.CSharpSymbolGraph;
+        ValidateContextManifest(evidence, snapshot, symbolGraph);
         var contextClaimsRoslyn = string.Equals(
             evidence.ContextManifest.SemanticIndex,
             "roslyn-symbol-graph",
@@ -633,6 +634,136 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         limits.MaxNodes > 0 &&
         limits.MaxEdges > 0 &&
         limits.MaxDiagnostics > 0;
+
+    private static void ValidateContextManifest(
+        ExecutionEvidence evidence,
+        RepositorySnapshot? snapshot,
+        CSharpSymbolGraph? symbolGraph)
+    {
+        var manifest = evidence.ContextManifest;
+        if (manifest.SchemaVersion == ContextManifestSchema.LegacyVersion)
+            return;
+        if (manifest.SchemaVersion != ContextManifestSchema.CurrentVersion)
+        {
+            throw new EvidenceIntegrityException(
+                "Context manifest has an unsupported schema.");
+        }
+
+        var includedSelections = manifest.Selections?
+            .Where(selection => selection.Decision is "included" or "truncated")
+            .GroupBy(selection => selection.Path, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal) ?? [];
+        var effectiveProfileBudget = manifest.ModelContextWindowTokens == 0
+            ? 0
+            : Math.Max(
+                0,
+                Math.Min(
+                    manifest.ModelContextWindowTokens,
+                    evidence.TaskContract.Budget.MaxTokens) -
+                manifest.ReservedOutputTokens -
+                manifest.PromptOverheadTokens);
+        var invalid = manifest.StrategyVersion != ContextManifestSchema.StrategyVersion ||
+            !string.Equals(manifest.TaskId, evidence.TaskContract.Id, StringComparison.Ordinal) ||
+            !string.Equals(manifest.BaselineCommit, evidence.Baseline.Commit, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(manifest.Source) ||
+            string.IsNullOrWhiteSpace(manifest.Strategy) ||
+            string.IsNullOrWhiteSpace(manifest.Tokenizer) ||
+            string.IsNullOrWhiteSpace(manifest.TokenizerVersion) ||
+            manifest.ModelContextWindowTokens < 0 ||
+            manifest.ReservedOutputTokens < 0 ||
+            manifest.PromptOverheadTokens < 0 ||
+            manifest.DependencyDepth < 0 ||
+            manifest.MaxFileTokens < 0 ||
+            manifest.MaxTokens < 0 ||
+            manifest.MaxCharacters < 0 ||
+            manifest.EstimatedTokens < 0 ||
+            manifest.TotalCharacters < 0 ||
+            manifest.EligibleFileCount < 0 ||
+            manifest.OmittedFileCount < 0 ||
+            manifest.EstimatedTokens > manifest.MaxTokens ||
+            manifest.TotalCharacters > manifest.MaxCharacters ||
+            manifest.MaxTokens > effectiveProfileBudget ||
+            manifest.Files is null ||
+            manifest.Selections is null ||
+            manifest.EligibleFileCount != manifest.Selections.Count ||
+            manifest.OmittedFileCount != manifest.Selections.Count(selection =>
+                selection.Decision == "omitted") ||
+            manifest.Files.Count != includedSelections.Count ||
+            manifest.Truncated != manifest.Selections.Any(selection =>
+                selection.Decision != "included") ||
+            manifest.Selections.Select(selection => selection.Path)
+                .Distinct(StringComparer.Ordinal).Count() != manifest.Selections.Count ||
+            manifest.Files.Select(file => file.Path)
+                .Distinct(StringComparer.Ordinal).Count() != manifest.Files.Count ||
+            manifest.Selections.Select(selection => selection.Rank)
+                .OrderBy(rank => rank).SequenceEqual(
+                    Enumerable.Range(1, manifest.Selections.Count)) == false ||
+            manifest.Selections.Any(selection =>
+                !IsSafeRepositoryPath(selection.Path) ||
+                selection.Decision is not ("included" or "truncated" or "omitted") ||
+                string.IsNullOrWhiteSpace(selection.Reason) ||
+                selection.Rank <= 0 ||
+                selection.Score < 0 ||
+                selection.Depth < -1 ||
+                selection.RankingReasons is null ||
+                selection.OriginalTokens < 0 ||
+                selection.IncludedTokens < 0 ||
+                (!string.IsNullOrEmpty(selection.OriginalSha256) &&
+                    !IsSha256(selection.OriginalSha256)) ||
+                (!string.IsNullOrEmpty(selection.IncludedSha256) &&
+                    !IsSha256(selection.IncludedSha256)) ||
+                selection.Decision != "omitted" &&
+                    (!IsSha256(selection.OriginalSha256) ||
+                     !IsSha256(selection.IncludedSha256)) ||
+                selection.Decision == "omitted" &&
+                    (!string.IsNullOrEmpty(selection.IncludedSha256) ||
+                     selection.IncludedTokens != 0)) ||
+            manifest.Files.Any(file =>
+                !IsSafeRepositoryPath(file.Path) ||
+                !IsSha256(file.Sha256) ||
+                !IsSha256(file.IncludedSha256) ||
+                file.OriginalCharacters < 0 ||
+                file.IncludedCharacters < 0 ||
+                file.OriginalTokens < 0 ||
+                file.IncludedTokens < 0 ||
+                file.Rank <= 0 ||
+                file.Score < 0 ||
+                file.Depth < -1 ||
+                file.Reasons is null ||
+                file.Symbols is null ||
+                !includedSelections.TryGetValue(file.Path, out var selection) ||
+                selection.Rank != file.Rank ||
+                selection.Score != file.Score ||
+                selection.Depth != file.Depth ||
+                selection.Relation != file.Relation ||
+                !selection.RankingReasons.SequenceEqual(file.Reasons, StringComparer.Ordinal) ||
+                selection.OriginalSha256 != file.Sha256 ||
+                selection.IncludedSha256 != file.IncludedSha256 ||
+                selection.OriginalTokens != file.OriginalTokens ||
+                selection.IncludedTokens != file.IncludedTokens ||
+                (selection.Decision == "truncated") != file.Truncated) ||
+            !IsSha256(manifest.ManifestHash) ||
+            !FixedTimeTextEquals(
+                manifest.ManifestHash,
+                ContextManifestFingerprint.Create(manifest)) ||
+            manifest.Id != $"CTX-{manifest.ManifestHash[7..19]}" ||
+            (!string.IsNullOrEmpty(manifest.RepositorySnapshotHash) &&
+                (snapshot is null || !FixedTimeTextEquals(
+                    manifest.RepositorySnapshotHash,
+                    snapshot.SnapshotHash))) ||
+            (!string.IsNullOrEmpty(manifest.SymbolGraphHash) &&
+                (symbolGraph is null || !FixedTimeTextEquals(
+                    manifest.SymbolGraphHash,
+                    symbolGraph.GraphHash))) ||
+            (!string.IsNullOrEmpty(manifest.SymbolGraphHash) &&
+                string.IsNullOrEmpty(manifest.RepositorySnapshotHash));
+
+        if (invalid)
+        {
+            throw new EvidenceIntegrityException(
+                "Context manifest is incomplete, inconsistent, or has an invalid fingerprint.");
+        }
+    }
 
     private void VerifySeal(EvidenceSeal seal, object payload, string description)
     {

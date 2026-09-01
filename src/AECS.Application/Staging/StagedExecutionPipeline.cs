@@ -220,24 +220,37 @@ public sealed class StagedExecutionPipeline
                 workspace.Path,
                 contract.Execution,
                 budgetScope.Token);
+            var baseAgentRequest = new AgentExecutionRequest
+            {
+                TaskId = contract.Id,
+                Objective = contract.Objective,
+                AcceptanceCriteria = contract.AcceptanceCriteria,
+                RepoPath = workspace.Path,
+                Scope = contract.Scope,
+                Budget = contract.Budget,
+                Risk = risk,
+                Model = plan.Model
+            };
+            var contextProfile = _agentAdapter.GetContextProfile(baseAgentRequest);
             var compiledContext = _contextCompiler.Compile(
                 workspace.Path,
                 contract,
                 baseline.Commit,
-                symbolGraph: symbolGraph);
+                symbolGraph: symbolGraph,
+                agentProfile: contextProfile);
             contextManifest = compiledContext.Manifest;
 
             var agentOutcome = await _agentExecutionCoordinator.ExecuteAsync(
                 new AgentExecutionRequest
                 {
-                    TaskId = contract.Id,
-                    Objective = contract.Objective,
-                    AcceptanceCriteria = contract.AcceptanceCriteria,
-                    RepoPath = workspace.Path,
-                    Scope = contract.Scope,
-                    Budget = contract.Budget,
-                    Risk = risk,
-                    Model = plan.Model,
+                    TaskId = baseAgentRequest.TaskId,
+                    Objective = baseAgentRequest.Objective,
+                    AcceptanceCriteria = baseAgentRequest.AcceptanceCriteria,
+                    RepoPath = baseAgentRequest.RepoPath,
+                    Scope = baseAgentRequest.Scope,
+                    Budget = baseAgentRequest.Budget,
+                    Risk = baseAgentRequest.Risk,
+                    Model = baseAgentRequest.Model,
                     CodeContext = compiledContext.CodeContext,
                     ContextPrompt = compiledContext.Prompt
                 }, budgetScope);
