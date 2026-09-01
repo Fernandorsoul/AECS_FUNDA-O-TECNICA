@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AECS.Application.ContextCompiler;
 using AECS.Domain.Enums;
 using AECS.Domain.Exceptions;
 using AECS.Domain.Models;
@@ -39,6 +40,35 @@ public sealed class AuthenticatedEvidenceStoreTests
         loaded.Should().NotBeNull();
         loaded!.CandidateChangeSet.Diff.Should().Be(evidence.CandidateChangeSet.Diff);
         loaded.FinalDecision.Decision.Should().Be(TaskDecision.Verified);
+    }
+
+    [Fact]
+    public async Task Save_ContextManifestV2WithInvalidFingerprint_IsRejectedBeforeSigning()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var valid = RepositoryContextCompiler.EmptyManifest(
+            "TASK-EVIDENCE-001",
+            "0123456789abcdef");
+        var tampered = new ContextManifest
+        {
+            SchemaVersion = valid.SchemaVersion,
+            StrategyVersion = valid.StrategyVersion,
+            Id = valid.Id,
+            TaskId = valid.TaskId,
+            BaselineCommit = valid.BaselineCommit,
+            Source = valid.Source,
+            Strategy = "forged-context-strategy",
+            SemanticIndex = valid.SemanticIndex,
+            Tokenizer = valid.Tokenizer,
+            TokenizerVersion = valid.TokenizerVersion,
+            ManifestHash = valid.ManifestHash
+        };
+        var evidence = fixture.CreateEvidence(tampered);
+
+        var save = () => fixture.Store.SaveAsync(evidence, CancellationToken.None);
+
+        await save.Should().ThrowAsync<EvidenceIntegrityException>()
+            .WithMessage("*Context manifest*invalid fingerprint*");
     }
 
     [Fact]
@@ -333,7 +363,7 @@ public sealed class AuthenticatedEvidenceStoreTests
         public JsonExecutionEvidenceStore CreateRestartedStore() =>
             new(EvidencePath, KeyDirectoryPath);
 
-        public ExecutionEvidence CreateEvidence()
+        public ExecutionEvidence CreateEvidence(ContextManifest? contextManifest = null)
         {
             var taskId = "TASK-EVIDENCE-001";
             var runId = Guid.NewGuid();
@@ -353,6 +383,7 @@ public sealed class AuthenticatedEvidenceStoreTests
                     Branch = "main",
                     RepositoryPath = Path.Combine(RootPath, "repository")
                 },
+                ContextManifest = contextManifest ?? new ContextManifest(),
                 CandidateChangeSet = new CandidateChangeSet
                 {
                     TaskId = taskId,

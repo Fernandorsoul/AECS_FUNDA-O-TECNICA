@@ -155,6 +155,12 @@ public sealed class RoslynSymbolGraphTests
 
         context.Manifest.SemanticIndex.Should().Be("roslyn-symbol-graph");
         context.Manifest.SymbolGraphHash.Should().Be(graph.GraphHash);
+        context.Manifest.RepositorySnapshotHash.Should().Be(snapshot.SnapshotHash);
+        context.Manifest.SchemaVersion.Should().Be(ContextManifestSchema.CurrentVersion);
+        context.Manifest.Selections.Should().HaveCount(context.Manifest.EligibleFileCount)
+            .And.Contain(selection => selection.Depth > 0);
+        context.Manifest.ManifestHash.Should().Be(
+            ContextManifestFingerprint.Create(context.Manifest));
         context.Prompt.Should().Contain("Symbols:");
         context.Prompt.Should().Contain("PartialEntity");
     }

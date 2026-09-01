@@ -12,12 +12,25 @@ public class OllamaAdapter : IAgentAdapter
 {
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
+    private readonly int _contextWindowTokens;
 
-    public OllamaAdapter(HttpClient httpClient, string baseUrl = "http://localhost:11434")
+    public OllamaAdapter(
+        HttpClient httpClient,
+        string baseUrl = "http://localhost:11434",
+        int contextWindowTokens = 32_768)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
+        _contextWindowTokens = contextWindowTokens;
     }
+
+    public AgentContextProfile GetContextProfile(AgentExecutionRequest request) =>
+        AgentContextProfile.Conservative(
+            nameof(OllamaAdapter),
+            request.Model,
+            request.Budget,
+            ConservativeTokenCounter.Count(BuildPrompt(request.WithoutContext())) + 4,
+            contextWindowTokens: _contextWindowTokens);
 
     public async Task<AgentRunResult> ExecuteAsync(
         AgentExecutionRequest request,
@@ -29,8 +42,11 @@ public class OllamaAdapter : IAgentAdapter
         {
             var prompt = BuildPrompt(request);
             var model = request.Model;
-            var estimatedInputTokens = (int)Math.Ceiling(prompt.Length / 4d);
-            var maximumOutputTokens = request.Budget.MaxTokens - estimatedInputTokens;
+            var estimatedInputTokens = ConservativeTokenCounter.Count(prompt);
+            var profile = GetContextProfile(request);
+            var maximumOutputTokens = Math.Min(
+                profile.ReservedOutputTokens,
+                profile.EffectiveTotalTokens(request.Budget) - estimatedInputTokens);
             if (maximumOutputTokens <= 0)
             {
                 return new AgentRunResult

@@ -19,6 +19,29 @@ public class FallbackAdapter : IAgentAdapter
         _shouldFallback = shouldFallback ?? DefaultShouldFallback;
     }
 
+    public AgentContextProfile GetContextProfile(AgentExecutionRequest request)
+    {
+        var primary = _primary.GetContextProfile(request);
+        var fallback = _fallback.GetContextProfile(request);
+        return new AgentContextProfile
+        {
+            Adapter = $"{nameof(FallbackAdapter)}({primary.Adapter},{fallback.Adapter})",
+            Model = $"{primary.Model}|{fallback.Model}",
+            TokenizerId = primary.TokenizerId == fallback.TokenizerId
+                ? primary.TokenizerId
+                : ConservativeTokenCounter.Id,
+            ContextWindowTokens = Math.Min(
+                primary.ContextWindowTokens,
+                fallback.ContextWindowTokens),
+            ReservedOutputTokens = Math.Max(
+                primary.ReservedOutputTokens,
+                fallback.ReservedOutputTokens),
+            PromptOverheadTokens = Math.Max(
+                primary.PromptOverheadTokens,
+                fallback.PromptOverheadTokens)
+        };
+    }
+
     public async Task<AgentRunResult> ExecuteAsync(
         AgentExecutionRequest request,
         CancellationToken cancellationToken)

@@ -195,7 +195,12 @@ internal static class EvidenceGraphProjection
                 ["strategy"] = evidence.ContextManifest.Strategy,
                 ["semanticIndex"] = evidence.ContextManifest.SemanticIndex ?? string.Empty,
                 ["files"] = evidence.ContextManifest.Files.Count.ToString(),
-                ["estimatedTokens"] = evidence.ContextManifest.EstimatedTokens.ToString()
+                ["estimatedTokens"] = evidence.ContextManifest.EstimatedTokens.ToString(),
+                ["effectiveTokenLimit"] = evidence.ContextManifest.MaxTokens.ToString(),
+                ["tokenizer"] = evidence.ContextManifest.Tokenizer,
+                ["model"] = evidence.ContextManifest.Model,
+                ["dependencyDepth"] = evidence.ContextManifest.DependencyDepth.ToString(),
+                ["omittedFiles"] = evidence.ContextManifest.OmittedFileCount.ToString()
             });
         if (string.IsNullOrWhiteSpace(evidence.ContextManifest.Id))
             builder.Diagnostic("Context manifest is missing.");

@@ -45,7 +45,7 @@ O limite de memória é uma estimativa do payload semântico produzido, não um 
 
 ## Contexto, evidência e replay
 
-Quando válido, o grafo alimenta a seleção de contexto e o manifesto incorpora seu hash. Esse vínculo participa do hash do manifesto, evitando que outro grafo seja associado silenciosamente ao mesmo contexto.
+Quando válido, o grafo alimenta a seleção de contexto por dependências, referências reversas, herança, implementação e partes de tipos parciais. A expansão usa profundidade limitada e o menor caminho descoberto, portanto ciclos não alteram a terminação nem a ordem. O manifesto incorpora os hashes do grafo e do snapshot; ambos participam de seu fingerprint, evitando associações silenciosas com outra baseline.
 
 O envelope autenticado recalcula o hash do grafo e valida schema, estratégia, limites, caminhos, IDs, hashes e referências entre nós e arestas. O replay reconstrói o grafo no mesmo snapshot e compara hashes antes de continuar; divergência de compilador, MSBuild, SDK, opções, diagnósticos ou fatos é `EnvironmentDivergence`. Evidências legadas sem grafo continuam no fluxo compatível, sem receber fatos retroativos.
 

@@ -9,23 +9,26 @@ public sealed class ContextCompilationOptions
     public const int DefaultMaxTokens = 12_000;
     public const int DefaultMaxCharacters = 48_000;
     public const int DefaultMaxFileCharacters = 16_000;
+    public const int DefaultMaxFileTokens = 4_000;
+    public const int DefaultDependencyDepth = 2;
 
     public int MaxTokens { get; init; } = DefaultMaxTokens;
     public int MaxCharacters { get; init; } = DefaultMaxCharacters;
     public int MaxFileCharacters { get; init; } = DefaultMaxFileCharacters;
+    public int MaxFileTokens { get; init; } = DefaultMaxFileTokens;
+    public int DependencyDepth { get; init; } = DefaultDependencyDepth;
 
     public static ContextCompilationOptions FromBudget(ExecutionBudget budget)
     {
         var maxTokens = budget.MaxTokens > 0
             ? Math.Min(DefaultMaxTokens, budget.MaxTokens)
             : DefaultMaxTokens;
-        var maxCharacters = Math.Min(DefaultMaxCharacters, checked(maxTokens * 4));
-
         return new ContextCompilationOptions
         {
             MaxTokens = maxTokens,
-            MaxCharacters = maxCharacters,
-            MaxFileCharacters = Math.Min(DefaultMaxFileCharacters, maxCharacters)
+            MaxCharacters = DefaultMaxCharacters,
+            MaxFileCharacters = DefaultMaxFileCharacters,
+            MaxFileTokens = Math.Min(DefaultMaxFileTokens, maxTokens)
         };
     }
 }
@@ -40,18 +43,34 @@ public sealed class CompiledRepositoryContext
 public sealed class RepositoryContextCompiler
 {
     private const string SourceName = "isolated-git-worktree";
-    private readonly CodebaseIndexer _indexer = new();
-    private readonly ContextSelector _selector = new();
+    private const string TruncationMarker = "\n// [AECS CONTEXT TRUNCATED]\n";
+    private readonly CodebaseIndexer _indexer;
+    private readonly ContextSelector _selector;
+    private readonly ITokenCounterResolver _tokenCounterResolver;
+    private readonly ContextCompilationOptions? _defaultOptions;
+
+    public RepositoryContextCompiler(
+        ITokenCounterResolver? tokenCounterResolver = null,
+        CodebaseIndexer? indexer = null,
+        ContextSelector? selector = null,
+        ContextCompilationOptions? defaultOptions = null)
+    {
+        _tokenCounterResolver = tokenCounterResolver ?? new ModelTokenCounterResolver();
+        _indexer = indexer ?? new CodebaseIndexer();
+        _selector = selector ?? new ContextSelector();
+        _defaultOptions = defaultOptions;
+    }
 
     public CompiledRepositoryContext Compile(
         string workspacePath,
         TaskContract contract,
         string baselineCommit,
         ContextCompilationOptions? options = null,
-        CSharpSymbolGraph? symbolGraph = null)
+        CSharpSymbolGraph? symbolGraph = null,
+        AgentContextProfile? agentProfile = null)
     {
         var resolvedRoot = Path.GetFullPath(workspacePath);
-        options ??= ContextCompilationOptions.FromBudget(contract.Budget);
+        options ??= _defaultOptions ?? ContextCompilationOptions.FromBudget(contract.Budget);
         ValidateOptions(options);
         if (symbolGraph is not null && !string.Equals(
                 symbolGraph.BaselineCommit,
@@ -62,6 +81,19 @@ public sealed class RepositoryContextCompiler
                 "C# symbol graph baseline does not match the context baseline.");
         }
 
+        agentProfile ??= new AgentContextProfile
+        {
+            Adapter = "standalone",
+            Model = "unspecified",
+            ContextWindowTokens = options.MaxTokens
+        };
+        var tokenCounter = _tokenCounterResolver.Resolve(agentProfile);
+        var effectiveTokenLimit = Math.Min(
+            options.MaxTokens,
+            agentProfile.EffectiveContextTokens(contract.Budget));
+        var characterLimit = options.MaxCharacters;
+        var perFileTokenLimit = Math.Min(options.MaxFileTokens, effectiveTokenLimit);
+
         var index = _indexer.Index(resolvedRoot, symbolGraph);
         var package = _selector.Select(
             index,
@@ -69,110 +101,182 @@ public sealed class RepositoryContextCompiler
             contract.Objective,
             contract.AcceptanceCriteria,
             contract.Scope.Allowed,
-            contract.Scope.Forbidden);
-
-        var characterLimit = Math.Min(options.MaxCharacters, checked(options.MaxTokens * 4));
-        var prompt = new StringBuilder();
-        prompt.AppendLine("## REPOSITORY CONTEXT");
-        prompt.AppendLine($"Source: {SourceName}");
-        prompt.AppendLine($"Task: {contract.Id}");
-        prompt.AppendLine($"Baseline: {baselineCommit}");
+            contract.Scope.Forbidden,
+            new ContextSelectionOptions { DependencyDepth = options.DependencyDepth });
         var strategy = $"{package.Strategy}+{index.Source}";
-        prompt.AppendLine($"Strategy: {strategy}");
-        prompt.AppendLine($"Limit: {options.MaxTokens} estimated tokens / {characterLimit} characters");
-        prompt.AppendLine();
-
-        if (prompt.Length > characterLimit)
-            throw new InvalidOperationException("Context limit is too small for the deterministic header.");
+        var header = BuildHeader(
+            contract.Id,
+            baselineCommit,
+            strategy,
+            agentProfile,
+            tokenCounter,
+            effectiveTokenLimit,
+            options.DependencyDepth);
+        var headerFits = effectiveTokenLimit > 0 &&
+            header.Length <= characterLimit &&
+            tokenCounter.CountTokens(header) <= effectiveTokenLimit;
+        var prompt = new StringBuilder(headerFits ? header : string.Empty);
 
         var codeContext = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var fileManifests = new List<ContextFileManifest>();
-        var budgetTruncated = false;
+        var selections = new List<ContextSelectionManifest>();
 
-        foreach (var relativePath in package.SelectedFiles)
+        foreach (var candidate in package.RankedFiles)
         {
-            var fullPath = ResolveFileInsideRoot(resolvedRoot, relativePath);
-            if (!File.Exists(fullPath) || IsSensitive(relativePath))
-                continue;
-
-            var originalContent = File.ReadAllText(fullPath);
+            var relativePath = candidate.Path.Replace('\\', '/');
             var symbols = package.SymbolsByFile.TryGetValue(relativePath, out var selectedSymbols)
                 ? selectedSymbols
                 : [];
-            var prefix = BuildFilePrefix(relativePath, Hash(originalContent), symbols);
+            if (IsSensitive(relativePath))
+            {
+                selections.Add(Omitted(candidate, "sensitive-path-filter"));
+                continue;
+            }
+
+            var fullPath = ResolveFileInsideRoot(resolvedRoot, relativePath);
+            if (!File.Exists(fullPath))
+            {
+                selections.Add(Omitted(candidate, "file-not-found"));
+                continue;
+            }
+
+            var originalContent = File.ReadAllText(fullPath);
+            var originalHash = Hash(originalContent);
+            var originalTokens = tokenCounter.CountTokens(originalContent);
+            if (!headerFits)
+            {
+                selections.Add(Omitted(
+                    candidate,
+                    "minimum-budget-header-omitted",
+                    originalHash,
+                    originalTokens));
+                continue;
+            }
+
+            var prefix = BuildFilePrefix(candidate, originalHash, symbols);
             const string suffix = "\n```\n\n";
-            var remaining = characterLimit - prompt.Length;
-            var availableContentCharacters = remaining - prefix.Length - suffix.Length;
-            if (availableContentCharacters <= 0)
+            var fullBlock = prefix + originalContent + suffix;
+            var fullFits = originalContent.Length <= options.MaxFileCharacters &&
+                originalTokens <= perFileTokenLimit &&
+                Fits(prompt, fullBlock, characterLimit, effectiveTokenLimit, tokenCounter);
+
+            string? includedContent;
+            var truncated = false;
+            var reason = "ranked-within-effective-budget";
+            if (fullFits)
             {
-                budgetTruncated = true;
-                break;
+                includedContent = originalContent;
+            }
+            else
+            {
+                includedContent = FindLargestTruncatedContent(
+                    originalContent,
+                    prefix,
+                    suffix,
+                    prompt,
+                    options.MaxFileCharacters,
+                    perFileTokenLimit,
+                    characterLimit,
+                    effectiveTokenLimit,
+                    tokenCounter);
+                truncated = includedContent is not null;
+                reason = includedContent is null
+                    ? "effective-token-budget-exhausted"
+                    : TruncationReason(
+                        originalContent,
+                        originalTokens,
+                        options,
+                        perFileTokenLimit);
             }
 
-            var perFileLimit = Math.Min(options.MaxFileCharacters, availableContentCharacters);
-            var includedContent = Truncate(originalContent, perFileLimit, out var fileTruncated);
-            if (includedContent.Length == 0 && originalContent.Length > 0)
+            if (includedContent is null)
             {
-                budgetTruncated = true;
-                break;
+                selections.Add(Omitted(
+                    candidate,
+                    reason,
+                    originalHash,
+                    originalTokens));
+                continue;
             }
 
-            prompt.Append(prefix);
-            prompt.Append(includedContent);
-            prompt.Append(suffix);
+            var includedHash = Hash(includedContent);
+            var includedTokens = tokenCounter.CountTokens(includedContent);
+            prompt.Append(prefix).Append(includedContent).Append(suffix);
             codeContext[relativePath] = includedContent;
             fileManifests.Add(new ContextFileManifest
             {
                 Path = relativePath,
-                Sha256 = Hash(originalContent),
-                IncludedSha256 = Hash(includedContent),
+                Sha256 = originalHash,
+                IncludedSha256 = includedHash,
                 OriginalCharacters = originalContent.Length,
                 IncludedCharacters = includedContent.Length,
-                Truncated = fileTruncated,
+                OriginalTokens = originalTokens,
+                IncludedTokens = includedTokens,
+                Truncated = truncated,
+                Rank = candidate.Rank,
+                Score = candidate.Score,
+                Depth = candidate.Depth,
+                Relation = candidate.Relation,
+                Reasons = candidate.Reasons.ToList(),
                 Symbols = symbols.ToList()
             });
-
-            budgetTruncated |= fileTruncated;
+            selections.Add(new ContextSelectionManifest
+            {
+                Path = relativePath,
+                Decision = truncated ? "truncated" : "included",
+                Reason = reason,
+                Rank = candidate.Rank,
+                Score = candidate.Score,
+                Depth = candidate.Depth,
+                Relation = candidate.Relation,
+                RankingReasons = candidate.Reasons.ToList(),
+                OriginalSha256 = originalHash,
+                IncludedSha256 = includedHash,
+                OriginalTokens = originalTokens,
+                IncludedTokens = includedTokens
+            });
         }
 
-        if (fileManifests.Count < package.SelectedFiles.Count)
-            budgetTruncated = true;
-
         var promptText = prompt.ToString();
-        var estimatedTokens = (promptText.Length + 3) / 4;
-        var omittedFileCount = Math.Max(0, package.EligibleFileCount - fileManifests.Count);
-        var manifestHash = HashManifest(
-            contract.Id,
-            baselineCommit,
-            strategy,
-            index.SemanticAuthority ? index.SymbolGraphHash : null,
-            options,
-            characterLimit,
-            estimatedTokens,
-            promptText.Length,
-            package.EligibleFileCount,
-            omittedFileCount,
-            budgetTruncated,
-            fileManifests);
-        var manifest = new ContextManifest
+        var estimatedTokens = tokenCounter.CountTokens(promptText);
+        if (estimatedTokens > effectiveTokenLimit || promptText.Length > characterLimit)
+            throw new InvalidOperationException("Compiled context exceeded its effective adapter budget.");
+
+        var omittedFileCount = selections.Count(selection => selection.Decision == "omitted");
+        var draft = new ContextManifest
         {
-            Id = $"CTX-{manifestHash[7..19]}",
+            SchemaVersion = ContextManifestSchema.CurrentVersion,
+            StrategyVersion = ContextManifestSchema.StrategyVersion,
             TaskId = contract.Id,
             BaselineCommit = baselineCommit,
             Source = SourceName,
             Strategy = strategy,
             SemanticIndex = index.Source,
             SymbolGraphHash = index.SemanticAuthority ? index.SymbolGraphHash : null,
-            MaxTokens = options.MaxTokens,
+            RepositorySnapshotHash = index.SemanticAuthority
+                ? symbolGraph?.RepositorySnapshotHash
+                : null,
+            Adapter = agentProfile.Adapter,
+            Model = agentProfile.Model,
+            Tokenizer = tokenCounter.Id,
+            TokenizerVersion = tokenCounter.Version,
+            ExactTokenCount = tokenCounter.IsExact,
+            ModelContextWindowTokens = agentProfile.ContextWindowTokens,
+            ReservedOutputTokens = agentProfile.ReservedOutputTokens,
+            PromptOverheadTokens = agentProfile.PromptOverheadTokens,
+            DependencyDepth = options.DependencyDepth,
+            MaxFileTokens = perFileTokenLimit,
+            MaxTokens = effectiveTokenLimit,
             MaxCharacters = characterLimit,
             EstimatedTokens = estimatedTokens,
             TotalCharacters = promptText.Length,
             EligibleFileCount = package.EligibleFileCount,
             OmittedFileCount = omittedFileCount,
-            Truncated = budgetTruncated,
-            ManifestHash = manifestHash,
-            Files = fileManifests
+            Truncated = selections.Any(selection => selection.Decision != "included"),
+            Files = fileManifests,
+            Selections = selections
         };
+        var manifest = WithIdentity(draft);
 
         return new CompiledRepositoryContext
         {
@@ -184,38 +288,57 @@ public sealed class RepositoryContextCompiler
 
     public static ContextManifest EmptyManifest(string taskId, string baselineCommit)
     {
-        var hash = HashManifest(
-            taskId,
-            baselineCommit,
-            "not-compiled",
-            null,
-            new ContextCompilationOptions(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            false,
-            []);
-        return new ContextManifest
+        var draft = new ContextManifest
         {
-            Id = $"CTX-{hash[7..19]}",
+            SchemaVersion = ContextManifestSchema.CurrentVersion,
+            StrategyVersion = ContextManifestSchema.StrategyVersion,
             TaskId = taskId,
             BaselineCommit = baselineCommit,
             Source = SourceName,
             Strategy = "not-compiled",
-            ManifestHash = hash
+            SemanticIndex = "not-compiled",
+            Tokenizer = ConservativeTokenCounter.Id,
+            TokenizerVersion = ConservativeTokenCounter.Version
         };
+        return WithIdentity(draft);
+    }
+
+    private static string BuildHeader(
+        string taskId,
+        string baselineCommit,
+        string strategy,
+        AgentContextProfile profile,
+        ITokenCounter counter,
+        int effectiveTokenLimit,
+        int dependencyDepth)
+    {
+        var prompt = new StringBuilder();
+        prompt.AppendLine("## REPOSITORY CONTEXT");
+        prompt.AppendLine($"Source: {SourceName}");
+        prompt.AppendLine($"Task: {taskId}");
+        prompt.AppendLine($"Baseline: {baselineCommit}");
+        prompt.AppendLine($"Strategy: {strategy}");
+        prompt.AppendLine($"Adapter: {profile.Adapter}");
+        prompt.AppendLine($"Model: {profile.Model}");
+        prompt.AppendLine($"Tokenizer: {counter.Id}@{counter.Version}");
+        prompt.AppendLine($"Effective context limit: {effectiveTokenLimit} tokens");
+        prompt.AppendLine($"Dependency depth: {dependencyDepth}");
+        prompt.AppendLine();
+        return prompt.ToString();
     }
 
     private static string BuildFilePrefix(
-        string path,
+        ContextCandidate candidate,
         string hash,
         IReadOnlyCollection<string> symbols)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"### {path}");
+        builder.AppendLine($"### {candidate.Path}");
+        builder.AppendLine($"Rank: {candidate.Rank}; Score: {candidate.Score}; " +
+                           $"Depth: {candidate.Depth}; Relation: {candidate.Relation}");
         builder.AppendLine($"SHA256: {hash}");
+        if (candidate.Reasons.Count > 0)
+            builder.AppendLine($"Reasons: {string.Join(", ", candidate.Reasons)}");
         if (symbols.Count > 0)
         {
             builder.AppendLine("Symbols:");
@@ -226,19 +349,138 @@ public sealed class RepositoryContextCompiler
         return builder.ToString();
     }
 
-    private static string Truncate(string content, int limit, out bool truncated)
+    private static string? FindLargestTruncatedContent(
+        string content,
+        string prefix,
+        string suffix,
+        StringBuilder prompt,
+        int maxFileCharacters,
+        int maxFileTokens,
+        int maxCharacters,
+        int maxTokens,
+        ITokenCounter tokenCounter)
     {
-        const string marker = "\n// [AECS CONTEXT TRUNCATED]\n";
-        if (content.Length <= limit)
+        if (content.Length == 0 || maxFileCharacters < TruncationMarker.Length ||
+            maxFileTokens < tokenCounter.CountTokens(TruncationMarker))
         {
-            truncated = false;
-            return content;
+            return null;
         }
 
-        truncated = true;
-        if (limit <= marker.Length)
-            return string.Empty;
-        return content[..(limit - marker.Length)] + marker;
+        var low = 0;
+        var high = Math.Min(content.Length - 1, maxFileCharacters - TruncationMarker.Length);
+        string? best = null;
+        while (low <= high)
+        {
+            var middle = low + (high - low) / 2;
+            var safeLength = SafePrefixLength(content, middle);
+            var candidate = content[..safeLength] + TruncationMarker;
+            var fits = tokenCounter.CountTokens(candidate) <= maxFileTokens &&
+                Fits(prompt, prefix + candidate + suffix, maxCharacters, maxTokens, tokenCounter);
+            if (fits)
+            {
+                best = candidate;
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return best;
+    }
+
+    private static int SafePrefixLength(string content, int length)
+    {
+        if (length > 0 && length < content.Length && char.IsHighSurrogate(content[length - 1]))
+            return length - 1;
+        return length;
+    }
+
+    private static bool Fits(
+        StringBuilder current,
+        string addition,
+        int maxCharacters,
+        int maxTokens,
+        ITokenCounter tokenCounter)
+    {
+        if (current.Length + addition.Length > maxCharacters)
+            return false;
+        return tokenCounter.CountTokens(current.ToString() + addition) <= maxTokens;
+    }
+
+    private static string TruncationReason(
+        string originalContent,
+        int originalTokens,
+        ContextCompilationOptions options,
+        int perFileTokenLimit)
+    {
+        if (originalContent.Length > options.MaxFileCharacters &&
+            originalTokens > perFileTokenLimit)
+        {
+            return "per-file-character-and-token-limits";
+        }
+        if (originalContent.Length > options.MaxFileCharacters)
+            return "per-file-character-limit";
+        if (originalTokens > perFileTokenLimit)
+            return "per-file-token-limit";
+        return "effective-token-budget-truncation";
+    }
+
+    private static ContextSelectionManifest Omitted(
+        ContextCandidate candidate,
+        string reason,
+        string originalHash = "",
+        int originalTokens = 0) => new()
+        {
+            Path = candidate.Path,
+            Decision = "omitted",
+            Reason = reason,
+            Rank = candidate.Rank,
+            Score = candidate.Score,
+            Depth = candidate.Depth,
+            Relation = candidate.Relation,
+            RankingReasons = candidate.Reasons.ToList(),
+            OriginalSha256 = originalHash,
+            OriginalTokens = originalTokens
+        };
+
+    private static ContextManifest WithIdentity(ContextManifest draft)
+    {
+        var hash = ContextManifestFingerprint.Create(draft);
+        return new ContextManifest
+        {
+            SchemaVersion = draft.SchemaVersion,
+            StrategyVersion = draft.StrategyVersion,
+            Id = $"CTX-{hash[7..19]}",
+            TaskId = draft.TaskId,
+            BaselineCommit = draft.BaselineCommit,
+            Source = draft.Source,
+            Strategy = draft.Strategy,
+            SemanticIndex = draft.SemanticIndex,
+            SymbolGraphHash = draft.SymbolGraphHash,
+            RepositorySnapshotHash = draft.RepositorySnapshotHash,
+            Adapter = draft.Adapter,
+            Model = draft.Model,
+            Tokenizer = draft.Tokenizer,
+            TokenizerVersion = draft.TokenizerVersion,
+            ExactTokenCount = draft.ExactTokenCount,
+            ModelContextWindowTokens = draft.ModelContextWindowTokens,
+            ReservedOutputTokens = draft.ReservedOutputTokens,
+            PromptOverheadTokens = draft.PromptOverheadTokens,
+            DependencyDepth = draft.DependencyDepth,
+            MaxFileTokens = draft.MaxFileTokens,
+            MaxTokens = draft.MaxTokens,
+            MaxCharacters = draft.MaxCharacters,
+            EstimatedTokens = draft.EstimatedTokens,
+            TotalCharacters = draft.TotalCharacters,
+            EligibleFileCount = draft.EligibleFileCount,
+            OmittedFileCount = draft.OmittedFileCount,
+            Truncated = draft.Truncated,
+            ManifestHash = hash,
+            Files = draft.Files,
+            Selections = draft.Selections
+        };
     }
 
     private static string ResolveFileInsideRoot(string rootPath, string relativePath)
@@ -275,11 +517,12 @@ public sealed class RepositoryContextCompiler
     private static void ValidateOptions(ContextCompilationOptions options)
     {
         if (options.MaxTokens <= 0 || options.MaxCharacters <= 0 ||
-            options.MaxFileCharacters <= 0)
+            options.MaxFileCharacters <= 0 || options.MaxFileTokens <= 0 ||
+            options.DependencyDepth < 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options),
-                "Context token, character, and per-file limits must be positive.");
+                "Context limits must be positive and dependency depth cannot be negative.");
         }
     }
 
@@ -287,36 +530,5 @@ public sealed class RepositoryContextCompiler
     {
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes(value));
         return $"sha256:{Convert.ToHexString(digest).ToLowerInvariant()}";
-    }
-
-    private static string HashManifest(
-        string taskId,
-        string baselineCommit,
-        string strategy,
-        string? symbolGraphHash,
-        ContextCompilationOptions options,
-        int characterLimit,
-        int estimatedTokens,
-        int totalCharacters,
-        int eligibleFileCount,
-        int omittedFileCount,
-        bool truncated,
-        IEnumerable<ContextFileManifest> files)
-    {
-        var canonical = new StringBuilder();
-        canonical.AppendLine(taskId);
-        canonical.AppendLine(baselineCommit);
-        canonical.AppendLine(strategy);
-        canonical.AppendLine(symbolGraphHash ?? string.Empty);
-        canonical.AppendLine($"{options.MaxTokens}|{characterLimit}|{options.MaxFileCharacters}");
-        canonical.AppendLine($"{estimatedTokens}|{totalCharacters}|{eligibleFileCount}|{omittedFileCount}|{truncated}");
-        foreach (var file in files)
-        {
-            canonical.AppendLine(
-                $"{file.Path}|{file.Sha256}|{file.IncludedSha256}|{file.OriginalCharacters}|" +
-                $"{file.IncludedCharacters}|{file.Truncated}|{string.Join(';', file.Symbols)}");
-        }
-
-        return Hash(canonical.ToString());
     }
 }

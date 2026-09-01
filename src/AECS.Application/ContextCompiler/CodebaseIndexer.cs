@@ -7,11 +7,21 @@ public class CodeSymbol
     public string Id { get; init; } = string.Empty;
     public string Hash { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
     public string Kind { get; init; } = string.Empty;
     public string FilePath { get; init; } = string.Empty;
+    public string ProjectPath { get; init; } = string.Empty;
     public string Namespace { get; init; } = string.Empty;
     public List<string> BaseTypes { get; init; } = [];
     public List<string> Methods { get; init; } = [];
+}
+
+public sealed class CodeFileRelation
+{
+    public string FromPath { get; init; } = string.Empty;
+    public string ToPath { get; init; } = string.Empty;
+    public string Kind { get; init; } = string.Empty;
+    public string Symbol { get; init; } = string.Empty;
 }
 
 public class CodebaseIndex
@@ -21,6 +31,7 @@ public class CodebaseIndex
     public List<string> TestFiles { get; init; } = [];
     public List<CodeSymbol> Symbols { get; init; } = [];
     public Dictionary<string, List<string>> Dependencies { get; init; } = new();
+    public Dictionary<string, List<CodeFileRelation>> FileRelations { get; init; } = new();
     public bool SemanticAuthority { get; init; }
     public string SymbolGraphHash { get; init; } = string.Empty;
     public string Source { get; init; } = "textual-file-inventory";
@@ -62,6 +73,7 @@ public class CodebaseIndexer
             TestFiles = testFiles,
             Symbols = semanticAuthority ? ProjectSymbols(symbolGraph!) : [],
             Dependencies = semanticAuthority ? ProjectDependencies(symbolGraph!) : new(),
+            FileRelations = semanticAuthority ? ProjectFileRelations(symbolGraph!) : new(),
             SemanticAuthority = semanticAuthority,
             SymbolGraphHash = semanticAuthority ? symbolGraph!.GraphHash : string.Empty,
             Source = semanticAuthority ? "roslyn-symbol-graph" : "textual-file-inventory"
@@ -103,31 +115,35 @@ public class CodebaseIndexer
         return graph.Nodes.Where(node => node.Kind == "type" && !node.IsExternal &&
                 node.FilePaths.Count > 0)
             .OrderBy(node => node.Id, StringComparer.Ordinal)
-            .Select(node => new CodeSymbol
-            {
-                Id = node.Id,
-                Hash = node.Hash,
-                Name = node.Name,
-                Kind = node.TypeKind.ToLowerInvariant(),
-                FilePath = node.FilePaths[0],
-                Namespace = nodes.GetValueOrDefault(node.ContainingNodeId) is
+            .SelectMany(node => node.FilePaths
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .Select(path => new CodeSymbol
+                {
+                    Id = node.Id,
+                    Hash = node.Hash,
+                    Name = node.Name,
+                    DisplayName = node.DisplayName,
+                    Kind = node.TypeKind.ToLowerInvariant(),
+                    FilePath = path,
+                    ProjectPath = node.ProjectPath,
+                    Namespace = nodes.GetValueOrDefault(node.ContainingNodeId) is
                     { Kind: "namespace" } containingNamespace
                     ? containingNamespace.DisplayName
                     : string.Empty,
-                BaseTypes = inherits.GetValueOrDefault(node.Id, [])
+                    BaseTypes = inherits.GetValueOrDefault(node.Id, [])
                     .Select(id => nodes.GetValueOrDefault(id)?.DisplayName)
                     .Where(name => !string.IsNullOrWhiteSpace(name))
                     .Select(name => name!)
                     .OrderBy(name => name, StringComparer.Ordinal)
                     .ToList(),
-                Methods = contains.GetValueOrDefault(node.Id, [])
+                    Methods = contains.GetValueOrDefault(node.Id, [])
                     .Select(id => nodes.GetValueOrDefault(id))
                     .Where(member => member is { Kind: "member", MemberKind: "Method" })
                     .Select(member => member!.Name)
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(name => name, StringComparer.Ordinal)
                     .ToList()
-            })
+                }))
             .ToList();
     }
 
@@ -157,6 +173,81 @@ public class CodebaseIndexer
                 item => item.Key,
                 item => item.Value.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                 StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static Dictionary<string, List<CodeFileRelation>> ProjectFileRelations(
+        CSharpSymbolGraph graph)
+    {
+        var nodes = graph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var relations = new Dictionary<string, Dictionary<string, CodeFileRelation>>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var edge in graph.Edges.OrderBy(edge => edge.Id, StringComparer.Ordinal))
+        {
+            if (!nodes.TryGetValue(edge.FromNodeId, out var source) ||
+                !nodes.TryGetValue(edge.ToNodeId, out var target) ||
+                source.IsExternal || target.IsExternal)
+            {
+                continue;
+            }
+
+            foreach (var sourcePath in source.FilePaths.OrderBy(path => path, StringComparer.Ordinal))
+                foreach (var targetPath in target.FilePaths.OrderBy(path => path, StringComparer.Ordinal))
+                {
+                    if (sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    AddFileRelation(relations, sourcePath, targetPath, edge.Kind, target.DisplayName);
+                    AddFileRelation(
+                        relations,
+                        targetPath,
+                        sourcePath,
+                        $"referenced-by:{edge.Kind}",
+                        source.DisplayName);
+                }
+        }
+
+        foreach (var node in graph.Nodes.Where(node =>
+                     !node.IsExternal && node.FilePaths.Count > 1))
+        {
+            foreach (var sourcePath in node.FilePaths.OrderBy(path => path, StringComparer.Ordinal))
+                foreach (var targetPath in node.FilePaths.OrderBy(path => path, StringComparer.Ordinal))
+                {
+                    if (!sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                        AddFileRelation(relations, sourcePath, targetPath, "partial", node.DisplayName);
+                }
+        }
+
+        return relations.OrderBy(item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                item => item.Key,
+                item => item.Value.Values
+                    .OrderBy(relation => relation.ToPath, StringComparer.Ordinal)
+                    .ThenBy(relation => relation.Kind, StringComparer.Ordinal)
+                    .ThenBy(relation => relation.Symbol, StringComparer.Ordinal)
+                    .ToList(),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void AddFileRelation(
+        IDictionary<string, Dictionary<string, CodeFileRelation>> relations,
+        string fromPath,
+        string toPath,
+        string kind,
+        string symbol)
+    {
+        if (!relations.TryGetValue(fromPath, out var outgoing))
+        {
+            outgoing = new Dictionary<string, CodeFileRelation>(StringComparer.Ordinal);
+            relations[fromPath] = outgoing;
+        }
+        var key = $"{toPath}|{kind}|{symbol}";
+        outgoing.TryAdd(key, new CodeFileRelation
+        {
+            FromPath = fromPath,
+            ToPath = toPath,
+            Kind = kind,
+            Symbol = symbol
+        });
     }
 
     private static bool IsTestFile(string path)

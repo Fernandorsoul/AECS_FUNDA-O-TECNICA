@@ -409,7 +409,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - build, testes e aceite executável usam imagem Docker fixada por digest, sem rede por padrão e com limites de CPU, memória, PIDs e wall clock;
 - `execution.runtime: host` só é aceito pela CLI junto com `--allow-host-execution` e fica marcado na evidência como override de desenvolvimento;
 - `security_scan: required` executa scanners determinísticos de segredos, dependências e padrões; a snapshot de advisories é versionada e deliberadamente limitada;
-- o grafo semântico atual cobre C#; outras linguagens ficam apenas no inventário, e a estimativa de contexto continua usando quatro caracteres por token;
+- o grafo semântico atual cobre C#; outras linguagens ficam apenas no inventário, e modelos sem tokenizer registrado usam a contagem conservadora por bytes UTF-8;
 - a avaliação MSBuild de design time ocorre no processo do controlador e seu limite de memória é uma estimativa do payload, não uma cota rígida do working set;
 - a CLI é um protótipo e sua interface ainda pode mudar sem compatibilidade retroativa.
 

@@ -237,6 +237,7 @@ public class RepositoryContextCompilerTests
         repository.Write("src/Allowed/OrderHandler.cs", "namespace Demo; public class OrderHandler { public void Handle() { } }");
         repository.Write("src/Forbidden/SecretHandler.cs", "namespace Demo; public class SecretHandler { }");
         repository.Write("tests/Allowed/OrderHandlerTests.cs", "namespace Demo.Tests; public class OrderHandlerTests { }");
+        repository.Write("src/.env.cs", "const string Token = \"must-not-enter-context\";");
         repository.Write("bin/Generated.cs", "namespace Demo; public class Generated { }");
         repository.Write(".git/Internal.cs", "namespace Demo; public class Internal { }");
 
@@ -257,6 +258,11 @@ public class RepositoryContextCompilerTests
         result.Manifest.SemanticIndex.Should().Be("textual-file-inventory");
         result.Prompt.Should().Contain("public void Handle()");
         result.Prompt.Should().NotContain("SecretHandler");
+        result.Prompt.Should().NotContain("must-not-enter-context");
+        result.Manifest.Selections.Should().NotContain(selection =>
+            selection.Path == "src/.env.cs" && selection.Decision != "omitted");
+        result.Manifest.Selections.Where(selection => selection.Path == "src/.env.cs")
+            .Should().OnlyContain(selection => selection.Reason == "sensitive-path-filter");
         result.Manifest.Source.Should().Be("isolated-git-worktree");
         result.Manifest.Files.Should().OnlyContain(file =>
             file.Sha256.StartsWith("sha256:") &&
@@ -278,7 +284,7 @@ public class RepositoryContextCompilerTests
             allowed: ["src/**"]);
         var options = new ContextCompilationOptions
         {
-            MaxTokens = 250,
+            MaxTokens = 650,
             MaxCharacters = 1_000,
             MaxFileCharacters = 300
         };
@@ -287,7 +293,7 @@ public class RepositoryContextCompilerTests
         var second = _compiler.Compile(repository.Path, contract, "baseline-123", options);
 
         first.Prompt.Length.Should().BeLessThanOrEqualTo(1_000);
-        first.Manifest.EstimatedTokens.Should().BeLessThanOrEqualTo(250);
+        first.Manifest.EstimatedTokens.Should().BeLessThanOrEqualTo(650);
         first.Manifest.Truncated.Should().BeTrue();
         first.Manifest.Files.Should().Contain(file => file.Truncated);
         first.Manifest.ManifestHash.Should().Be(second.Manifest.ManifestHash);
@@ -314,17 +320,17 @@ public class RepositoryContextCompilerTests
         string objective,
         List<string> allowed,
         List<string>? forbidden = null) => new()
-    {
-        Id = "CTX-TEST",
-        Objective = objective,
-        AcceptanceCriteria = ["Existing tests still pass"],
-        Scope = new ScopeDefinition
         {
-            Allowed = allowed,
-            Forbidden = forbidden ?? []
-        },
-        Budget = ExecutionBudget.Default
-    };
+            Id = "CTX-TEST",
+            Objective = objective,
+            AcceptanceCriteria = ["Existing tests still pass"],
+            Scope = new ScopeDefinition
+            {
+                Allowed = allowed,
+                Forbidden = forbidden ?? []
+            },
+            Budget = ExecutionBudget.Default
+        };
 
     private sealed class TemporaryContextRepository : IDisposable
     {

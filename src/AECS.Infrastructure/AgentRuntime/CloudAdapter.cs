@@ -14,11 +14,15 @@ public class CloudAdapterOptions
     public string BaseUrl { get; set; } = "https://api.openai.com/v1";
     public string Model { get; set; } = "gpt-4o-mini";
     public int MaxTokens { get; set; } = 4096;
+    public int ContextWindowTokens { get; set; } = 32_768;
     public double Temperature { get; set; } = 0.2;
 }
 
 public class CloudAdapter : IAgentAdapter
 {
+    private const string SystemPrompt =
+        "You are a C# developer. Output only FILE blocks with modified code. No explanations.";
+    private const int ChatMessageOverheadTokens = 16;
     private readonly HttpClient _httpClient;
     private readonly CloudAdapterOptions _options;
 
@@ -27,6 +31,17 @@ public class CloudAdapter : IAgentAdapter
         _httpClient = httpClient;
         _options = options;
     }
+
+    public AgentContextProfile GetContextProfile(AgentExecutionRequest request) =>
+        AgentContextProfile.Conservative(
+            nameof(CloudAdapter),
+            _options.Model,
+            request.Budget,
+            ConservativeTokenCounter.Count(
+                SystemPrompt + "\n" + BuildPrompt(request.WithoutContext())) +
+            ChatMessageOverheadTokens,
+            contextWindowTokens: _options.ContextWindowTokens,
+            desiredOutputTokens: _options.MaxTokens);
 
     public async Task<AgentRunResult> ExecuteAsync(
         AgentExecutionRequest request,
@@ -42,7 +57,8 @@ public class CloudAdapter : IAgentAdapter
                 model,
                 prompt,
                 request.Budget,
-                _options.MaxTokens);
+                _options.MaxTokens,
+                _options.ContextWindowTokens);
             if (maxOutputTokens <= 0)
             {
                 return new AgentRunResult
@@ -61,7 +77,7 @@ public class CloudAdapter : IAgentAdapter
                 Model = model,
                 Messages =
                 [
-                    new ChatMessage { Role = "system", Content = "You are a C# developer. Output only FILE blocks with modified code. No explanations." },
+                    new ChatMessage { Role = "system", Content = SystemPrompt },
                     new ChatMessage { Role = "user", Content = prompt }
                 ],
                 MaxTokens = maxOutputTokens,
@@ -261,14 +277,17 @@ public class CloudAdapter : IAgentAdapter
         string model,
         string prompt,
         ExecutionBudget budget,
-        int configuredMaximum)
+        int configuredMaximum,
+        int contextWindowTokens)
     {
         if (budget.MaxTokens <= 0 || budget.MaxCostUsd <= 0)
             return 0;
 
         var (inputPrice, outputPrice) = GetTokenPrices(model);
-        var estimatedInputTokens = (int)Math.Ceiling(prompt.Length / 4d);
-        var availableOutputTokens = budget.MaxTokens - estimatedInputTokens;
+        var estimatedInputTokens = ConservativeTokenCounter.Count(SystemPrompt + "\n" + prompt) +
+            ChatMessageOverheadTokens;
+        var availableOutputTokens = Math.Min(budget.MaxTokens, contextWindowTokens) -
+            estimatedInputTokens;
         if (availableOutputTokens <= 0)
             return 0;
         var inputCost = estimatedInputTokens * inputPrice / 1_000_000;

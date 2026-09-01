@@ -304,7 +304,9 @@ Cada comando registra versão, autoridade e hash da política, fase, concessões
 
 Não existe um campo separado de contexto no YAML atual. Depois do preflight, o AECS compila contexto C# diretamente do worktree do candidato usando objetivo, critérios de aceite e os padrões de `scope.allowed`/`scope.forbidden`.
 
-Os limites padrão são 12 mil tokens estimados, 48 mil caracteres totais e 16 mil caracteres por arquivo; um `budget.tokens` positivo menor reduz o teto. O manifesto persistido informa arquivos incluídos e omitidos, símbolos, hashes do conteúdo original e incluído, truncamento, tamanho e baseline. Arquivos fora de `allowed` nunca entram no pacote, e `allowed` vazio resulta em contexto de código vazio.
+O adaptador informa janela do modelo, saída reservada, overhead do prompt e tokenizer. O teto efetivo do contexto é o menor valor entre 12 mil tokens, `budget.tokens` e a janela restante depois dessas reservas. O limite padrão por arquivo é 4 mil tokens, com guardas secundárias de 48 mil caracteres totais e 16 mil por arquivo. Tokenizers exatos podem ser registrados por modelo; sem um contador compatível, cada byte UTF-8 conta como um token, uma aproximação deliberadamente conservadora.
+
+O ranqueamento começa pelos sinais do objetivo, critérios, escopo, caminhos e símbolos e expande relações semânticas e testes até profundidade 2 por padrão. O manifesto v2 informa, para cada arquivo elegível, rank, score, profundidade, relação, motivos, decisão de inclusão/omissão/truncamento, tokens e hashes do conteúdo original e incluído. Ele também vincula baseline, snapshot, grafo, adaptador, modelo e tokenizer em um fingerprint recalculado na leitura da evidência. Arquivos fora de `allowed` nunca entram no pacote, e `allowed` vazio resulta em contexto de código vazio.
 
 ### Verificação
 
