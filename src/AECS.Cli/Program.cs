@@ -17,6 +17,7 @@ using AECS.Application.Staging;
 using AECS.Application.Verification;
 using AECS.Cli;
 using AECS.Cli.Jarvis;
+using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
@@ -24,7 +25,6 @@ using AECS.Infrastructure.AgentRuntime;
 using AECS.Infrastructure.Cryptography;
 using AECS.Infrastructure.Processes;
 using AECS.Infrastructure.Repositories;
-using AECS.Infrastructure.Sandbox;
 
 // Load .env file if present
 LoadEnvFile();
@@ -440,8 +440,7 @@ static async Task<int> RunReplay(string[] args)
 {
     string? repositoryPath = null;
     string? evidenceIdValue = null;
-    var allowHostExecution = false;
-    var evidenceStoreSelection = new EvidenceStoreSelection();
+    var runtimeOptions = new RuntimeCliOptions();
 
     for (var index = 0; index < args.Length; index++)
     {
@@ -449,17 +448,14 @@ static async Task<int> RunReplay(string[] args)
             repositoryPath = args[++index];
         else if (args[index] == "--evidence" && index + 1 < args.Length)
             evidenceIdValue = args[++index];
-        else if (args[index] == "--allow-host-execution")
-            allowHostExecution = true;
-        else if (evidenceStoreSelection.TryConsume(args, ref index))
+        else if (runtimeOptions.TryConsume(args, ref index))
         {
         }
         else
         {
             Console.WriteLine(
                 "Usage: aecs replay --repo <path> --evidence <id> " +
-                "[--allow-host-execution] " +
-                EvidenceStoreSelection.Usage);
+                RuntimeCliOptions.Usage);
             return 1;
         }
     }
@@ -468,22 +464,22 @@ static async Task<int> RunReplay(string[] args)
     {
         Console.WriteLine(
             "Usage: aecs replay --repo <path> --evidence <id> " +
-            "[--allow-host-execution] " +
-            EvidenceStoreSelection.Usage);
+            RuntimeCliOptions.Usage);
         return 1;
     }
 
-    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var store))
+    if (!TryCreateRuntime(runtimeOptions, out var createdRuntime))
         return 1;
+    using var runtime = createdRuntime;
+    PrintEffectiveRuntime(runtime.Configuration, runtimeOptions.ShowEffectiveConfiguration);
 
     try
     {
+        var processRunner = new SystemProcessRunner();
         var result = await new ExecutionReplayService(
-            new SystemProcessRunner(),
-            store,
-            new DockerStagedProcessRunnerFactory(
-                new SystemProcessRunner(),
-                allowHostExecution))
+            processRunner,
+            runtime.EvidenceStore,
+            runtime.CreateStagedProcessRunnerFactory(processRunner))
             .ReplayAsync(new ExecutionReplayRequest
             {
                 EvidenceId = evidenceId,
@@ -702,35 +698,72 @@ static bool TryCreateEvidenceStore(
     }
 }
 
+static bool TryCreateRuntime(
+    RuntimeCliOptions options,
+    out AecsExecutionRuntime runtime)
+{
+    try
+    {
+        var configuration = AecsRuntimeConfigurationResolver.Resolve(options);
+        runtime = AecsExecutionRuntime.Create(configuration);
+        return true;
+    }
+    catch (Exception ex)
+    {
+        runtime = null!;
+        Console.WriteLine($"ERROR: runtime configuration failed closed: {ex.Message}");
+        return false;
+    }
+}
+
+static void PrintEffectiveRuntime(
+    EffectiveAecsRuntimeConfiguration configuration,
+    bool json)
+{
+    Console.Write(json
+        ? AecsRuntimeConfigurationResolver.ToJson(configuration) + Environment.NewLine
+        : AecsRuntimeConfigurationResolver.ToText(configuration));
+}
+
 static int RunEvidenceKey(string[] args)
 {
+    const string usage =
+        "Usage: aecs evidence-key rotate [--runtime-config <config.json>] " +
+        "[--key-directory <path>] [--show-effective-config]";
     if (args.Length == 0 || !string.Equals(args[0], "rotate", StringComparison.Ordinal))
     {
-        Console.WriteLine("Usage: aecs evidence-key rotate [--key-directory <path>]");
+        Console.WriteLine(usage);
         return 1;
     }
 
-    string? keyDirectory = null;
+    var runtimeOptions = new RuntimeCliOptions();
     for (var index = 1; index < args.Length; index++)
     {
-        if (args[index] == "--key-directory" && index + 1 < args.Length)
-            keyDirectory = args[++index];
+        if (args[index] is "--runtime-config" or "--key-directory" or
+            "--show-effective-config" && runtimeOptions.TryConsume(args, ref index))
+        {
+        }
         else
         {
-            Console.WriteLine("Usage: aecs evidence-key rotate [--key-directory <path>]");
+            Console.WriteLine(usage);
             return 1;
         }
     }
 
-    keyDirectory ??= JsonExecutionEvidenceStore.GetDefaultKeyDirectoryPath();
     try
     {
+        var resolved = AecsRuntimeConfigurationResolver.Resolve(runtimeOptions);
+        PrintEffectiveRuntime(
+            resolved.Effective,
+            runtimeOptions.ShowEffectiveConfiguration);
+        var keyDirectory = resolved.Effective.EvidenceKeyDirectory.Value;
         var newKeyId = RsaEvidenceSignatureService.RotateKey(keyDirectory);
         Console.WriteLine($"Evidence signing key rotated: {newKeyId}");
         Console.WriteLine($"Trusted public keys retained in: {Path.GetFullPath(keyDirectory)}");
         return 0;
     }
-    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+        CryptographicException or InvalidOperationException)
     {
         Console.WriteLine($"ERROR: evidence key rotation failed: {ex.Message}");
         return 1;
@@ -744,14 +777,9 @@ static async Task<int> RunExperiment(string[] args)
     string? datasetPath = null;
     string? outputDirectory = null;
     string? costReconciliationPath = null;
-    bool useMock = false;
-    bool allowHostExecution = false;
     bool resume = false;
     bool includeRealProviders = false;
-    string? cloudKey = null;
-    string? cloudModel = null;
-    string? cloudUrl = null;
-    var evidenceStoreSelection = new EvidenceStoreSelection();
+    var runtimeOptions = new RuntimeCliOptions();
     var invalidArgument = false;
 
     for (int i = 0; i < args.Length; i++)
@@ -766,21 +794,11 @@ static async Task<int> RunExperiment(string[] args)
             outputDirectory = args[++i];
         else if (args[i] == "--cost-reconciliation" && i + 1 < args.Length)
             costReconciliationPath = args[++i];
-        else if (args[i] == "--mock")
-            useMock = true;
-        else if (args[i] == "--allow-host-execution")
-            allowHostExecution = true;
         else if (args[i] == "--resume")
             resume = true;
         else if (args[i] == "--include-real-providers")
             includeRealProviders = true;
-        else if (args[i] == "--cloud-key" && i + 1 < args.Length)
-            cloudKey = args[++i];
-        else if (args[i] == "--cloud-model" && i + 1 < args.Length)
-            cloudModel = args[++i];
-        else if (args[i] == "--cloud-url" && i + 1 < args.Length)
-            cloudUrl = args[++i];
-        else if (evidenceStoreSelection.TryConsume(args, ref i))
+        else if (runtimeOptions.TryConsume(args, ref i))
         {
         }
         else
@@ -789,26 +807,27 @@ static async Task<int> RunExperiment(string[] args)
 
     const string datasetUsage =
         "aecs experiment --dataset <manifest.json> --output <directory> " +
-        "[--resume] [--include-real-providers] [--allow-host-execution] " +
-        "[--cost-reconciliation <ledger.json>] " +
-        "[--cloud-key <key>] [--cloud-url <url>] ";
+        "[--resume] [--include-real-providers] " +
+        "[--cost-reconciliation <ledger.json>] ";
     const string legacyUsage =
-        "aecs experiment --repo <path> --tasks <dir> [--mock] " +
-        "[--allow-host-execution] [--cloud-key <key>] [--cloud-model <model>] ";
+        "aecs experiment --repo <path> --tasks <dir> ";
     if (invalidArgument || datasetPath is not null &&
-            (repoPath is not null || tasksDir is not null || useMock || cloudModel is not null) ||
+            (repoPath is not null || tasksDir is not null ||
+             runtimeOptions.AgentMode == "mock" || runtimeOptions.CloudModel is not null) ||
         datasetPath is null && (repoPath is null || tasksDir is null ||
             costReconciliationPath is not null) ||
         datasetPath is not null && outputDirectory is null)
     {
         Console.WriteLine(
-            $"Usage: {datasetUsage}{EvidenceStoreSelection.Usage}\n" +
-            $"       {legacyUsage}{EvidenceStoreSelection.Usage}");
+            $"Usage: {datasetUsage}{RuntimeCliOptions.Usage}\n" +
+            $"       {legacyUsage}{RuntimeCliOptions.Usage}");
         return 1;
     }
 
-    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+    if (!TryCreateRuntime(runtimeOptions, out var createdRuntime))
         return 1;
+    using var runtime = createdRuntime;
+    PrintEffectiveRuntime(runtime.Configuration, runtimeOptions.ShowEffectiveConfiguration);
 
     if (datasetPath is not null)
     {
@@ -838,17 +857,14 @@ static async Task<int> RunExperiment(string[] args)
                 }
                 var agent = BuildExperimentAgent(
                     definition,
-                    cloudKey,
-                    cloudUrl,
+                    runtime,
                     experimentHttpClient);
-                var pipeline = CreatePipeline(
-                    agent,
-                    evidenceStore,
-                    allowHostExecution,
+                var pipeline = runtime.CreatePipeline(
                     new RepositoryContextCompiler(
                         defaultOptions: definition.Variant.Context,
                         selectionStrategy: definition.Variant.ContextStrategy),
-                    new FixedModelExecutionController(definition.Variant.Model));
+                    new FixedModelExecutionController(definition.Variant.Model),
+                    agent);
                 return await pipeline.RunAsync(
                     definition.RepositoryPath,
                     parser.ParseFromFile(definition.ContractPath),
@@ -889,14 +905,10 @@ static async Task<int> RunExperiment(string[] args)
         return 1;
     }
 
-    IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
     ExperimentReport report;
     try
     {
-        var runner = new ExperimentRunner(CreatePipeline(
-            agent,
-            evidenceStore,
-            allowHostExecution));
+        var runner = new ExperimentRunner(runtime.CreatePipeline());
         report = await runner.RunAsync(repoPath!, taskFiles, CancellationToken.None);
     }
     catch (Exception ex)
@@ -914,13 +926,8 @@ static async Task<int> RunSingle(string[] args)
 {
     string? repoPath = null;
     string? taskFile = null;
-    bool useMock = false;
-    bool allowHostExecution = false;
-
-    string? cloudKey = null;
-    string? cloudModel = null;
-    string? cloudUrl = null;
-    var evidenceStoreSelection = new EvidenceStoreSelection();
+    var runtimeOptions = new RuntimeCliOptions();
+    var invalidArgument = false;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -928,35 +935,25 @@ static async Task<int> RunSingle(string[] args)
             repoPath = args[++i];
         else if (args[i] == "--task-file" && i + 1 < args.Length)
             taskFile = args[++i];
-        else if (args[i] == "--mock")
-            useMock = true;
-        else if (args[i] == "--allow-host-execution")
-            allowHostExecution = true;
-        else if (args[i] == "--cloud-key" && i + 1 < args.Length)
-            cloudKey = args[++i];
-        else if (args[i] == "--cloud-model" && i + 1 < args.Length)
-            cloudModel = args[++i];
-        else if (args[i] == "--cloud-url" && i + 1 < args.Length)
-            cloudUrl = args[++i];
-        else if (evidenceStoreSelection.TryConsume(args, ref i))
+        else if (runtimeOptions.TryConsume(args, ref i))
         {
         }
+        else
+            invalidArgument = true;
     }
 
-    if (repoPath is null || taskFile is null)
+    if (invalidArgument || repoPath is null || taskFile is null)
     {
         Console.WriteLine(
-            "Usage: aecs run --repo <path> --task-file <path> [--mock] " +
-            "[--allow-host-execution] " +
-            "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
+            "Usage: aecs run --repo <path> --task-file <path> " +
+            RuntimeCliOptions.Usage);
         Console.WriteLine(
-            "       aecs experiment --repo <path> --tasks <dir> [--mock] " +
-            "[--allow-host-execution] " +
-            "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
+            "       aecs experiment --repo <path> --tasks <dir> " +
+            RuntimeCliOptions.Usage);
         Console.WriteLine(
             "       aecs experiment --dataset <manifest.json> --output <directory> " +
             "[--resume] [--include-real-providers] " +
-            "[--cost-reconciliation <ledger.json>] " + EvidenceStoreSelection.Usage);
+            "[--cost-reconciliation <ledger.json>] " + RuntimeCliOptions.Usage);
         Console.WriteLine(
             "       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
             "--actor <actor> --confirm " + EvidenceStoreSelection.Usage);
@@ -974,7 +971,9 @@ static async Task<int> RunSingle(string[] args)
         Console.WriteLine(
             "       aecs adaptive-report --repo <path> [--limit <1-500>] " +
             "[--format <text|json>] " + EvidenceStoreSelection.Usage);
-        Console.WriteLine("       aecs evidence-key rotate [--key-directory <path>]");
+        Console.WriteLine(
+            "       aecs evidence-key rotate [--runtime-config <config.json>] " +
+            "[--key-directory <path>]");
         return 1;
     }
 
@@ -990,17 +989,15 @@ static async Task<int> RunSingle(string[] args)
         return 1;
     }
 
-    IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
-    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+    if (!TryCreateRuntime(runtimeOptions, out var createdRuntime))
         return 1;
+    using var runtime = createdRuntime;
+    PrintEffectiveRuntime(runtime.Configuration, runtimeOptions.ShowEffectiveConfiguration);
 
     StagedExecutionResult execution;
     try
     {
-        execution = await CreatePipeline(
-            agent,
-            evidenceStore,
-            allowHostExecution).RunAsync(
+        execution = await runtime.CreatePipeline().RunAsync(
             repoPath,
             contract,
             CancellationToken.None);
@@ -1174,63 +1171,42 @@ static void PrintSemanticEvidence(VerificationResult result)
     }
 }
 
-static StagedExecutionPipeline CreatePipeline(
-    IAgentAdapter agent,
-    IExecutionEvidenceStore evidenceStore,
-    bool allowHostExecution = false,
-    RepositoryContextCompiler? contextCompiler = null,
-    IExecutionController? executionController = null)
-{
-    var processRunner = new SystemProcessRunner();
-    return new StagedExecutionPipeline(
-        agent,
-        processRunner,
-        evidenceStore,
-        contextCompiler,
-        stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(
-            processRunner,
-            allowHostExecution),
-        executionController: executionController);
-}
-
 static async Task<int> RunJarvis(string[] args)
 {
     string? repoPath = null;
-    bool useMock = false;
-    bool allowHostExecution = false;
-    var evidenceStoreSelection = new EvidenceStoreSelection();
+    var runtimeOptions = new RuntimeCliOptions();
+    var invalidArgument = false;
 
     for (int i = 0; i < args.Length; i++)
     {
         if (args[i] == "--repo" && i + 1 < args.Length)
             repoPath = args[++i];
-        else if (args[i] == "--mock")
-            useMock = true;
-        else if (args[i] == "--allow-host-execution")
-            allowHostExecution = true;
-        else if (evidenceStoreSelection.TryConsume(args, ref i))
+        else if (runtimeOptions.TryConsume(args, ref i))
         {
         }
+        else
+            invalidArgument = true;
     }
 
     repoPath ??= ".";
-
-    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+    if (invalidArgument)
+    {
+        Console.WriteLine("Usage: aecs jarvis [--repo <path>] " + RuntimeCliOptions.Usage);
         return 1;
+    }
 
-    var repl = new JarvisRepl(
-        repoPath,
-        useMock,
-        evidenceStore,
-        allowHostExecution);
-    await repl.RunAsync(CancellationToken.None);
-    return 0;
+    if (!TryCreateRuntime(runtimeOptions, out var createdRuntime))
+        return 1;
+    using var runtime = createdRuntime;
+    PrintEffectiveRuntime(runtime.Configuration, runtimeOptions.ShowEffectiveConfiguration);
+
+    var repl = new JarvisRepl(repoPath, runtime);
+    return await repl.RunAsync(CancellationToken.None);
 }
 
 static IAgentAdapter BuildExperimentAgent(
     ExperimentRunDefinition definition,
-    string? cloudKey,
-    string? cloudUrl,
+    AecsExecutionRuntime runtime,
     HttpClient httpClient)
 {
     var variant = definition.Variant;
@@ -1244,9 +1220,12 @@ static IAgentAdapter BuildExperimentAgent(
     {
         EnsureExperimentParameters(variant, "baseUrl", "contextWindowTokens");
         var baseUrl = Parameter(variant, "baseUrl") ??
-            Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ??
-            "http://localhost:11434";
-        var contextWindow = IntParameter(variant, "contextWindowTokens", 32_768, minimum: 1024);
+            runtime.Configuration.OllamaBaseUrl.Value;
+        var contextWindow = IntParameter(
+            variant,
+            "contextWindowTokens",
+            runtime.Configuration.OllamaContextWindowTokens.Value,
+            minimum: 1024);
         return new OllamaAdapter(
             httpClient,
             baseUrl,
@@ -1260,9 +1239,7 @@ static IAgentAdapter BuildExperimentAgent(
         "contextWindowTokens",
         "maxOutputTokens",
         "temperature");
-    var key = cloudKey
-        ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-        ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var key = runtime.CloudApiKey;
     if (string.IsNullOrWhiteSpace(key))
     {
         throw new InvalidOperationException(
@@ -1274,16 +1251,17 @@ static IAgentAdapter BuildExperimentAgent(
         ApiKey = key,
         Model = variant.Model,
         BaseUrl = Parameter(variant, "baseUrl")
-            ?? cloudUrl
-            ?? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
-            ?? Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL")
-            ?? "https://api.openai.com/v1",
+            ?? runtime.Configuration.CloudBaseUrl.Value,
         ContextWindowTokens = IntParameter(
             variant,
             "contextWindowTokens",
-            32_768,
+            runtime.Configuration.CloudContextWindowTokens.Value,
             minimum: 1024),
-        MaxTokens = IntParameter(variant, "maxOutputTokens", 4096, minimum: 1),
+        MaxTokens = IntParameter(
+            variant,
+            "maxOutputTokens",
+            runtime.Configuration.CloudMaxOutputTokens.Value,
+            minimum: 1),
         Temperature = temperature,
         Seed = definition.EffectiveSeed
     });
@@ -1346,45 +1324,6 @@ static double DoubleParameter(
     return parsed;
 }
 
-static IAgentAdapter BuildAgent(bool useMock, string? cloudKey, string? cloudModel, string? cloudUrl)
-{
-    if (useMock)
-        return new MockAgentAdapter();
-
-    var localAdapter = new OllamaAdapter(new HttpClient());
-
-    // Read from CLI args first, then environment variables
-    var key = cloudKey
-        ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-        ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-
-    var model = cloudModel
-        ?? Environment.GetEnvironmentVariable("OPENAI_MODEL")
-        ?? Environment.GetEnvironmentVariable("ANTHROPIC_MODEL")
-        ?? "gpt-4o-mini";
-
-    var url = cloudUrl
-        ?? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
-        ?? Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL")
-        ?? "https://api.openai.com/v1";
-
-    if (string.IsNullOrEmpty(key))
-        return localAdapter;
-
-    // Cloud fallback configured — wrap with FallbackAdapter
-    Console.WriteLine($"  [AECS] Cloud fallback enabled: {model}");
-
-    var cloudOptions = new CloudAdapterOptions
-    {
-        ApiKey = key,
-        Model = model,
-        BaseUrl = url
-    };
-
-    var cloudAdapter = new CloudAdapter(new HttpClient(), cloudOptions);
-    return new FallbackAdapter(localAdapter, cloudAdapter);
-}
-
 static void LoadEnvFile()
 {
     // Search for .env starting from current directory and walking up
@@ -1416,7 +1355,10 @@ static void LoadEnvFromFile(string path)
         var key = trimmed[..separatorIndex].Trim();
         var value = trimmed[(separatorIndex + 1)..].Trim();
 
-        if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
+        if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value) &&
+            string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+        {
             Environment.SetEnvironmentVariable(key, value);
+        }
     }
 }

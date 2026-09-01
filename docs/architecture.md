@@ -158,6 +158,15 @@ Cancelamento, wall clock esgotado, orçamento excedido ou falha permanente do ag
 
 A CLI seleciona explicitamente `JsonExecutionEvidenceStore` ou `PostgreSqlExecutionEvidenceStore`. `AECS_EVIDENCE_STORE` e `--evidence-store` aceitam `json` e `postgres`; o padrão compatível é `json`. Selecionar PostgreSQL exige `AECS_POSTGRES_CONNECTION_STRING` e nunca aciona fallback para arquivo em caso de erro.
 
+`AecsExecutionRuntime` é o composition root compartilhado por `run`, experimentos, replay e
+Jarvis. Ele recebe a resolução estrita de `aecs.runtime-config/v1` e cria uma única cadeia de
+agent adapters, store, `DockerStagedProcessRunnerFactory` e `StagedExecutionPipeline`. A
+precedência é padrão, arquivo, ambiente e flags. A visão efetiva inclui schema, hash e origem de
+cada valor, mas somente o estado e a origem das credenciais. Fallback cloud exige opt-in de rede
+e dados, HTTPS fora de loopback, credencial e allowlist de risco; budget e políticas autoritativas
+do `TaskContract` permanecem fora do controle dessa configuração. Detalhes em
+[Runtime compartilhado e configuração](runtime-configuration.md).
+
 No backend JSON, o diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windows e o equivalente retornado por `LocalApplicationData` nas demais plataformas; `AECS_EVIDENCE_PATH` pode sobrescrevê-lo. O keyring compartilhado pelos dois backends fica separadamente em `%LOCALAPPDATA%/AECS/keys` e pode ser configurado por `AECS_EVIDENCE_KEY_DIRECTORY`. O store recusa chaves — e, no caso JSON, evidências — localizadas dentro do repositório-alvo.
 
 Cada documento preserva:

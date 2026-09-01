@@ -3,50 +3,44 @@ using AECS.Application.Classification;
 using AECS.Application.Experiments;
 using AECS.Application.Jarvis;
 using AECS.Application.Parsing;
-using AECS.Application.Staging;
+using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
-using AECS.Infrastructure.AgentRuntime;
-using AECS.Infrastructure.Processes;
-using AECS.Infrastructure.Repositories;
-using AECS.Infrastructure.Sandbox;
 
 namespace AECS.Cli.Jarvis;
 
 public class JarvisRepl
 {
     private readonly string _repoPath;
-    private readonly bool _useMock;
-    private readonly IExecutionEvidenceStore _evidenceStore;
-    private readonly bool _allowHostExecution;
+    private readonly AecsExecutionRuntime _runtime;
     private readonly TaskContractParser _parser = new();
     private readonly RiskClassifier _riskClassifier = new();
     private readonly DurableExecutionHistoryService? _durableHistory;
 
+    public EffectiveAecsRuntimeConfiguration RuntimeConfiguration => _runtime.Configuration;
+
     public JarvisRepl(
         string repoPath,
-        bool useMock,
-        IExecutionEvidenceStore? evidenceStore = null,
-        bool allowHostExecution = false)
+        AecsExecutionRuntime runtime)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repoPath);
+        ArgumentNullException.ThrowIfNull(runtime);
         _repoPath = repoPath;
-        _useMock = useMock;
-        _evidenceStore = evidenceStore ?? new JsonExecutionEvidenceStore(
-            JsonExecutionEvidenceStore.GetDefaultRootPath());
-        _allowHostExecution = allowHostExecution;
-        if (_evidenceStore is IEvidenceGraphSource graphSource)
+        _runtime = runtime;
+        if (_runtime.EvidenceStore is IEvidenceGraphSource graphSource)
         {
             _durableHistory = new DurableExecutionHistoryService(
-                _evidenceStore,
+                _runtime.EvidenceStore,
                 graphSource,
                 repoPath,
                 Environment.UserName);
         }
     }
 
-    public async Task RunAsync(CancellationToken cancellationToken)
+    public async Task<int> RunAsync(CancellationToken cancellationToken)
     {
+        var exitCode = 0;
         Console.WriteLine("AECS — Agentic Engineering Control System");
         Console.WriteLine("Type 'help' for commands, 'exit' to quit.");
         Console.WriteLine();
@@ -75,11 +69,14 @@ public class JarvisRepl
             }
             catch (Exception ex)
             {
+                exitCode = 1;
                 Console.WriteLine($"Error: {ex.Message}");
             }
 
             Console.WriteLine();
         }
+
+        return exitCode;
     }
 
     private async Task<bool> ExecuteCommandAsync(string command, string argument, CancellationToken ct)
@@ -151,11 +148,7 @@ public class JarvisRepl
         }
 
         var contract = _parser.ParseFromFile(taskFile);
-        IAgentAdapter agent = _useMock
-            ? new MockAgentAdapter()
-            : new OllamaAdapter(new HttpClient());
-
-        var execution = await CreatePipeline(agent).RunAsync(_repoPath, contract, ct);
+        var execution = await _runtime.CreatePipeline().RunAsync(_repoPath, contract, ct);
 
         Console.WriteLine($"Decision: {execution.Decision.Decision}");
         Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
@@ -182,27 +175,11 @@ public class JarvisRepl
             return;
         }
 
-        IAgentAdapter agent = _useMock
-            ? new MockAgentAdapter()
-            : new OllamaAdapter(new HttpClient());
-
-        var runner = new ExperimentRunner(CreatePipeline(agent));
+        var runner = new ExperimentRunner(_runtime.CreatePipeline());
         var report = await runner.RunAsync(_repoPath, taskFiles, ct);
 
         Console.WriteLine(ExperimentReportFormatter.Format(report));
 
-    }
-
-    private StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
-    {
-        var processRunner = new SystemProcessRunner();
-        return new StagedExecutionPipeline(
-            agent,
-            processRunner,
-            _evidenceStore,
-            stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(
-                processRunner,
-                _allowHostExecution));
     }
 
     private async Task ShowStatus(string argument, CancellationToken cancellationToken)

@@ -95,6 +95,10 @@ Para explorar o Jarvis sem chamar um modelo e sem aplicar blocos de código:
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- jarvis --repo . --mock
 ```
 
+`run`, `experiment` e Jarvis resolvem o mesmo runtime. Use `--runtime-config
+aecs.runtime.local.json` para selecionar um arquivo versionado e `--show-effective-config` para
+ver valores e origens efetivas em JSON, sempre com segredos redigidos.
+
 Dentro do REPL:
 
 ```text
@@ -205,9 +209,12 @@ dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- evidence trace `
 
 Filtros por task, run, candidato, baseline, decisão e promoção são combináveis. JSON e DOT podem ser redirecionados para arquivos; consultas ficam restritas ao caminho exato do repositório autenticado. Consulte [Evidence Graph](docs/evidence-graph.md).
 
-### Fallback em nuvem
+### Runtime local e fallback em nuvem
 
-O comando `run` e o modo `experiment` tentam o Ollama primeiro. Se a execução local falhar ou não produzir arquivos, podem recorrer a uma API com endpoint compatível com `POST /chat/completions` da OpenAI.
+`run`, o experimento por diretório e Jarvis tentam o Ollama primeiro através do mesmo composition
+root. Cloud fica desabilitado por padrão, mesmo quando há uma chave no ambiente. Quando habilitado
+e autorizado, falhas transitórias, timeout, 429 ou indisponibilidade local podem recorrer a uma
+API compatível com `POST /chat/completions` da OpenAI.
 
 Copie o exemplo de configuração e não versione o arquivo resultante:
 
@@ -227,8 +234,18 @@ Variáveis reconhecidas:
 | `AECS_EVIDENCE_KEY_DIRECTORY` | Keyring fora do repositório-alvo |
 | `AECS_POSTGRES_CONNECTION_STRING` | Segredo de conexão exigido pelo backend PostgreSQL |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` | Aliases legados usados quando as variáveis `OPENAI_*` não existem |
+| `AECS_RUNTIME_CONFIG` | Caminho do contrato `aecs.runtime-config/v1` |
+| `AECS_AGENT_MODE` | `local` ou `mock` |
+| `OLLAMA_BASE_URL` | Endpoint local do Ollama |
+| `AECS_CLOUD_FALLBACK_ENABLED` | Opt-in explícito do fallback cloud |
+| `AECS_CLOUD_ALLOW_REPOSITORY_CONTEXT` | Autoriza explicitamente enviar contexto ao cloud |
+| `AECS_CLOUD_ALLOWED_RISKS` | Allowlist separada por vírgulas, como `R0,R1` |
+| `AECS_ALLOW_HOST_EXECUTION` | Override explícito do runner host para desenvolvimento |
 
-As opções `--cloud-key`, `--cloud-model` e `--cloud-url` sobrescrevem as variáveis de ambiente. O REPL Jarvis ainda usa somente Ollama ou mock e não monta o fallback cloud.
+Arquivo, ambiente e flags usam precedência nessa ordem. `--enable-cloud-fallback` exige também
+`--allow-cloud-context`, credencial disponível, endpoint HTTPS (ou loopback HTTP) e allowlist de
+riscos. Budget, capabilities, profiles e policies máximas continuam vindo do `TaskContract`.
+Consulte [Runtime compartilhado e configuração](docs/runtime-configuration.md).
 
 Apesar dos aliases `ANTHROPIC_*`, o adaptador não implementa o protocolo nativo da Anthropic: a URL configurada ainda precisa expor uma API compatível com OpenAI.
 
@@ -363,7 +380,7 @@ A referência de campos, capabilities preventivas, padrões de escopo, valores p
 | Replay | `replay --repo <path> --evidence <id> --evidence-store <json\|postgres>` | Reproduz candidato e gates sem chamar o agente |
 | Evidence Graph | `evidence <show\|list\|trace> --repo <path> [--evidence <id>] [--format <text\|json\|dot>]` | Consulta e exporta causalidade autenticada |
 | Adaptive report | `adaptive-report --repo <path> [--limit <1-500>] [--format <text\|json>]` | Avalia recomendações shadow offline por risco e tipo de tarefa |
-| Rotação de chave | `evidence-key rotate [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
+| Rotação de chave | `evidence-key rotate [--runtime-config <file>] [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
 
 Comandos disponíveis dentro do Jarvis:
 
@@ -407,6 +424,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Evidence Graph](docs/evidence-graph.md) — consultas, IDs/arestas estáveis, autorização e exportação JSON/DOT;
 - [Adaptive Controller em shadow mode](docs/adaptive-shadow-controller.md) — histórico autenticado, fallbacks, invariantes e relatório offline;
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
+- [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
