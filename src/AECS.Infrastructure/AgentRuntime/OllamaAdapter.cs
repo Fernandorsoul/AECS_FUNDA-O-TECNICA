@@ -13,15 +13,18 @@ public class OllamaAdapter : IAgentAdapter
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly int _contextWindowTokens;
+    private readonly int? _seed;
 
     public OllamaAdapter(
         HttpClient httpClient,
         string baseUrl = "http://localhost:11434",
-        int contextWindowTokens = 32_768)
+        int contextWindowTokens = 32_768,
+        int? seed = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
         _contextWindowTokens = contextWindowTokens;
+        _seed = seed;
     }
 
     public AgentContextProfile GetContextProfile(AgentExecutionRequest request) =>
@@ -65,7 +68,11 @@ public class OllamaAdapter : IAgentAdapter
                 Model = model,
                 Prompt = prompt,
                 Stream = false,
-                Options = new OllamaOptions { NumPredict = maximumOutputTokens }
+                Options = new OllamaOptions
+                {
+                    NumPredict = maximumOutputTokens,
+                    Seed = _seed
+                }
             };
 
             var json = JsonSerializer.Serialize(requestBody, OllamaJsonContext.Default.OllamaRequest);
@@ -303,6 +310,10 @@ internal class OllamaOptions
 {
     [JsonPropertyName("num_predict")]
     public int NumPredict { get; set; }
+
+    [JsonPropertyName("seed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Seed { get; set; }
 }
 
 internal class OllamaResponse

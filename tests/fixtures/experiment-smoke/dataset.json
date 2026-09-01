@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "aecs.experiment-dataset/v1",
+  "id": "ci-smoke",
+  "version": "1.0.0",
+  "repository": {
+    "path": "repository",
+    "baseline": "HEAD"
+  },
+  "repetitions": 2,
+  "referenceVariantId": "control",
+  "tasks": [
+    {
+      "id": "EXP-SMOKE-001",
+      "contractPath": "task.yaml",
+      "expectedDecision": "Verified"
+    }
+  ],
+  "variants": [
+    {
+      "id": "control",
+      "provider": "Mock",
+      "model": "mock-control-v1",
+      "contextStrategy": "symbol-aware-control",
+      "context": {
+        "maxTokens": 2000,
+        "maxCharacters": 8000,
+        "maxFileCharacters": 4000,
+        "maxFileTokens": 1000,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": false,
+      "parameters": {}
+    },
+    {
+      "id": "shallow",
+      "provider": "Mock",
+      "model": "mock-shallow-v1",
+      "contextStrategy": "symbol-aware-shallow",
+      "context": {
+        "maxTokens": 1000,
+        "maxCharacters": 4000,
+        "maxFileCharacters": 2000,
+        "maxFileTokens": 500,
+        "dependencyDepth": 0
+      },
+      "requiresRealProvider": false,
+      "parameters": {}
+    }
+  ]
+}

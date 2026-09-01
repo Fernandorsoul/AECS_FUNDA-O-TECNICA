@@ -98,6 +98,45 @@ jobs:
           path: ${{ runner.temp }}/aecs-real-world-e2e/
           if-no-files-found: error
 
+      - name: Experiment harness smoke dataset
+        shell: bash
+        run: |
+          smoke_root="${RUNNER_TEMP}/aecs-experiment-smoke"
+          output_root="${RUNNER_TEMP}/aecs-experiment-smoke-output"
+          cp -R tests/fixtures/experiment-smoke "${smoke_root}"
+          git -C "${smoke_root}/repository" init --initial-branch main
+          git -C "${smoke_root}/repository" config user.name "AECS CI"
+          git -C "${smoke_root}/repository" config user.email "aecs-ci@example.invalid"
+          git -C "${smoke_root}/repository" add -A
+          git -C "${smoke_root}/repository" commit -m "experiment smoke baseline"
+
+          dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            experiment \
+            --dataset "${smoke_root}/dataset.json" \
+            --output "${output_root}" \
+            --allow-host-execution \
+            --evidence-root "${RUNNER_TEMP}/aecs-experiment-smoke-evidence" \
+            --key-directory "${RUNNER_TEMP}/aecs-experiment-smoke-keys"
+
+          test -s "${output_root}/report.json"
+          test -s "${output_root}/results.csv"
+          test -s "${output_root}/comparisons.csv"
+          test "$(find "${output_root}/runs" -name '*.json' | wc -l)" -eq 4
+          grep -q '"schemaVersion": "aecs.experiment-report/v1"' "${output_root}/report.json"
+
+          dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            experiment \
+            --dataset "${smoke_root}/dataset.json" \
+            --output "${output_root}" \
+            --resume \
+            --allow-host-execution \
+            --evidence-root "${RUNNER_TEMP}/aecs-experiment-smoke-evidence" \
+            --key-directory "${RUNNER_TEMP}/aecs-experiment-smoke-keys"
+
+          test "$(find "${output_root}/runs" -name '*.json' | wc -l)" -eq 4
+
       - name: Smoke test CLI
         shell: bash
         run: |

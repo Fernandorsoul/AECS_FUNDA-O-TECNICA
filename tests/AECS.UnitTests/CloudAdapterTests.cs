@@ -20,7 +20,8 @@ public sealed class CloudAdapterTests
             {
                 ApiKey = "test-key",
                 Model = "gpt-4o-mini",
-                MaxTokens = 4096
+                MaxTokens = 4096,
+                Seed = 123
             });
 
         var result = await adapter.ExecuteAsync(
@@ -32,6 +33,7 @@ public sealed class CloudAdapterTests
         result.ExitReason.Should().Be("RateLimited");
         result.FailureKind.Should().Be(AgentFailureKind.RateLimited);
         result.RetryAfter.Should().Be(TimeSpan.FromSeconds(7));
+        handler.LastRequestContent.Should().Contain("\"seed\":123");
     }
 
     [Fact]

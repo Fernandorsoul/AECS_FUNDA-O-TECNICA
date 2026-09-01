@@ -11,7 +11,17 @@ public static class ExperimentReportFormatter
 
         sb.AppendLine("AECS EXPERIMENT REPORT");
         sb.AppendLine();
-        sb.AppendLine($"Tasks executed: {report.TotalTasks}");
+        if (!string.IsNullOrEmpty(report.DatasetId))
+        {
+            sb.AppendLine(
+                $"Dataset: {report.DatasetId} v{report.DatasetVersion} ({report.DatasetHash})");
+            sb.AppendLine($"Baseline: {report.BaselineCommit}");
+            sb.AppendLine($"Reference variant: {report.ReferenceVariantId}");
+        }
+        sb.AppendLine($"Runs: {report.TotalTasks}");
+        sb.AppendLine(
+            $"Completed: {report.CompletedCount}, failed: {report.FailedCount}, " +
+            $"skipped: {report.SkippedCount}");
         sb.AppendLine($"Verified: {report.VerifiedCount}");
         sb.AppendLine($"Rejected: {report.RejectedCount}");
 
@@ -23,16 +33,23 @@ public static class ExperimentReportFormatter
         // Task details
         foreach (var result in report.Results)
         {
-            var decision = result.Decision switch
-            {
-                TaskDecision.Verified => "VERIFIED",
-                TaskDecision.Rejected => "REJECTED",
-                TaskDecision.HumanReviewRequired => "HUMAN_REVIEW",
-                _ => "UNKNOWN"
-            };
-
-            var rejectionReason = "";
-            if (result.Decision == TaskDecision.Rejected)
+            var decision = result.Status == ExperimentResultStatus.Completed
+                ? result.Decision switch
+                {
+                    TaskDecision.Verified => "VERIFIED",
+                    TaskDecision.Rejected => "REJECTED",
+                    TaskDecision.HumanReviewRequired => "HUMAN_REVIEW",
+                    _ => "UNKNOWN"
+                }
+                : result.Status.ToString().ToUpperInvariant();
+            var runIdentity = string.IsNullOrEmpty(result.VariantId)
+                ? result.TaskId
+                : $"{result.TaskId}/{result.VariantId}/r{result.Repetition}";
+            var rejectionReason = result.Status == ExperimentResultStatus.Failed
+                ? $"  ({result.Failure})"
+                : string.Empty;
+            if (result.Status == ExperimentResultStatus.Completed &&
+                result.Decision == TaskDecision.Rejected)
             {
                 var failedVerifiers = result.Verifications
                     .Where(v => v.Value == VerificationStatus.Fail)
@@ -44,7 +61,10 @@ public static class ExperimentReportFormatter
                 ? result.Objective[..32] + "..."
                 : result.Objective;
 
-            sb.AppendLine($"{result.TaskId,-10} {objective,-35} {result.Risk,-4} {decision,-10} {result.Duration.TotalSeconds,5:F1}s  ${result.EstimatedCost:F2}  {result.FilesChanged} file(s), {result.RetryCount} retry(ies){rejectionReason}");
+            sb.AppendLine($"{runIdentity,-24} {objective,-35} {result.Risk,-4} " +
+                $"{decision,-12} {result.Duration.TotalSeconds,5:F1}s  " +
+                $"${result.EstimatedCost:F2}  {result.FilesChanged} file(s), " +
+                $"{result.RetryCount} retry(ies){rejectionReason}");
         }
 
         sb.AppendLine();
@@ -63,6 +83,23 @@ public static class ExperimentReportFormatter
                         $"{result.TaskId,-10} #{attempt.AttemptNumber,-3} {attempt.FailureKind,-14} " +
                         $"retry={attempt.WillRetry,-5} {attempt.DecisionReason}");
                 }
+            }
+            sb.AppendLine();
+        }
+
+        if (report.PairedComparisons.Count > 0)
+        {
+            sb.AppendLine("PAIRED COMPARISONS");
+            foreach (var pair in report.PairedComparisons)
+            {
+                var outcome = pair.BothCompleted
+                    ? $"decisionChanged={pair.DecisionChanged} " +
+                      $"durationDelta={pair.DurationDeltaSeconds:F2}s " +
+                      $"costDelta=${pair.CostDelta:F4}"
+                    : pair.Failure;
+                sb.AppendLine(
+                    $"{pair.TaskId}/r{pair.Repetition} {pair.ReferenceVariantId} -> " +
+                    $"{pair.CandidateVariantId}: {outcome}");
             }
             sb.AppendLine();
         }
@@ -92,7 +129,9 @@ public static class ExperimentReportFormatter
         sb.AppendLine("SUMMARY");
         sb.AppendLine($"Total duration: {report.TotalDuration.TotalSeconds:F1}s");
         sb.AppendLine($"Total estimated cost: ${report.TotalCost:F2}");
-        sb.AppendLine($"First-pass verification rate: {report.FirstPassRate:F0}% ({report.VerifiedCount}/{report.TotalTasks})");
+        sb.AppendLine(
+            $"First-pass verification rate: {report.FirstPassRate:F0}% " +
+            $"({report.VerifiedCount}/{report.CompletedCount})");
         sb.AppendLine($"Average files changed: {report.AverageFilesChanged:F1}");
         sb.AppendLine($"CPVC (Cost per Verified Change): ${report.Cpvc:F2}");
 

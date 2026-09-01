@@ -17,6 +17,10 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-011](ADR-011-independent-versioned-test-suite-gates.md) | Accepted | Separar suites unitárias, de integração e aceite com política e evidência TRX próprias |
 | [ADR-012](ADR-012-deterministic-repository-snapshot.md) | Accepted | Inventariar a baseline por uma snapshot Git determinística e endereçada por conteúdo |
 | [ADR-013](ADR-013-roslyn-msbuild-symbol-graph.md) | Accepted | Usar Roslyn/MSBuild como autoridade semântica para C# e restringir fallback a inventário textual |
+| [ADR-014](ADR-014-graph-ranked-model-tokenized-context.md) | Accepted | Selecionar contexto pelo grafo e contar tokens conforme o modelo |
+| [ADR-015](ADR-015-baseline-candidate-semantic-verification.md) | Accepted | Comparar grafos da baseline e do candidato nos verificadores semânticos |
+| [ADR-016](ADR-016-versioned-historical-decision-registry.md) | Accepted | Alimentar EB005 por decisões históricas versionadas e revisadas |
+| [ADR-017](ADR-017-reproducible-experiment-datasets.md) | Accepted | Executar experimentos como datasets versionados e runs retomáveis |
 
 ## Convenção para novos ADRs
 
