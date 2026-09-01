@@ -95,6 +95,12 @@ Para explorar o Jarvis sem chamar um modelo e sem aplicar blocos de código:
 dotnet run --project src/AECS.Cli/AECS.Cli.csproj -- jarvis --repo . --mock
 ```
 
+Alertas proativos são opt-in. Depois de habilitar uma cópia local de
+`aecs.alert-policy.example.json`, passe `--alert-policy <arquivo>` ao Jarvis. Execuções passam a
+gerar alertas locais calibrados para segurança, scope, budget, falhas repetidas, regressão e revisão
+humana; nenhum alerta aplica patch ou transforma silêncio em aprovação. Consulte [Alertas
+proativos](docs/proactive-alerts.md).
+
 ### Cliente VS Code
 
 O cliente mínimo em `clients/vscode` inicia TaskContracts, restaura o vínculo após reinício, mostra
@@ -250,6 +256,8 @@ Variáveis reconhecidas:
 | `AECS_POSTGRES_CONNECTION_STRING` | Segredo de conexão exigido pelo backend PostgreSQL |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` | Aliases legados usados quando as variáveis `OPENAI_*` não existem |
 | `AECS_RUNTIME_CONFIG` | Caminho do contrato `aecs.runtime-config/v1` |
+| `AECS_ALERT_POLICY` | Caminho da política opt-in `aecs.alert-policy/v1` usada pelo Jarvis |
+| `AECS_ALERT_PATH` | Root local do estado e inbox de alertas proativos |
 | `AECS_AGENT_MODE` | `local` ou `mock` |
 | `OLLAMA_BASE_URL` | Endpoint local do Ollama |
 | `AECS_CLOUD_FALLBACK_ENABLED` | Opt-in explícito do fallback cloud |
@@ -410,6 +418,7 @@ Comandos disponíveis dentro do Jarvis:
 | `context <task-id> [--json]` | Mostra o manifesto de contexto persistido na evidência |
 | `review <evidence-id> [--valid-minutes <n>] [--policy <ref>]` | Revisa, aprova/rejeita e opcionalmente promove com confirmação pelo hash |
 | `export-patch <evidence-id> <path>` | Mostra a revisão autenticada e exporta o patch sem promover |
+| `alerts <evaluate\|list\|read\|act\|metrics>` | Avalia e gerencia alertas opt-in derivados do Evidence Graph |
 | `exit` | Encerra o REPL |
 
 ## Estrutura do repositório
@@ -443,6 +452,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;
+- [Alertas proativos](docs/proactive-alerts.md) — política, severidade, cooldown, privacidade, lifecycle e critério de morte;
 - [Store PostgreSQL](docs/postgresql-evidence-store.md) — configuração, migrations, concorrência, backup e indisponibilidade;
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
