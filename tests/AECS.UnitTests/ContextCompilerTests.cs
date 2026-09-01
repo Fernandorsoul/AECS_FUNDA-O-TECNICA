@@ -259,10 +259,10 @@ public class RepositoryContextCompilerTests
         result.Prompt.Should().Contain("public void Handle()");
         result.Prompt.Should().NotContain("SecretHandler");
         result.Prompt.Should().NotContain("must-not-enter-context");
-        result.Manifest.Selections.Should().Contain(selection =>
-            selection.Path == "src/.env.cs" &&
-            selection.Decision == "omitted" &&
-            selection.Reason == "sensitive-path-filter");
+        result.Manifest.Selections.Should().NotContain(selection =>
+            selection.Path == "src/.env.cs" && selection.Decision != "omitted");
+        result.Manifest.Selections.Where(selection => selection.Path == "src/.env.cs")
+            .Should().OnlyContain(selection => selection.Reason == "sensitive-path-filter");
         result.Manifest.Source.Should().Be("isolated-git-worktree");
         result.Manifest.Files.Should().OnlyContain(file =>
             file.Sha256.StartsWith("sha256:") &&
