@@ -72,6 +72,30 @@ public sealed class AuthenticatedEvidenceStoreTests
     }
 
     [Fact]
+    public async Task Save_IncompleteSemanticEvidence_IsRejectedBeforeSigning()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var evidence = fixture.CreateEvidence();
+        evidence.VerificationResults.Add(new VerificationResult
+        {
+            AgentRunId = evidence.AgentRun.Id.ToString("N"),
+            Verifier = "EB003-BreakingChange",
+            Status = VerificationStatus.Pass,
+            Severity = Severity.Info,
+            Semantic = new SemanticVerificationEvidence
+            {
+                BaselineCommit = evidence.Baseline.Commit,
+                ImpactedFiles = ["file.txt"]
+            }
+        });
+
+        var save = () => fixture.Store.SaveAsync(evidence, CancellationToken.None);
+
+        await save.Should().ThrowAsync<EvidenceIntegrityException>()
+            .WithMessage("*Semantic verification evidence*incomplete*");
+    }
+
+    [Fact]
     public async Task CoordinatedDiffHashAndDecisionTampering_IsRejected()
     {
         await using var fixture = AuthenticatedEvidenceFixture.Create();

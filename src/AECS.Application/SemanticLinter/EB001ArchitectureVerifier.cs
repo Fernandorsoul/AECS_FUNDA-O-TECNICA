@@ -1,24 +1,20 @@
-using System.Text.RegularExpressions;
+using AECS.Domain.Models;
 
 namespace AECS.Application.SemanticLinter;
 
-public class EB001Result
+public sealed class EB001Result
 {
     public bool HasViolations => Violations.Count > 0;
-    public List<ArchitectureViolation> Violations { get; init; } = [];
+    public List<SemanticRuleFinding> Violations { get; init; } = [];
     public int FilesScanned { get; init; }
     public int RulesChecked { get; init; }
 }
 
-public class EB001ArchitectureVerifier
+public sealed class EB001ArchitectureVerifier
 {
-    private static readonly Regex UsingRegex = new(
-        @"using\s+([\w.]+);",
-        RegexOptions.Compiled);
-
-    private static readonly Regex NamespaceRegex = new(
-        @"namespace\s+([\w.]+)",
-        RegexOptions.Compiled);
+    private static readonly HashSet<string> DependencyEdges = new(
+        ["project-reference", "references", "inherits", "implements", "constructs"],
+        StringComparer.Ordinal);
 
     private readonly List<ArchitectureRule> _rules;
 
@@ -27,92 +23,107 @@ public class EB001ArchitectureVerifier
         _rules = rules ?? DefaultArchitectureRules.GetCleanArchitectureRules();
     }
 
-    public EB001Result Verify(string repoPath)
+    public EB001Result Verify(SemanticAnalysisInput input)
     {
-        var violations = new List<ArchitectureViolation>();
-        var filesScanned = 0;
-
-        var csFiles = Directory.GetFiles(repoPath, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains(Path.Combine("obj", "")) &&
-                        !f.Contains(Path.Combine("bin", "")) &&
-                        !f.Contains(Path.Combine("tests", "")))
+        ArgumentNullException.ThrowIfNull(input);
+        var baselineRelations = CollectRelations(input, input.BaselineGraph, impactedOnly: false)
+            .Select(relation => relation.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        var findings = CollectRelations(input, input.CandidateGraph, impactedOnly: true)
+            .Where(relation => !baselineRelations.Contains(relation.Key))
+            .Select(relation => relation.Finding)
+            .DistinctBy(finding =>
+                $"{finding.RuleId}\n{finding.SymbolId}\n{finding.Justification}",
+                StringComparer.Ordinal)
+            .OrderBy(finding => finding.RuleId, StringComparer.Ordinal)
+            .ThenBy(finding => finding.FilePath, StringComparer.Ordinal)
+            .ThenBy(finding => finding.SymbolId, StringComparer.Ordinal)
             .ToList();
-
-        foreach (var file in csFiles)
-        {
-            filesScanned++;
-            var content = File.ReadAllText(file);
-            var relativePath = Path.GetRelativePath(repoPath, file).Replace('\\', '/');
-
-            // Get the namespace of this file
-            var namespaceMatch = NamespaceRegex.Match(content);
-            var fileNamespace = namespaceMatch.Success ? namespaceMatch.Groups[1].Value : "";
-
-            // Get all using statements
-            var usings = UsingRegex.Matches(content)
-                .Select(m => m.Groups[1].Value)
-                .ToList();
-
-            // Check each rule
-            foreach (var rule in _rules)
-            {
-                // Check if this file belongs to the source layer
-                if (!BelongsToLayer(fileNamespace, rule.SourceLayer))
-                    continue;
-
-                // Check forbidden dependencies
-                foreach (var forbidden in rule.ForbiddenDependencies)
-                {
-                    var violationsFound = usings
-                        .Where(u => u.StartsWith(forbidden, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-
-                    foreach (var violation in violationsFound)
-                    {
-                        violations.Add(new ArchitectureViolation
-                        {
-                            RuleId = rule.Id,
-                            RuleName = rule.Name,
-                            FilePath = relativePath,
-                            ViolationDetail = $"File '{relativePath}' (namespace: {fileNamespace}) uses '{violation}' which violates rule: {rule.Description}",
-                            Severity = rule.Severity,
-                            SourceNamespace = fileNamespace,
-                            ForbiddenDependency = violation
-                        });
-                    }
-
-                    // Also check for direct references in code (not just using statements)
-                    if (forbidden.Contains('.') && content.Contains(forbidden))
-                    {
-                        // Only add if not already caught by using statement check
-                        if (!violationsFound.Any())
-                        {
-                            violations.Add(new ArchitectureViolation
-                            {
-                                RuleId = rule.Id,
-                                RuleName = rule.Name,
-                                FilePath = relativePath,
-                                ViolationDetail = $"File '{relativePath}' references '{forbidden}' which violates rule: {rule.Description}",
-                                Severity = rule.Severity,
-                                SourceNamespace = fileNamespace,
-                                ForbiddenDependency = forbidden
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
         return new EB001Result
         {
-            Violations = violations,
-            FilesScanned = filesScanned,
+            Violations = findings,
+            FilesScanned = input.ImpactedCandidateNodes()
+                .SelectMany(node => node.FilePaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count(),
             RulesChecked = _rules.Count
         };
     }
 
-    private static bool BelongsToLayer(string fileNamespace, string layerPattern)
+    private IEnumerable<ArchitectureRelation> CollectRelations(
+        SemanticAnalysisInput input,
+        CSharpSymbolGraph graph,
+        bool impactedOnly)
     {
-        return fileNamespace.StartsWith(layerPattern, StringComparison.OrdinalIgnoreCase);
+        foreach (var edge in graph.Edges.Where(edge => DependencyEdges.Contains(edge.Kind)))
+        {
+            var source = input.Node(graph, edge.FromNodeId);
+            var target = input.Node(graph, edge.ToNodeId);
+            if (source is null || target is null ||
+                (impactedOnly && !input.IsImpacted(source, graph)))
+            {
+                continue;
+            }
+            var sourceNamespace = input.NamespaceOf(source, graph);
+            foreach (var rule in _rules.Where(rule => MatchesSource(
+                         rule.SourceLayer,
+                         source,
+                         sourceNamespace)))
+            {
+                foreach (var forbidden in rule.ForbiddenDependencies.Where(value =>
+                             MatchesTarget(value, target, input.NamespaceOf(target, graph))))
+                {
+                    var targetIdentity = Identity(target);
+                    var key = $"{rule.Id}|{Identity(source)}|{edge.Kind}|{targetIdentity}|{forbidden}";
+                    yield return new ArchitectureRelation(
+                        key,
+                        new SemanticRuleFinding
+                        {
+                            RuleId = rule.Id,
+                            RuleName = rule.Name,
+                            SymbolId = source.Id,
+                            Symbol = source.DisplayName,
+                            FilePath = SemanticAnalysisInput.Location(source),
+                            Severity = rule.Severity,
+                            Baseline = input.BaselineSnapshot.BaselineCommit,
+                            Category = "dependency",
+                            Justification =
+                                $"Resolved {edge.Kind} relation from '{source.DisplayName}' " +
+                                $"to '{target.DisplayName}' matches forbidden dependency " +
+                                $"'{forbidden}': {rule.Description}"
+                        });
+                }
+            }
+        }
     }
+
+    private static bool MatchesSource(
+        string sourceLayer,
+        CSharpSymbolGraphNode source,
+        string sourceNamespace) =>
+        StartsWith(sourceNamespace, sourceLayer) ||
+        StartsWith(source.AssemblyName, sourceLayer) ||
+        StartsWith(source.ProjectPath, sourceLayer) ||
+        StartsWith(source.DisplayName, sourceLayer);
+
+    private static bool MatchesTarget(
+        string forbidden,
+        CSharpSymbolGraphNode target,
+        string targetNamespace) =>
+        StartsWith(targetNamespace, forbidden) ||
+        StartsWith(target.AssemblyName, forbidden) ||
+        StartsWith(target.ProjectPath, forbidden) ||
+        StartsWith(target.DisplayName, forbidden) ||
+        target.Name.Equals(forbidden, StringComparison.OrdinalIgnoreCase);
+
+    private static bool StartsWith(string value, string expected) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.StartsWith(expected, StringComparison.OrdinalIgnoreCase);
+
+    private static string Identity(CSharpSymbolGraphNode node) =>
+        string.IsNullOrWhiteSpace(node.DocumentationId)
+            ? node.Id
+            : $"{node.ProjectPath}|{node.DocumentationId}";
+
+    private sealed record ArchitectureRelation(string Key, SemanticRuleFinding Finding);
 }

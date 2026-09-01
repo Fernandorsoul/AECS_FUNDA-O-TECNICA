@@ -17,13 +17,14 @@ public class EB002Verifier : IVerifier
     {
         try
         {
-            var result = _verifier.Verify(context.RepoPath);
+            var input = SemanticAnalysisInput.From(context);
+            var result = _verifier.Verify(input);
 
             if (result.HasViolations)
             {
                 var violationMessages = result.Violations
                     .Take(5)
-                    .Select(v => v.ViolationDetail);
+                    .Select(v => v.Justification);
 
                 // EB002 is probabilistic — warnings don't block, errors do
                 var hasErrors = result.Violations.Any(v => v.Severity >= RuleSeverity.Error);
@@ -34,7 +35,8 @@ public class EB002Verifier : IVerifier
                     Verifier = Name,
                     Status = hasErrors ? VerificationStatus.Fail : VerificationStatus.Pass,
                     Severity = hasErrors ? Severity.Error : Severity.Warning,
-                    Message = $"Pattern violations found ({result.Violations.Count}):\n{string.Join("\n", violationMessages)}"
+                    Message = $"Pattern violations found ({result.Violations.Count}):\n{string.Join("\n", violationMessages)}",
+                    Semantic = SemanticEvidenceFactory.Create(input, result.Violations)
                 });
             }
 
@@ -44,7 +46,8 @@ public class EB002Verifier : IVerifier
                 Verifier = Name,
                 Status = VerificationStatus.Pass,
                 Severity = Severity.Info,
-                Message = $"No pattern violations found ({result.FilesScanned} files, {result.RulesChecked} rules)"
+                Message = $"No pattern violations found ({result.FilesScanned} impacted files, {result.RulesChecked} rules)",
+                Semantic = SemanticEvidenceFactory.Create(input, [])
             });
         }
         catch (Exception ex)
@@ -54,7 +57,7 @@ public class EB002Verifier : IVerifier
                 AgentRunId = context.AgentRunId,
                 Verifier = Name,
                 Status = VerificationStatus.Error,
-                Severity = Severity.Warning,
+                Severity = Severity.Critical,
                 Message = $"EB002 verifier error: {ex.Message}"
             });
         }

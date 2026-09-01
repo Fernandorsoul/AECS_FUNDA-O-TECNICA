@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -311,6 +312,25 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 var targetNode = collector.AddSymbolNode(target, projectPath, maps);
                 if (ownerNode is not null && targetNode is not null && ownerNode.Id != targetNode.Id)
                     collector.AddEdge("references", ownerNode.Id, targetNode.Id);
+            }
+
+            foreach (var creation in rootNode.DescendantNodes(descendIntoTrivia: false)
+                         .OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var target = semanticModel.GetTypeInfo(creation, cancellationToken).Type;
+                var owner = NormalizeGraphSymbol(
+                    semanticModel.GetEnclosingSymbol(creation.SpanStart, cancellationToken));
+                if (target is null || owner is null ||
+                    owner.Kind is SymbolKind.Local or SymbolKind.Parameter)
+                {
+                    continue;
+                }
+
+                var ownerNode = collector.AddSymbolNode(owner, projectPath, maps);
+                var targetNode = collector.AddSymbolNode(target, projectPath, maps);
+                if (ownerNode is not null && targetNode is not null && ownerNode.Id != targetNode.Id)
+                    collector.AddEdge("constructs", ownerNode.Id, targetNode.Id);
             }
         }
     }
@@ -1342,6 +1362,33 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                         token.IsKind(SyntaxKind.PartialKeyword))))
             {
                 modifiers.Add("partial");
+            }
+            var typeParameters = symbol switch
+            {
+                INamedTypeSymbol type => type.TypeParameters,
+                IMethodSymbol method => method.TypeParameters,
+                _ => ImmutableArray<ITypeParameterSymbol>.Empty
+            };
+            foreach (var parameter in typeParameters)
+            {
+                var constraints = new List<string>();
+                if (parameter.HasReferenceTypeConstraint)
+                {
+                    constraints.Add(parameter.ReferenceTypeConstraintNullableAnnotation ==
+                        NullableAnnotation.Annotated ? "class?" : "class");
+                }
+                if (parameter.HasValueTypeConstraint) constraints.Add("struct");
+                if (parameter.HasUnmanagedTypeConstraint) constraints.Add("unmanaged");
+                if (parameter.HasNotNullConstraint) constraints.Add("notnull");
+                constraints.AddRange(parameter.ConstraintTypes.Select(type =>
+                    type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+                if (parameter.HasConstructorConstraint) constraints.Add("new()");
+                if (constraints.Count > 0)
+                {
+                    modifiers.Add(
+                        $"constraint:{parameter.Name}:" +
+                        string.Join("&", constraints.OrderBy(value => value, StringComparer.Ordinal)));
+                }
             }
             return modifiers.OrderBy(item => item, StringComparer.Ordinal).ToList();
         }

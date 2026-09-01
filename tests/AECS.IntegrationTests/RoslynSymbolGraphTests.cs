@@ -66,6 +66,21 @@ public sealed class RoslynSymbolGraphTests
         first.Edges.Should().Contain(edge => edge.Kind == "implements");
         first.Edges.Should().Contain(edge => edge.Kind == "project-reference");
         first.Edges.Should().Contain(edge => edge.Kind == "references");
+        var handler = first.Nodes.Single(node =>
+            node.Kind == "member" && node.Name == "Handle" &&
+            node.DisplayName.Contains("EnvelopeHandler", StringComparison.Ordinal));
+        var constructed = first.Nodes.Single(node =>
+            node.Kind == "type" && node.Name == "PartialEntity");
+        first.Edges.Should().Contain(edge =>
+            edge.Kind == "constructs" &&
+            edge.FromNodeId == handler.Id &&
+            edge.ToNodeId == constructed.Id);
+        first.Nodes.Should().Contain(node =>
+            node.Kind == "member" && node.Name == "Find" &&
+            node.DisplayName.Contains('?'));
+        first.Nodes.Should().Contain(node =>
+            node.Kind == "member" && node.Name == "Map" &&
+            node.Modifiers.Contains("constraint:T:notnull"));
         (await fixture.StatusAsync()).Should().BeEmpty(
             "Roslyn design-time builds must not create intermediate files in the baseline");
     }
@@ -306,6 +321,11 @@ public sealed class RoslynSymbolGraphTests
                 public interface IHandler<T> { T Handle(T value); }
                 public abstract class Entity { public string Id { get; init; } = ""; }
                 public sealed record Envelope<T>(T Value);
+                public sealed class Api
+                {
+                    public string? Find(string? value) => value;
+                    public T Map<T>(T value) where T : notnull => value;
+                }
                 """);
             await fixture.WriteAsync("src/Core/PartialEntity.Part1.cs", """
                 namespace Demo.Core;

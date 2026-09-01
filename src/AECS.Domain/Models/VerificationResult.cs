@@ -18,4 +18,7 @@ public class VerificationResult
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TestSuiteEvidence? TestSuite { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SemanticVerificationEvidence? Semantic { get; init; }
 }

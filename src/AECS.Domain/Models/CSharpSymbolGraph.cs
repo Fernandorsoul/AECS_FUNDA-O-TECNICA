@@ -7,7 +7,11 @@ namespace AECS.Domain.Models;
 public static class CSharpSymbolGraphSchema
 {
     public const string GraphVersion = "aecs.csharp-symbol-graph/v1";
-    public const string StrategyVersion = "roslyn-msbuild-symbol-graph/v1";
+    public const string LegacyStrategyVersion = "roslyn-msbuild-symbol-graph/v1";
+    public const string StrategyVersion = "roslyn-msbuild-symbol-graph/v2";
+
+    public static bool IsSupportedStrategyVersion(string value) =>
+        value is LegacyStrategyVersion or StrategyVersion;
 }
 
 public sealed class CSharpSymbolGraphLimits
