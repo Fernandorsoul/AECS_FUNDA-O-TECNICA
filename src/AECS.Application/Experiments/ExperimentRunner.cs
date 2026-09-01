@@ -50,8 +50,35 @@ public sealed class ExperimentRunner
                 cancellationToken);
             results.Add(MapLegacy(execution));
         }
-        return new ExperimentReport { Results = results };
+        var executedAt = DateTime.UtcNow;
+        var (costRecords, reconciliation) = ExperimentCostReconciler.Build(
+            results,
+            ledger: null,
+            executedAt);
+        return new ExperimentReport
+        {
+            ExecutedAt = executedAt,
+            Results = results,
+            CostRecords = costRecords,
+            CostEfficiency = ExperimentCostEfficiencyAnalyzer.Analyze(costRecords),
+            CostReconciliation = reconciliation
+        };
     }
+
+    public Task<ExperimentReport> RunDatasetAsync(
+        LoadedExperimentDataset dataset,
+        string baselineCommit,
+        ExperimentArtifactStore artifacts,
+        bool resume,
+        bool includeRealProviders,
+        CancellationToken cancellationToken) => RunDatasetAsync(
+            dataset,
+            baselineCommit,
+            artifacts,
+            resume,
+            includeRealProviders,
+            reconciliation: null,
+            cancellationToken);
 
     public async Task<ExperimentReport> RunDatasetAsync(
         LoadedExperimentDataset dataset,
@@ -59,6 +86,7 @@ public sealed class ExperimentRunner
         ExperimentArtifactStore artifacts,
         bool resume,
         bool includeRealProviders,
+        ExperimentCostReconciliationLedger? reconciliation,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(dataset);
@@ -149,7 +177,15 @@ public sealed class ExperimentRunner
                     await artifacts.SaveAsync(result, cancellationToken);
                     results.Add(result);
                     await artifacts.SaveReportAsync(
-                        BuildReport(dataset, datasetHash, baselineCommit, session, environment, results),
+                        BuildReport(
+                            dataset,
+                            datasetHash,
+                            baselineCommit,
+                            session,
+                            environment,
+                            results,
+                            reconciliation,
+                            requireAllReconciliationEntries: false),
                         cancellationToken);
                 }
             }
@@ -161,7 +197,9 @@ public sealed class ExperimentRunner
             baselineCommit,
             session,
             environment,
-            results);
+            results,
+            reconciliation,
+            requireAllReconciliationEntries: true);
         await artifacts.SaveReportAsync(report, cancellationToken);
         return report;
     }
@@ -284,6 +322,7 @@ public sealed class ExperimentRunner
             InputTokens = execution.AgentResult.InputTokens,
             OutputTokens = execution.AgentResult.OutputTokens,
             EstimatedCost = execution.AgentResult.EstimatedCost,
+            UsageAccounting = execution.AgentResult.UsageAccounting,
             FilesChanged = execution.CandidateChangeSet.ChangedFiles.Count,
             Verifications = execution.VerificationResults.ToDictionary(
                 result => result.Verifier,
@@ -294,10 +333,22 @@ public sealed class ExperimentRunner
             RetryCount = execution.AgentRun.RetryCount,
             VerifiedCodeChange = status == ExperimentResultStatus.Completed &&
                 execution.Decision.Decision == TaskDecision.Verified &&
-                execution.OriginalRepositoryUnchanged,
+                execution.CandidateChangeSet.ChangedFiles.Count > 0 &&
+                execution.OriginalRepositoryUnchanged &&
+                execution.EvidenceId != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(execution.EvidenceLocation) &&
+                !execution.VerificationResults.Any(result =>
+                    result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
+                    result.Status == VerificationStatus.Fail),
             FirstPassVerified = status == ExperimentResultStatus.Completed &&
                 execution.Decision.Decision == TaskDecision.Verified &&
+                execution.CandidateChangeSet.ChangedFiles.Count > 0 &&
                 execution.OriginalRepositoryUnchanged &&
+                execution.EvidenceId != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(execution.EvidenceLocation) &&
+                !execution.VerificationResults.Any(result =>
+                    result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
+                    result.Status == VerificationStatus.Fail) &&
                 execution.AgentRun.RetryCount == 0,
             ScopeViolationCount = execution.VerificationResults.Count(result =>
                 result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
@@ -305,7 +356,9 @@ public sealed class ExperimentRunner
             ReworkCount = execution.AgentRun.RetryCount,
             EvidenceId = execution.EvidenceId,
             EvidenceLocation = execution.EvidenceLocation,
-            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
+            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged,
+            FinishedAtUtc = execution.AgentRun.FinishedAt ??
+                execution.AgentAttempts.LastOrDefault()?.FinishedAt
         };
 
     private static TaskExperimentResult Failure(
@@ -338,7 +391,10 @@ public sealed class ExperimentRunner
             Risk = contract.Constraints.SecurityRisk,
             Model = definition.Variant.Model,
             DecisionReason = failure,
-            OriginalRepositoryUnchanged = true
+            OriginalRepositoryUnchanged = true,
+            FinishedAtUtc = status == ExperimentResultStatus.Failed
+                ? DateTime.UtcNow
+                : null
         };
 
     private static TaskExperimentResult MapLegacy(StagedExecutionResult execution) => new()
@@ -353,6 +409,7 @@ public sealed class ExperimentRunner
             InputTokens = execution.AgentResult.InputTokens,
             OutputTokens = execution.AgentResult.OutputTokens,
             EstimatedCost = execution.AgentResult.EstimatedCost,
+            UsageAccounting = execution.AgentResult.UsageAccounting,
             FilesChanged = execution.CandidateChangeSet.ChangedFiles.Count,
             Verifications = execution.VerificationResults.ToDictionary(
                 result => result.Verifier,
@@ -362,9 +419,21 @@ public sealed class ExperimentRunner
             BudgetUsage = execution.BudgetUsage,
             RetryCount = execution.AgentRun.RetryCount,
             VerifiedCodeChange = execution.Decision.Decision == TaskDecision.Verified &&
-                execution.OriginalRepositoryUnchanged,
-            FirstPassVerified = execution.Decision.Decision == TaskDecision.Verified &&
+                execution.CandidateChangeSet.ChangedFiles.Count > 0 &&
                 execution.OriginalRepositoryUnchanged &&
+                execution.EvidenceId != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(execution.EvidenceLocation) &&
+                !execution.VerificationResults.Any(result =>
+                    result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
+                    result.Status == VerificationStatus.Fail),
+            FirstPassVerified = execution.Decision.Decision == TaskDecision.Verified &&
+                execution.CandidateChangeSet.ChangedFiles.Count > 0 &&
+                execution.OriginalRepositoryUnchanged &&
+                execution.EvidenceId != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(execution.EvidenceLocation) &&
+                !execution.VerificationResults.Any(result =>
+                    result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
+                    result.Status == VerificationStatus.Fail) &&
                 execution.AgentRun.RetryCount == 0,
             ScopeViolationCount = execution.VerificationResults.Count(result =>
                 result.Verifier.Equals("Scope", StringComparison.OrdinalIgnoreCase) &&
@@ -372,7 +441,9 @@ public sealed class ExperimentRunner
             ReworkCount = execution.AgentRun.RetryCount,
             EvidenceId = execution.EvidenceId,
             EvidenceLocation = execution.EvidenceLocation,
-            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
+            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged,
+            FinishedAtUtc = execution.AgentRun.FinishedAt ??
+                execution.AgentAttempts.LastOrDefault()?.FinishedAt
         };
 
     private static ExperimentReport BuildReport(
@@ -381,13 +452,20 @@ public sealed class ExperimentRunner
         string baselineCommit,
         ExperimentSession session,
         ExperimentEnvironment environment,
-        IEnumerable<TaskExperimentResult> results)
+        IEnumerable<TaskExperimentResult> results,
+        ExperimentCostReconciliationLedger? reconciliation,
+        bool requireAllReconciliationEntries)
     {
         var ordered = results.OrderBy(result => result.TaskId, StringComparer.Ordinal)
             .ThenBy(result => result.Repetition)
             .ThenBy(result => result.VariantId, StringComparer.Ordinal)
             .ToList();
         var comparisons = Compare(ordered, dataset.Manifest.ReferenceVariantId);
+        var (costRecords, reconciliationMetadata) = ExperimentCostReconciler.Build(
+            ordered,
+            reconciliation,
+            session.StartedAt,
+            requireAllReconciliationEntries);
         return new ExperimentReport
         {
             ExperimentId = ExperimentDatasetFingerprint.ExperimentId(datasetHash),
@@ -403,6 +481,9 @@ public sealed class ExperimentRunner
             Environment = environment,
             Results = ordered,
             PairedComparisons = comparisons,
+            CostRecords = costRecords,
+            CostEfficiency = ExperimentCostEfficiencyAnalyzer.Analyze(costRecords),
+            CostReconciliation = reconciliationMetadata,
             Analysis = ExperimentAnalyzer.Analyze(dataset.Manifest, ordered, comparisons)
         };
     }
@@ -427,6 +508,10 @@ public sealed class ExperimentRunner
             {
                 var bothCompleted = reference.Status == ExperimentResultStatus.Completed &&
                     candidate.Status == ExperimentResultStatus.Completed;
+                var referenceVcc = VerifiedCodeChangePolicy.IsVerified(reference);
+                var candidateVcc = VerifiedCodeChangePolicy.IsVerified(candidate);
+                var referenceFirstPass = referenceVcc && reference.RetryCount == 0;
+                var candidateFirstPass = candidateVcc && candidate.RetryCount == 0;
                 comparisons.Add(new ExperimentPairedComparison
                 {
                     TaskId = reference.TaskId,
@@ -439,14 +524,12 @@ public sealed class ExperimentRunner
                     CandidateStatus = candidate.Status,
                     BothCompleted = bothCompleted,
                     DecisionChanged = bothCompleted && reference.Decision != candidate.Decision,
-                    ReferenceVerifiedCodeChange = reference.VerifiedCodeChange,
-                    CandidateVerifiedCodeChange = candidate.VerifiedCodeChange,
-                    VerifiedCodeChangeDelta = Bool(candidate.VerifiedCodeChange) -
-                        Bool(reference.VerifiedCodeChange),
-                    ReferenceFirstPass = reference.FirstPassVerified,
-                    CandidateFirstPass = candidate.FirstPassVerified,
-                    FirstPassDelta = Bool(candidate.FirstPassVerified) -
-                        Bool(reference.FirstPassVerified),
+                    ReferenceVerifiedCodeChange = referenceVcc,
+                    CandidateVerifiedCodeChange = candidateVcc,
+                    VerifiedCodeChangeDelta = Bool(candidateVcc) - Bool(referenceVcc),
+                    ReferenceFirstPass = referenceFirstPass,
+                    CandidateFirstPass = candidateFirstPass,
+                    FirstPassDelta = Bool(candidateFirstPass) - Bool(referenceFirstPass),
                     ReferenceTotalTokens = reference.TotalTokens,
                     CandidateTotalTokens = candidate.TotalTokens,
                     TotalTokenDelta = candidate.TotalTokens - reference.TotalTokens,

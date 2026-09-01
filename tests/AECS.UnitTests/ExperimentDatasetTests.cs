@@ -105,8 +105,11 @@ public sealed class ExperimentDatasetTests
                 !string.IsNullOrWhiteSpace(result.EvidenceLocation));
         File.Exists(artifacts.ReportPath).Should().BeTrue();
         File.Exists(artifacts.AnalysisCsvPath).Should().BeTrue();
+        File.Exists(artifacts.CostRecordsCsvPath).Should().BeTrue();
+        File.Exists(artifacts.CostEfficiencyCsvPath).Should().BeTrue();
         File.ReadAllLines(artifacts.ResultsCsvPath).Should().HaveCount(5);
         File.ReadAllLines(artifacts.ComparisonsCsvPath).Should().HaveCount(3);
+        File.ReadAllLines(artifacts.CostRecordsCsvPath).Should().HaveCount(5);
 
         var resumedExecutions = 0;
         var resumedRunner = new ExperimentRunner((_, _) =>
@@ -172,6 +175,56 @@ public sealed class ExperimentDatasetTests
         report.Results.Should().ContainSingle(result =>
             result.VariantId == "real" && result.Status == ExperimentResultStatus.Skipped);
         report.PairedComparisons.Should().ContainSingle().Which.BothCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Runner_AppliesReconciliationOnResumeWithoutCallingProviderAgain()
+    {
+        using var fixture = ExperimentFixture.Create();
+        var loaded = fixture.Loaded(fixture.Manifest());
+        var artifacts = new ExperimentArtifactStore(fixture.OutputPath);
+        var runner = new ExperimentRunner((definition, _) =>
+            Task.FromResult(Execution(definition)));
+        var first = await runner.RunDatasetAsync(
+            loaded,
+            Baseline,
+            artifacts,
+            resume: false,
+            includeRealProviders: false,
+            CancellationToken.None);
+        var run = first.Results.Single();
+        var ledger = new ExperimentCostReconciliationLedger
+        {
+            Source = "provider-invoice-export",
+            CapturedAtUtc = DateTime.UtcNow,
+            Entries =
+            [
+                new ExperimentCostReconciliationEntry
+                {
+                    RunKey = run.RunKey,
+                    EvidenceId = run.EvidenceId,
+                    CostUsd = 0.25m,
+                    Reference = "invoice/request-1"
+                }
+            ]
+        };
+        var resumedRunner = new ExperimentRunner((_, _) =>
+            throw new InvalidOperationException("provider must not run during reconciliation"));
+
+        var reconciled = await resumedRunner.RunDatasetAsync(
+            loaded,
+            Baseline,
+            artifacts,
+            resume: true,
+            includeRealProviders: false,
+            ledger,
+            CancellationToken.None);
+
+        reconciled.CostReconciliation.MatchedEntries.Should().Be(1);
+        reconciled.CostRecords.Should().ContainSingle().Which.CostBasis.Should()
+            .Be("reconciled");
+        reconciled.TotalCost.Should().Be(0.25m);
+        reconciled.Cpvc.Should().Be(0.25m);
     }
 
     [Fact]

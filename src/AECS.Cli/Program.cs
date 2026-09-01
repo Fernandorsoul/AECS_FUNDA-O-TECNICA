@@ -682,6 +682,7 @@ static async Task<int> RunExperiment(string[] args)
     string? tasksDir = null;
     string? datasetPath = null;
     string? outputDirectory = null;
+    string? costReconciliationPath = null;
     bool useMock = false;
     bool allowHostExecution = false;
     bool resume = false;
@@ -702,6 +703,8 @@ static async Task<int> RunExperiment(string[] args)
             datasetPath = args[++i];
         else if (args[i] == "--output" && i + 1 < args.Length)
             outputDirectory = args[++i];
+        else if (args[i] == "--cost-reconciliation" && i + 1 < args.Length)
+            costReconciliationPath = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
         else if (args[i] == "--allow-host-execution")
@@ -726,13 +729,15 @@ static async Task<int> RunExperiment(string[] args)
     const string datasetUsage =
         "aecs experiment --dataset <manifest.json> --output <directory> " +
         "[--resume] [--include-real-providers] [--allow-host-execution] " +
+        "[--cost-reconciliation <ledger.json>] " +
         "[--cloud-key <key>] [--cloud-url <url>] ";
     const string legacyUsage =
         "aecs experiment --repo <path> --tasks <dir> [--mock] " +
         "[--allow-host-execution] [--cloud-key <key>] [--cloud-model <model>] ";
     if (invalidArgument || datasetPath is not null &&
             (repoPath is not null || tasksDir is not null || useMock || cloudModel is not null) ||
-        datasetPath is null && (repoPath is null || tasksDir is null) ||
+        datasetPath is null && (repoPath is null || tasksDir is null ||
+            costReconciliationPath is not null) ||
         datasetPath is not null && outputDirectory is null)
     {
         Console.WriteLine(
@@ -754,6 +759,9 @@ static async Task<int> RunExperiment(string[] args)
                 dataset.RepositoryPath,
                 CancellationToken.None);
             var artifacts = new ExperimentArtifactStore(outputDirectory!);
+            var costReconciliation = costReconciliationPath is null
+                ? null
+                : ExperimentCostReconciliationLoader.Load(costReconciliationPath);
             var parser = new TaskContractParser();
             using var experimentHttpClient = new HttpClient();
             var runner = new ExperimentRunner(async (definition, cancellationToken) =>
@@ -791,12 +799,15 @@ static async Task<int> RunExperiment(string[] args)
                 artifacts,
                 resume,
                 includeRealProviders,
+                costReconciliation,
                 CancellationToken.None);
             Console.WriteLine(ExperimentReportFormatter.Format(datasetReport));
             Console.WriteLine($"JSON report: {artifacts.ReportPath}");
             Console.WriteLine($"CSV results: {artifacts.ResultsCsvPath}");
             Console.WriteLine($"CSV comparisons: {artifacts.ComparisonsCsvPath}");
             Console.WriteLine($"CSV analysis: {artifacts.AnalysisCsvPath}");
+            Console.WriteLine($"CSV cost records: {artifacts.CostRecordsCsvPath}");
+            Console.WriteLine($"CSV cost efficiency: {artifacts.CostEfficiencyCsvPath}");
             return datasetReport.Succeeded ? 0 : 1;
         }
         catch (Exception ex)
@@ -883,7 +894,8 @@ static async Task<int> RunSingle(string[] args)
             "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs experiment --dataset <manifest.json> --output <directory> " +
-            "[--resume] [--include-real-providers] " + EvidenceStoreSelection.Usage);
+            "[--resume] [--include-real-providers] " +
+            "[--cost-reconciliation <ledger.json>] " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
             "--actor <actor> --confirm " + EvidenceStoreSelection.Usage);

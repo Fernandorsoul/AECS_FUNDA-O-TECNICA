@@ -271,11 +271,14 @@ public sealed class ContextAbExperimentTests
             Decision = TaskDecision.Verified,
             VerifiedCodeChange = true,
             FirstPassVerified = true,
+            FilesChanged = 1,
             EstimatedCost = cost,
             InputTokens = variant == "naive" ? 1000 : 700,
             OutputTokens = 100,
             Duration = TimeSpan.FromSeconds(variant == "naive" ? 3 : 2),
-            OriginalRepositoryUnchanged = true
+            OriginalRepositoryUnchanged = true,
+            EvidenceId = Guid.NewGuid(),
+            EvidenceLocation = $"evidence/{variant}-{repetition}.json"
         };
 
     private static ExperimentPairedComparison Pair(

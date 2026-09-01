@@ -26,11 +26,16 @@ public class CloudAdapter : IAgentAdapter
     private const int ChatMessageOverheadTokens = 16;
     private readonly HttpClient _httpClient;
     private readonly CloudAdapterOptions _options;
+    private readonly ProviderPricingCatalog _pricing;
 
-    public CloudAdapter(HttpClient httpClient, CloudAdapterOptions options)
+    public CloudAdapter(
+        HttpClient httpClient,
+        CloudAdapterOptions options,
+        ProviderPricingCatalog? pricing = null)
     {
         _httpClient = httpClient;
         _options = options;
+        _pricing = pricing ?? ProviderPricingCatalog.Current;
     }
 
     public AgentContextProfile GetContextProfile(AgentExecutionRequest request) =>
@@ -54,9 +59,11 @@ public class CloudAdapter : IAgentAdapter
         {
             var prompt = BuildPrompt(request);
             var model = _options.Model; // Always use cloud model, not local model name
+            var rate = _pricing.Resolve(model);
+            var estimatedInputTokens = EstimateInputTokens(prompt);
             var maxOutputTokens = GetMaximumOutputTokens(
-                model,
-                prompt,
+                rate,
+                estimatedInputTokens,
                 request.Budget,
                 _options.MaxTokens,
                 _options.ContextWindowTokens);
@@ -68,6 +75,17 @@ public class CloudAdapter : IAgentAdapter
                     StdErr = "No token or cost budget remains for a cloud request",
                     ExitCode = -1,
                     Duration = stopwatch.Elapsed,
+                    UsageAccounting = Accounting(
+                        model,
+                        rate,
+                        estimatedInputTokens,
+                        0,
+                        providerInputTokens: null,
+                        providerOutputTokens: null,
+                        providerRequestId: string.Empty,
+                        rateCardCost: 0m,
+                        costComplete: true,
+                        usageBasis: "no-provider-request"),
                     ExitReason = "BudgetExceeded",
                     FailureKind = AgentFailureKind.BudgetExceeded
                 };
@@ -106,6 +124,17 @@ public class CloudAdapter : IAgentAdapter
                     StdErr = $"Cloud API error {(int)response.StatusCode}: {errorBody}",
                     ExitCode = (int)response.StatusCode,
                     Duration = stopwatch.Elapsed,
+                    UsageAccounting = Accounting(
+                        model,
+                        rate,
+                        estimatedInputTokens,
+                        maxOutputTokens,
+                        providerInputTokens: null,
+                        providerOutputTokens: null,
+                        providerRequestId: string.Empty,
+                        rateCardCost: null,
+                        costComplete: false,
+                        usageBasis: "unavailable"),
                     ExitReason = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests
                         ? "RateLimited"
                         : "ApiError",
@@ -121,12 +150,38 @@ public class CloudAdapter : IAgentAdapter
 
             if (cloudResponse?.Choices is null || cloudResponse.Choices.Count == 0)
             {
+                var emptyInputTokens = cloudResponse?.Usage?.PromptTokens;
+                var emptyOutputTokens = cloudResponse?.Usage?.CompletionTokens;
+                var emptyCost = emptyInputTokens is not null && emptyOutputTokens is not null
+                    ? _pricing.Estimate(
+                        rate,
+                        emptyInputTokens.Value,
+                        emptyOutputTokens.Value)
+                    : (decimal?)null;
                 return new AgentRunResult
                 {
                     Success = false,
                     StdErr = "Empty response from cloud API",
                     ExitCode = -1,
                     Duration = stopwatch.Elapsed,
+                    InputTokens = emptyInputTokens ?? 0,
+                    OutputTokens = emptyOutputTokens ?? 0,
+                    EstimatedCost = emptyCost ?? 0m,
+                    UsageAccounting = Accounting(
+                        model,
+                        rate,
+                        estimatedInputTokens,
+                        maxOutputTokens,
+                        emptyInputTokens,
+                        emptyOutputTokens,
+                        cloudResponse?.Id ?? string.Empty,
+                        rateCardCost: emptyCost,
+                        costComplete: emptyCost is not null,
+                        usageBasis: emptyInputTokens is not null && emptyOutputTokens is not null
+                            ? "provider-reported"
+                            : emptyInputTokens is not null || emptyOutputTokens is not null
+                                ? "partial-provider-reported"
+                                : "unavailable"),
                     ExitReason = "EmptyResponse"
                 };
             }
@@ -134,9 +189,12 @@ public class CloudAdapter : IAgentAdapter
             var responseText = cloudResponse.Choices[0].Message?.Content ?? string.Empty;
             var filesChanged = ExtractModifiedFiles(responseText);
 
-            var inputTokens = cloudResponse.Usage?.PromptTokens ?? 0;
-            var outputTokens = cloudResponse.Usage?.CompletionTokens ?? 0;
-            var estimatedCost = EstimateCost(model, inputTokens, outputTokens);
+            var providerInputTokens = cloudResponse.Usage?.PromptTokens;
+            var providerOutputTokens = cloudResponse.Usage?.CompletionTokens;
+            var inputTokens = cloudResponse.Usage?.PromptTokens ?? estimatedInputTokens;
+            var outputTokens = cloudResponse.Usage?.CompletionTokens ??
+                ConservativeTokenCounter.Count(responseText);
+            var estimatedCost = _pricing.Estimate(rate, inputTokens, outputTokens);
 
             return new AgentRunResult
             {
@@ -148,6 +206,17 @@ public class CloudAdapter : IAgentAdapter
                 InputTokens = inputTokens,
                 OutputTokens = outputTokens,
                 EstimatedCost = estimatedCost,
+                UsageAccounting = Accounting(
+                    model,
+                    rate,
+                    estimatedInputTokens,
+                    maxOutputTokens,
+                    providerInputTokens,
+                    providerOutputTokens,
+                    cloudResponse.Id,
+                    estimatedCost,
+                    costComplete: true,
+                    usageBasis: UsageBasis(providerInputTokens, providerOutputTokens)),
                 FilesChanged = filesChanged,
                 ExitReason = "Completed"
             };
@@ -161,6 +230,7 @@ public class CloudAdapter : IAgentAdapter
                 StdErr = "Cloud API call timed out or was cancelled",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
+                UsageAccounting = UnavailableAccounting(request),
                 ExitReason = cancellationToken.IsCancellationRequested ? "Cancelled" : "Timeout",
                 FailureKind = cancellationToken.IsCancellationRequested
                     ? AgentFailureKind.Cancelled
@@ -176,6 +246,7 @@ public class CloudAdapter : IAgentAdapter
                 StdErr = $"Cloud API error: {ex.Message}",
                 ExitCode = -1,
                 Duration = stopwatch.Elapsed,
+                UsageAccounting = UnavailableAccounting(request),
                 ExitReason = "ApiError",
                 FailureKind = AgentFailureKind.Transient
             };
@@ -269,15 +340,9 @@ public class CloudAdapter : IAgentAdapter
         return files;
     }
 
-    private static decimal EstimateCost(string model, int inputTokens, int outputTokens)
-    {
-        var (inputPrice, outputPrice) = GetTokenPrices(model);
-        return (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000;
-    }
-
     private static int GetMaximumOutputTokens(
-        string model,
-        string prompt,
+        ProviderTokenRate rate,
+        int estimatedInputTokens,
         ExecutionBudget budget,
         int configuredMaximum,
         int contextWindowTokens)
@@ -285,32 +350,77 @@ public class CloudAdapter : IAgentAdapter
         if (budget.MaxTokens <= 0 || budget.MaxCostUsd <= 0)
             return 0;
 
-        var (inputPrice, outputPrice) = GetTokenPrices(model);
-        var estimatedInputTokens = ConservativeTokenCounter.Count(SystemPrompt + "\n" + prompt) +
-            ChatMessageOverheadTokens;
         var availableOutputTokens = Math.Min(budget.MaxTokens, contextWindowTokens) -
             estimatedInputTokens;
         if (availableOutputTokens <= 0)
             return 0;
-        var inputCost = estimatedInputTokens * inputPrice / 1_000_000;
-        var affordableOutputTokens = outputPrice <= 0
+        var inputCost = estimatedInputTokens * rate.InputUsdPerMillionTokens / 1_000_000;
+        var affordableOutputTokens = rate.OutputUsdPerMillionTokens <= 0
             ? budget.MaxTokens
             : (int)Math.Floor(
-                Math.Max(0m, budget.MaxCostUsd - inputCost) * 1_000_000 / outputPrice);
+                Math.Max(0m, budget.MaxCostUsd - inputCost) * 1_000_000 /
+                rate.OutputUsdPerMillionTokens);
         return Math.Max(0, Math.Min(
             Math.Min(availableOutputTokens, affordableOutputTokens),
             configuredMaximum));
     }
 
-    private static (decimal InputPrice, decimal OutputPrice) GetTokenPrices(string model) =>
-        model.ToLowerInvariant() switch
+    private static int EstimateInputTokens(string prompt) =>
+        ConservativeTokenCounter.Count(SystemPrompt + "\n" + prompt) +
+        ChatMessageOverheadTokens;
+
+    private static string UsageBasis(int? providerInputTokens, int? providerOutputTokens) =>
+        providerInputTokens is not null && providerOutputTokens is not null
+            ? "provider-reported"
+            : providerInputTokens is not null || providerOutputTokens is not null
+                ? "provider-reported-with-client-fallback"
+                : "client-estimated";
+
+    private AgentUsageAccounting UnavailableAccounting(AgentExecutionRequest request)
+    {
+        var model = _options.Model;
+        var rate = _pricing.Resolve(model);
+        return Accounting(
+            model,
+            rate,
+            EstimateInputTokens(BuildPrompt(request)),
+            reservedOutputTokens: null,
+            providerInputTokens: null,
+            providerOutputTokens: null,
+            providerRequestId: string.Empty,
+            rateCardCost: null,
+            costComplete: false,
+            usageBasis: "unavailable");
+    }
+
+    private AgentUsageAccounting Accounting(
+        string model,
+        ProviderTokenRate rate,
+        int estimatedInputTokens,
+        int? reservedOutputTokens,
+        int? providerInputTokens,
+        int? providerOutputTokens,
+        string providerRequestId,
+        decimal? rateCardCost,
+        bool costComplete,
+        string usageBasis) => new()
         {
-            var m when m.Contains("gpt-4o-mini") => (0.15m, 0.60m),
-            var m when m.Contains("gpt-4o") => (2.50m, 10.00m),
-            var m when m.Contains("gpt-4-turbo") => (10.00m, 30.00m),
-            var m when m.Contains("claude-3-5-sonnet") => (3.00m, 15.00m),
-            var m when m.Contains("claude-3-haiku") => (0.25m, 1.25m),
-            _ => (1.00m, 3.00m) // default estimate
+            Adapter = nameof(CloudAdapter),
+            Model = model,
+            EstimatedInputTokens = estimatedInputTokens,
+            ReservedOutputTokens = reservedOutputTokens,
+            ProviderInputTokens = providerInputTokens,
+            ProviderOutputTokens = providerOutputTokens,
+            ProviderRequestId = providerRequestId,
+            RateCardEstimatedCostUsd = rateCardCost,
+            CostComplete = costComplete,
+            Currency = _pricing.Table.Currency,
+            PricingTableVersion = _pricing.Table.Version,
+            PricingTableHash = _pricing.Table.Hash,
+            PricingEffectiveDate = rate.EffectiveDate,
+            PricingSource = rate.Source,
+            PricingRateKind = rate.RateKind,
+            RateCardUsageBasis = usageBasis
         };
 
     private static AgentFailureKind ClassifyStatusCode(int statusCode) => statusCode switch
@@ -366,6 +476,9 @@ internal class ChatMessage
 
 internal class CloudResponse
 {
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
     [JsonPropertyName("choices")]
     public List<Choice>? Choices { get; set; }
 
@@ -382,10 +495,10 @@ internal class Choice
 internal class UsageInfo
 {
     [JsonPropertyName("prompt_tokens")]
-    public int PromptTokens { get; set; }
+    public int? PromptTokens { get; set; }
 
     [JsonPropertyName("completion_tokens")]
-    public int CompletionTokens { get; set; }
+    public int? CompletionTokens { get; set; }
 }
 
 [JsonSerializable(typeof(CloudRequest))]

@@ -97,6 +97,7 @@ public class FallbackAdapter : IAgentAdapter
                 InputTokens = aggregate.InputTokens,
                 OutputTokens = aggregate.OutputTokens,
                 EstimatedCost = aggregate.EstimatedCost,
+                UsageAccounting = aggregate.UsageAccounting,
                 FilesChanged = aggregate.FilesChanged,
                 ExitReason = "BudgetExceeded",
                 FailureKind = AgentFailureKind.BudgetExceeded
@@ -176,7 +177,24 @@ public class FallbackAdapter : IAgentAdapter
     private static AgentRunResult Aggregate(
         AgentRunResult primary,
         AgentRunResult fallback,
-        AgentFailureKind failureKind) => new()
+        AgentFailureKind failureKind)
+    {
+        var suppliedAccounting = new[]
+            {
+                primary.UsageAccounting,
+                fallback.UsageAccounting
+            };
+        var hasAccounting = suppliedAccounting.Any(accounting => accounting is not null);
+        var accountingComponents = hasAccounting
+            ? suppliedAccounting.Select((accounting, index) => accounting ??
+                new AgentUsageAccounting
+                {
+                    Adapter = nameof(FallbackAdapter),
+                    Model = index == 0 ? "unreported-primary" : "unreported-fallback",
+                    CostComplete = false
+                }).ToList()
+            : [];
+        return new AgentRunResult
         {
             Success = fallback.Success,
             StdOut = fallback.StdOut,
@@ -186,9 +204,16 @@ public class FallbackAdapter : IAgentAdapter
             InputTokens = primary.InputTokens + fallback.InputTokens,
             OutputTokens = primary.OutputTokens + fallback.OutputTokens,
             EstimatedCost = primary.EstimatedCost + fallback.EstimatedCost,
+            UsageAccounting = accountingComponents.Count == 0
+                ? null
+                : AgentUsageAccountingAggregation.Aggregate(
+                    nameof(FallbackAdapter),
+                    string.Join('|', accountingComponents.Select(item => item.Model)),
+                    accountingComponents),
             FilesChanged = fallback.FilesChanged,
             ExitReason = fallback.Success ? "CompletedViaFallback" : fallback.ExitReason,
             FailureKind = fallback.Success ? AgentFailureKind.None : failureKind,
             RetryAfter = fallback.RetryAfter
         };
+    }
 }

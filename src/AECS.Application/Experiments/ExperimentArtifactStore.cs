@@ -36,6 +36,8 @@ public sealed class ExperimentArtifactStore
     public string ResultsCsvPath => Path.Combine(OutputDirectory, "results.csv");
     public string ComparisonsCsvPath => Path.Combine(OutputDirectory, "comparisons.csv");
     public string AnalysisCsvPath => Path.Combine(OutputDirectory, "analysis.csv");
+    public string CostRecordsCsvPath => Path.Combine(OutputDirectory, "cost-records.csv");
+    public string CostEfficiencyCsvPath => Path.Combine(OutputDirectory, "cost-efficiency.csv");
 
     public static void EnsureOutsideRepository(string outputDirectory, string repositoryPath)
     {
@@ -154,6 +156,14 @@ public sealed class ExperimentArtifactStore
         await WriteTextReplaceAsync(
             AnalysisCsvPath,
             ExperimentCsvFormatter.Analysis(report),
+            cancellationToken);
+        await WriteTextReplaceAsync(
+            CostRecordsCsvPath,
+            ExperimentCsvFormatter.CostRecords(report),
+            cancellationToken);
+        await WriteTextReplaceAsync(
+            CostEfficiencyCsvPath,
+            ExperimentCsvFormatter.CostEfficiency(report),
             cancellationToken);
     }
 
@@ -483,8 +493,122 @@ public static class ExperimentCsvFormatter
         return string.Join("\n", rows) + "\n";
     }
 
+    public static string CostRecords(ExperimentReport report)
+    {
+        var rows = new List<string>
+        {
+            Row(
+                "run_key", "evidence_id", "status", "decision", "included_in_cpvc", "inclusion_reason",
+                "vcc", "vcc_reason", "model", "risk", "task_id", "strategy", "period_utc",
+                "estimated_input_tokens", "reserved_output_tokens", "provider_input_tokens",
+                "provider_output_tokens", "provider_request_id", "input_token_divergence",
+                "output_token_divergence",
+                "rate_card_estimated_cost_usd", "local_resource_estimated_cost_usd",
+                "reconciled_cost_usd", "effective_cost_usd", "cost_basis", "cost_complete",
+                "pricing_table_version", "pricing_table_hash", "pricing_effective_date",
+                "pricing_source", "pricing_rate_kind", "rate_card_usage_basis",
+                "local_cost_policy_version", "local_power_watts",
+                "local_electricity_usd_per_kwh", "local_hardware_cost_usd",
+                "local_hardware_lifetime_hours", "retry_count",
+                "accounting_component_count", "fallback_used", "reconciliation_source",
+                "reconciliation_reference")
+        };
+        rows.AddRange(report.CostRecords.Select(record => Row(
+            record.RunKey,
+            record.EvidenceId?.ToString("N") ?? string.Empty,
+            record.Status.ToString(),
+            record.Decision?.ToString() ?? string.Empty,
+            record.IncludedInCpvc.ToString(CultureInfo.InvariantCulture),
+            record.InclusionReason,
+            record.VerifiedCodeChange.ToString(CultureInfo.InvariantCulture),
+            record.VccReason,
+            record.Model,
+            record.Risk.ToString(),
+            record.TaskId,
+            record.Strategy,
+            record.PeriodUtc,
+            Integer(record.EstimatedInputTokens),
+            Integer(record.ReservedOutputTokens),
+            Integer(record.ProviderInputTokens),
+            Integer(record.ProviderOutputTokens),
+            record.ProviderRequestId,
+            Integer(record.InputTokenDivergence),
+            Integer(record.OutputTokenDivergence),
+            Decimal(record.RateCardEstimatedCostUsd),
+            Decimal(record.LocalResourceEstimatedCostUsd),
+            Decimal(record.ReconciledCostUsd),
+            Decimal(record.EffectiveCostUsd),
+            record.CostBasis,
+            record.CostComplete.ToString(CultureInfo.InvariantCulture),
+            record.PricingTableVersion,
+            record.PricingTableHash,
+            record.PricingEffectiveDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ??
+                string.Empty,
+            record.PricingSource,
+            record.PricingRateKind,
+            record.RateCardUsageBasis,
+            record.LocalCostPolicyVersion,
+            Decimal(record.LocalPowerWatts),
+            Decimal(record.LocalElectricityUsdPerKwh),
+            Decimal(record.LocalHardwareCostUsd),
+            Decimal(record.LocalHardwareLifetimeHours),
+            record.RetryCount.ToString(CultureInfo.InvariantCulture),
+            record.AccountingComponentCount.ToString(CultureInfo.InvariantCulture),
+            record.FallbackUsed.ToString(CultureInfo.InvariantCulture),
+            record.ReconciliationSource,
+            record.ReconciliationReference)));
+        return string.Join("\n", rows) + "\n";
+    }
+
+    public static string CostEfficiency(ExperimentReport report)
+    {
+        var rows = new List<string>
+        {
+            Row(
+                "schema_version", "currency", "vcc_definition_version", "dimension", "value",
+                "planned_members", "sample_size", "completed_count", "rejected_count",
+                "failed_count", "skipped_count", "vcc", "known_cost_count",
+                "missing_cost_count", "cost_coverage", "total_effective_cost_usd", "cpvc_usd",
+                "cpvc_ci95_lower", "cpvc_ci95_upper", "cost_mean", "cost_stddev",
+                "cost_median", "member_run_keys", "included_run_keys", "evidence_ids")
+        };
+        rows.AddRange(report.CostEfficiency.Aggregates.Select(aggregate => Row(
+            report.CostEfficiency.SchemaVersion,
+            report.CostEfficiency.Currency,
+            report.CostEfficiency.VccDefinitionVersion,
+            aggregate.Dimension,
+            aggregate.Value,
+            aggregate.PlannedMembers.ToString(CultureInfo.InvariantCulture),
+            aggregate.SampleSize.ToString(CultureInfo.InvariantCulture),
+            aggregate.CompletedCount.ToString(CultureInfo.InvariantCulture),
+            aggregate.RejectedCount.ToString(CultureInfo.InvariantCulture),
+            aggregate.FailedCount.ToString(CultureInfo.InvariantCulture),
+            aggregate.SkippedCount.ToString(CultureInfo.InvariantCulture),
+            aggregate.VerifiedCodeChanges.ToString(CultureInfo.InvariantCulture),
+            aggregate.KnownCostCount.ToString(CultureInfo.InvariantCulture),
+            aggregate.MissingCostCount.ToString(CultureInfo.InvariantCulture),
+            aggregate.CostCoverage.ToString("G17", CultureInfo.InvariantCulture),
+            Decimal(aggregate.TotalEffectiveCostUsd),
+            Decimal(aggregate.CpvcUsd),
+            Number(aggregate.CpvcConfidenceIntervalLower),
+            Number(aggregate.CpvcConfidenceIntervalUpper),
+            Number(aggregate.EffectiveCostDistribution.Mean),
+            Number(aggregate.EffectiveCostDistribution.StandardDeviation),
+            Number(aggregate.EffectiveCostDistribution.Median),
+            string.Join(';', aggregate.MemberRunKeys),
+            string.Join(';', aggregate.IncludedRunKeys),
+            string.Join(';', aggregate.EvidenceIds.Select(id => id.ToString("N"))))));
+        return string.Join("\n", rows) + "\n";
+    }
+
     private static string Number(double? value) =>
         value?.ToString("G17", CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private static string Decimal(decimal? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private static string Integer(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
     private static string Row(params string[] values) => string.Join(',', values.Select(Escape));
 

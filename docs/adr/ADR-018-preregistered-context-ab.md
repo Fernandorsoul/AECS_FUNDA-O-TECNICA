@@ -26,6 +26,7 @@ Custo zero ou ausente torna a métrica econômica indisponível, nunca infinita.
 
 O A/B mede uma diferença real de contexto e rejeita configurações contaminadas antes de chamar
 um provider. O benchmark de 30 pares é versionado, mas providers reais continuam opt-in e fora
-do CI barato. `VCC/$` ainda usa custo estimado do adapter; reconciliação de cobrança e custo de
-compute local permanecem no escopo da issue #33. Rework significa retry dentro do run e não deve
-ser apresentado como rework pós-merge.
+do CI barato. A análise H1 permanece, por pré-registro, em custo estimado do adapter. O relatório
+v3 posterior adiciona, sem reescrever H1, reconciliação de cobrança e custo de compute local
+conforme [Contabilidade de custo, VCC e CPVC](../cost-accounting.md). Rework significa retry
+dentro do run e não deve ser apresentado como rework pós-merge.

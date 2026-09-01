@@ -51,7 +51,14 @@ public class OllamaAdapterTests
         result.ExitCode.Should().Be(0);
         result.InputTokens.Should().Be(150);
         result.OutputTokens.Should().Be(200);
-        result.EstimatedCost.Should().Be(0m);
+        result.EstimatedCost.Should().BePositive();
+        result.UsageAccounting.Should().NotBeNull();
+        result.UsageAccounting!.LocalCostPolicyVersion.Should()
+            .Be(LocalComputeCostPolicy.CurrentVersion);
+        result.UsageAccounting.ProviderInputTokens.Should().Be(150);
+        result.UsageAccounting.ProviderOutputTokens.Should().Be(200);
+        result.UsageAccounting.LocalPowerWatts.Should().Be(200m);
+        result.UsageAccounting.CostComplete.Should().BeTrue();
         result.FilesChanged.Should().Contain("src/Customers/CustomerMapper.cs");
         result.ExitReason.Should().Be("Completed");
     }

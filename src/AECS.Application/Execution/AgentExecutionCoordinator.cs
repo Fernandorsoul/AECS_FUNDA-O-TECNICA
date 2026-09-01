@@ -457,6 +457,7 @@ public sealed class AgentExecutionCoordinator
             InputTokens = Math.Max(0, result.InputTokens),
             OutputTokens = Math.Max(0, result.OutputTokens),
             EstimatedCost = Math.Max(0m, result.EstimatedCost),
+            UsageAccounting = result.UsageAccounting,
             Duration = result.Duration,
             RetryAfter = result.RetryAfter,
             RetryDelay = retryDelay,
@@ -515,10 +516,43 @@ public sealed class AgentExecutionCoordinator
     private static AgentExecutionOutcome Outcome(
         AgentRunResult result,
         List<AgentAttemptEvidence> attempts,
-        string exhaustionReason) => new()
+        string exhaustionReason)
+    {
+        var hasAttemptAccounting = attempts.Any(attempt => attempt.UsageAccounting is not null);
+        var attemptAccounting = hasAttemptAccounting
+            ? attempts.Select(attempt => attempt.UsageAccounting ?? new AgentUsageAccounting
+                {
+                    Adapter = nameof(AgentExecutionCoordinator),
+                    Model = "unreported-attempt",
+                    CostComplete = false
+                }).ToList()
+            : [];
+        var accounting = attemptAccounting.Count == 0
+            ? result.UsageAccounting
+            : AgentUsageAccountingAggregation.Aggregate(
+                nameof(AgentExecutionCoordinator),
+                result.UsageAccounting?.Model ?? string.Empty,
+                attemptAccounting);
+        return new AgentExecutionOutcome
         {
-            Result = result,
+            Result = new AgentRunResult
+            {
+                Success = result.Success,
+                StdOut = result.StdOut,
+                StdErr = result.StdErr,
+                ExitCode = result.ExitCode,
+                Duration = result.Duration,
+                InputTokens = result.InputTokens,
+                OutputTokens = result.OutputTokens,
+                EstimatedCost = result.EstimatedCost,
+                UsageAccounting = accounting,
+                FilesChanged = result.FilesChanged,
+                ExitReason = result.ExitReason,
+                FailureKind = result.FailureKind,
+                RetryAfter = result.RetryAfter
+            },
             Attempts = attempts,
             BudgetExhaustionReason = exhaustionReason
         };
+    }
 }

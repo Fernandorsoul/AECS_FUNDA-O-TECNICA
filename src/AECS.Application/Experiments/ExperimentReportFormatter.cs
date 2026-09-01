@@ -33,6 +33,11 @@ public static class ExperimentReportFormatter
         // Task details
         foreach (var result in report.Results)
         {
+            var costRecord = report.CostRecords.SingleOrDefault(record =>
+                record.RunKey == result.RunKey);
+            var cost = costRecord?.EffectiveCostUsd is { } effectiveCost
+                ? $"${effectiveCost:F4} ({costRecord.CostBasis})"
+                : "cost unavailable";
             var decision = result.Status == ExperimentResultStatus.Completed
                 ? result.Decision switch
                 {
@@ -63,7 +68,7 @@ public static class ExperimentReportFormatter
 
             sb.AppendLine($"{runIdentity,-24} {objective,-35} {result.Risk,-4} " +
                 $"{decision,-12} {result.Duration.TotalSeconds,5:F1}s  " +
-                $"${result.EstimatedCost:F2}  {result.FilesChanged} file(s), " +
+                $"{cost}  {result.FilesChanged} file(s), " +
                 $"{result.RetryCount} retry(ies){rejectionReason}");
         }
 
@@ -97,11 +102,30 @@ public static class ExperimentReportFormatter
                       $"vccDelta={pair.VerifiedCodeChangeDelta} " +
                       $"tokenDelta={pair.TotalTokenDelta} " +
                       $"durationDelta={pair.DurationDeltaSeconds:F2}s " +
-                      $"costDelta=${pair.CostDelta:F4}"
+                      $"estimatedCostDelta=${pair.CostDelta:F4}"
                     : pair.Failure;
                 sb.AppendLine(
                     $"{pair.TaskId}/r{pair.Repetition} {pair.ReferenceVariantId} -> " +
                     $"{pair.CandidateVariantId}: {outcome}");
+            }
+            sb.AppendLine();
+        }
+
+        if (report.CostEfficiency.Aggregates.Count > 0)
+        {
+            sb.AppendLine("COST EFFICIENCY (RECONCILED WHEN AVAILABLE)");
+            foreach (var aggregate in report.CostEfficiency.Aggregates)
+            {
+                var total = Money(aggregate.TotalEffectiveCostUsd);
+                var cpvc = Money(aggregate.CpvcUsd);
+                var interval = aggregate.CpvcConfidenceIntervalLower is { } lower &&
+                    aggregate.CpvcConfidenceIntervalUpper is { } upper
+                        ? $"[${lower:F4}, ${upper:F4}]"
+                        : "unavailable";
+                sb.AppendLine(
+                    $"{aggregate.Dimension}/{aggregate.Value}: n={aggregate.SampleSize}, " +
+                    $"VCC={aggregate.VerifiedCodeChanges}, cost={total}, CPVC={cpvc}, " +
+                    $"95% CI={interval}, missingCost={aggregate.MissingCostCount}");
             }
             sb.AppendLine();
         }
@@ -156,13 +180,18 @@ public static class ExperimentReportFormatter
         // Summary
         sb.AppendLine("SUMMARY");
         sb.AppendLine($"Total duration: {report.TotalDuration.TotalSeconds:F1}s");
-        sb.AppendLine($"Total estimated cost: ${report.TotalCost:F2}");
+        sb.AppendLine($"Adapter estimate (not billed): ${report.TotalEstimatedCost:F4}");
+        sb.AppendLine($"Effective cost: {Money(report.TotalCost)}");
         sb.AppendLine(
             $"First-pass verification rate: {report.FirstPassRate:F0}% " +
             $"({report.FirstPassVerifiedCount}/{report.CompletedCount})");
         sb.AppendLine($"Average files changed: {report.AverageFilesChanged:F1}");
-        sb.AppendLine($"CPVC (Cost per Verified Change): ${report.Cpvc:F2}");
+        sb.AppendLine($"CPVC (Cost per Verified Code Change): {Money(report.Cpvc)}");
 
         return sb.ToString();
     }
+
+    private static string Money(decimal? value) => value is null
+        ? "unavailable"
+        : $"${value.Value:F4}";
 }

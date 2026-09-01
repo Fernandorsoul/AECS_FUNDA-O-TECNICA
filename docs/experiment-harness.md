@@ -88,6 +88,10 @@ aecs experiment `
   --key-directory C:\aecs-keys
 ```
 
+Um ledger posterior de cobrança pode ser aplicado com
+`--cost-reconciliation <ledger.json>`, inclusive junto de `--resume`, sem executar novamente o
+provider. O formato e as validações estão em [Contabilidade de custo, VCC e CPVC](cost-accounting.md).
+
 O diretório de saída deve ficar fora do repositório. Antes de cada repetição, o harness exige checkout limpo e o mesmo commit resolvido. O pipeline staged cria worktrees Git descartáveis e únicos para preflight/candidato; o resultado ainda exige `OriginalRepositoryUnchanged=true`. Assim, uma repetição nunca usa arquivos produzidos pela anterior.
 
 Variantes `Local` e `Cloud` precisam declarar `requiresRealProvider=true` e são registradas como `Skipped` até que `--include-real-providers` seja passado. Chaves continuam externas ao manifesto. Parâmetros atuais:
@@ -114,18 +118,23 @@ O output contém:
 
 - `session.json`: hash do dataset e início da sessão;
 - `runs/*.json`: checkpoints individuais, inclusive falhas e skips;
-- `report.json`: relatório normalizado `aecs.experiment-report/v2`, ambiente, análise e comparações pareadas;
+- `report.json`: relatório normalizado `aecs.experiment-report/v3`, ambiente, análise, custo e comparações pareadas;
 - `results.csv`: uma linha por run, com modelo, contexto, seed, baseline, decisão e evidência;
 - `comparisons.csv`: uma linha por par e repetição, com deltas de VCC, first-pass, tokens,
   custo estimado, latência, escopo e rework;
-- `analysis.csv`: uma linha por variante com amostra, taxas, custo e intervalos de confiança.
+- `analysis.csv`: uma linha por variante com amostra, taxas, custo e intervalos de confiança;
+- `cost-records.csv`: uso estimado/final, divergências, custo estimado/reconciliado e vínculo de
+  evidência por run;
+- `cost-efficiency.csv`: CPVC e incerteza geral, por modelo, risco, tarefa, estratégia e período.
 
 O pareamento é sempre feito dentro da mesma tarefa e repetição. Falha de uma variante não some da agregação: o par permanece com `bothCompleted=false` e a razão de cada lado. Runs concluídos registram `EvidenceId` e localização do envelope autenticado que originou os números.
 
-VCC significa aqui uma decisão `Verified` produzida sem alterar o checkout original. First-pass
-exige VCC sem retry. `rework` é declarado estritamente como novas tentativas do agente dentro do
-run; não representa rework pós-merge. Custo continua identificado como estimativa do adapter.
-Valor ausente ou zero não vira custo infinito: torna a métrica primária inconclusiva.
+VCC segue `aecs.vcc/v1`: decisão `Verified`, execução concluída, mudança Git não vazia, checkout
+original intacto, nenhuma violação de escopo e evidência de origem persistida. First-pass exige também zero retry.
+`rework` é declarado estritamente como novas tentativas do agente dentro do run; não representa
+rework pós-merge. O custo efetivo prefere reconciliação e mantém estimativas explicitamente
+rotuladas. Custo ausente ou nenhum VCC deixa CPVC indisponível, nunca zero. Consulte a
+[especificação completa](cost-accounting.md).
 
 Para cada distribuição, o relatório preserva tamanho, mínimo, quartis, média, mediana, máximo,
 desvio-padrão e intervalo de confiança de 95% da média. A conclusão automática é `Maintain`

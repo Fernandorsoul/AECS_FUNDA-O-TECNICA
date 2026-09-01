@@ -123,8 +123,9 @@ public static class ExperimentAnalyzer
             .ToList();
         var completed = observed.Where(result => result.Status == ExperimentResultStatus.Completed)
             .ToList();
-        var vcc = observed.Count(result => result.VerifiedCodeChange);
-        var firstPass = observed.Count(result => result.FirstPassVerified);
+        var vcc = observed.Count(VerifiedCodeChangePolicy.IsVerified);
+        var firstPass = observed.Count(result =>
+            VerifiedCodeChangePolicy.IsVerified(result) && result.RetryCount == 0);
         var scopeViolations = observed.Sum(result => result.ScopeViolationCount);
         var totalCost = observed.Sum(result => result.EstimatedCost);
 

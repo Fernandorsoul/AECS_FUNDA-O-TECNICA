@@ -197,8 +197,8 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 O modo versionado do Experiment Harness lê datasets v1 gerais e o protocolo de contexto A/B
 v2, resolve a baseline exata e expande tarefas × variantes × repetições. Cada combinação usa o
 isolamento staged existente, recebe run key determinístico e checkpoint imutável. O relatório
-`aecs.experiment-report/v2` preserva ambiente, falhas individuais, pares, distribuições,
-incerteza, conclusão H1 e links para todas as evidências produzidas. Consulte
+`aecs.experiment-report/v3` preserva ambiente, falhas individuais, pares, uso/custo reconciliado,
+CPVC por dimensão, distribuições, incerteza, conclusão H1 e links para todas as evidências produzidas. Consulte
 [Experiment Harness reproduzível](experiment-harness.md).
 
 ## Mapa de componentes
@@ -223,7 +223,7 @@ A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-mon
 - a avaliação MSBuild de design time ocorre no processo do controlador; o limite de memória do grafo cobre o payload estimado, não o working set rígido do processo;
 - unit e integration tests compartilham um único comando/verificador;
 - a base de vulnerabilidades do `SecurityScan` é uma snapshot local pequena e versionada, não uma réplica completa e atualizada continuamente do GitHub Advisory Database;
-- a estimativa de custo do adapter não equivale à fatura final do provedor;
+- o custo de rate card continua sendo estimativa até que um ledger externo seja reconciliado;
 - a promoção é deliberadamente manual ou autorizada por referência de política e não cria commit;
 - a interface da CLI ainda pode mudar sem compatibilidade retroativa.
 

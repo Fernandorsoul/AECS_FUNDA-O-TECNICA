@@ -34,6 +34,8 @@ public sealed class AgentExecutionCoordinatorTests
         outcome.Attempts[0].WillRetry.Should().BeTrue();
         outcome.Attempts[0].RetryDelay.Should().Be(TimeSpan.FromSeconds(3));
         outcome.Attempts[1].Success.Should().BeTrue();
+        outcome.Result.UsageAccounting!.Components.Should().HaveCount(2);
+        outcome.Result.UsageAccounting.AccountedCostUsd.Should().Be(0.011m);
         delays.Should().ContainSingle().Which.Should().Be(TimeSpan.FromSeconds(3));
         adapter.Requests[1].Budget.MaxTokens.Should().BeLessThan(
             adapter.Requests[0].Budget.MaxTokens);
@@ -56,6 +58,31 @@ public sealed class AgentExecutionCoordinatorTests
         outcome.Result.Success.Should().BeTrue();
         outcome.Attempts[0].WillRetry.Should().BeTrue();
         outcome.Attempts[0].FailureKind.Should().Be(AgentFailureKind.Timeout);
+    }
+
+    [Fact]
+    public async Task RetryWithMissingAttemptAccounting_RemainsIncomplete()
+    {
+        var adapter = new SequenceAgent(
+            new AgentRunResult
+            {
+                Success = false,
+                ExitCode = 500,
+                ExitReason = "ApiError",
+                FailureKind = AgentFailureKind.Transient
+            },
+            Success());
+        var coordinator = NoWaitCoordinator(adapter);
+        using var budget = new ExecutionBudgetScope(
+            Budget(retries: 1),
+            CancellationToken.None);
+
+        var outcome = await coordinator.ExecuteAsync(Request(budget.Budget), budget);
+
+        outcome.Result.Success.Should().BeTrue();
+        outcome.Result.UsageAccounting!.CostComplete.Should().BeFalse();
+        outcome.Result.UsageAccounting.RateCardEstimatedCostUsd.Should().Be(0.01m);
+        outcome.Result.UsageAccounting.AccountedCostUsd.Should().BeNull();
     }
 
     [Fact]
@@ -219,6 +246,13 @@ public sealed class AgentExecutionCoordinatorTests
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             EstimatedCost = 0.01m,
+            UsageAccounting = new AgentUsageAccounting
+            {
+                Adapter = "scripted",
+                Model = "success",
+                RateCardEstimatedCostUsd = 0.01m,
+                CostComplete = true
+            },
             Duration = TimeSpan.FromMilliseconds(5),
             FilesChanged = ["src/Changed.cs"]
         };
@@ -238,6 +272,13 @@ public sealed class AgentExecutionCoordinatorTests
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             EstimatedCost = 0.001m,
+            UsageAccounting = new AgentUsageAccounting
+            {
+                Adapter = "scripted",
+                Model = "failure",
+                RateCardEstimatedCostUsd = 0.001m,
+                CostComplete = true
+            },
             Duration = TimeSpan.FromMilliseconds(5),
             RetryAfter = retryAfter,
             StdErr = "scripted failure"
