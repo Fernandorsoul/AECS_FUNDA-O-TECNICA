@@ -279,6 +279,10 @@ public sealed class DurableExecutionHistoryService
                     Status = item.Status.ToString(),
                     Actor = item.Actor,
                     ApprovalReference = item.ApprovalReference,
+                    ReviewDecision = item.ReviewDecision?.ToString() ?? string.Empty,
+                    Justification = item.Justification ?? string.Empty,
+                    ValidUntil = item.ValidUntil,
+                    PolicyReference = item.PolicyReference ?? string.Empty,
                     StartedAt = item.StartedAt,
                     FinishedAt = item.FinishedAt
                 }).ToList()

@@ -3,15 +3,20 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AECS.Application.Promotion;
+using AECS.Cli.Jarvis;
+using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
+using AECS.Domain.Exceptions;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.Processes;
+using AECS.Infrastructure.AgentRuntime;
 using AECS.Infrastructure.Repositories;
 using FluentAssertions;
 
 namespace AECS.IntegrationTests;
 
+[Collection(DurableJarvisConsoleCollection.Name)]
 public sealed class CandidatePromotionTests
 {
     [Fact]
@@ -279,6 +284,330 @@ public sealed class CandidatePromotionTests
         await fixture.AssertBaselineUnchangedAsync();
     }
 
+    [Fact]
+    public async Task ApprovedReview_IsAuthenticatedAndBaselineIsRevalidatedAfterApproval()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync(TaskDecision.HumanReviewRequired);
+        var snapshot = await fixture.Service.InspectAsync(
+            evidence.Id,
+            fixture.RepositoryPath,
+            CancellationToken.None);
+        var review = await fixture.Service.ReviewAsync(
+            fixture.ReviewRequest(evidence, CandidateReviewDecision.Approve),
+            CancellationToken.None);
+
+        snapshot.Available.Should().BeTrue();
+        snapshot.Reviewable.Should().BeTrue();
+        snapshot.RepositoryReady.Should().BeTrue();
+        snapshot.Diff.Should().Be(evidence.CandidateChangeSet.Diff);
+        review.Status.Should().Be(CandidatePromotionStatus.Approved);
+        review.Persisted.Should().BeTrue();
+        review.Evidence.Justification.Should().Be("reviewed candidate and gates");
+        review.Evidence.PolicyReference.Should().Be("policy/promotion-v1");
+        CandidateReviewReference.TryParse(
+            review.Evidence.ApprovalReference,
+            out var reviewId).Should().BeTrue();
+        reviewId.Should().Be(review.Evidence.Id);
+        var graph = await fixture.Store.LoadEvidenceGraphAsync(
+            evidence.Id,
+            new EvidenceReadScope
+            {
+                RepositoryPath = fixture.RepositoryPath,
+                Principal = "operator@example.com"
+            },
+            CancellationToken.None);
+        graph!.Edges.Should().Contain(edge =>
+            edge.To == $"promotion:{review.Evidence.Id:N}" &&
+            edge.Kind == "approved-by");
+
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.RepositoryPath, "after-review.txt"),
+            "baseline changed after approval\n");
+        await fixture.GitAsync("add", "-A", "--");
+        await fixture.GitAsync("commit", "-m", "change after human review");
+
+        var promotion = await fixture.Service.PromoteAsync(
+            fixture.Request(evidence, new PromotionApproval
+            {
+                Kind = PromotionApprovalKind.HumanReview,
+                Reference = review.Evidence.ApprovalReference,
+                ConfirmedAt = DateTime.UtcNow
+            }),
+            CancellationToken.None);
+
+        promotion.Status.Should().Be(CandidatePromotionStatus.Rejected);
+        promotion.Message.Should().Contain("Repository HEAD changed from baseline");
+        (await fixture.LoadPromotionsAsync(evidence.Id)).Should().Contain(item =>
+            item.Action == CandidatePromotionAction.Review &&
+            item.Status == CandidatePromotionStatus.Approved);
+    }
+
+    [Fact]
+    public async Task DeclineAndAbandonment_ArePersistedAndAbandonedApprovalCannotPromote()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        var declined = await fixture.Service.ReviewAsync(
+            fixture.ReviewRequest(evidence, CandidateReviewDecision.Reject),
+            CancellationToken.None);
+        var approved = await fixture.Service.ReviewAsync(
+            fixture.ReviewRequest(evidence, CandidateReviewDecision.Approve),
+            CancellationToken.None);
+        var abandoned = await fixture.Service.ReviewAsync(
+            fixture.ReviewRequest(
+                evidence,
+                CandidateReviewDecision.Abandon,
+                approved.Evidence.Id),
+            CancellationToken.None);
+
+        declined.Status.Should().Be(CandidatePromotionStatus.Declined);
+        declined.Persisted.Should().BeTrue();
+        abandoned.Status.Should().Be(CandidatePromotionStatus.Abandoned);
+        abandoned.Persisted.Should().BeTrue();
+        abandoned.Evidence.RelatedReviewId.Should().Be(approved.Evidence.Id);
+
+        var promotion = await fixture.Service.PromoteAsync(
+            fixture.Request(evidence, new PromotionApproval
+            {
+                Kind = PromotionApprovalKind.HumanReview,
+                Reference = approved.Evidence.ApprovalReference,
+                ConfirmedAt = DateTime.UtcNow
+            }),
+            CancellationToken.None);
+
+        promotion.Status.Should().Be(CandidatePromotionStatus.Rejected);
+        promotion.Message.Should().Contain("was abandoned");
+        await fixture.AssertBaselineUnchangedAsync();
+    }
+
+    [Fact]
+    public async Task ExpiredAuthenticatedReview_CannotAuthorizePromotion()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync(TaskDecision.HumanReviewRequired);
+        var reviewId = Guid.NewGuid();
+        var confirmedAt = DateTime.UtcNow.AddHours(-2);
+        var review = new CandidatePromotionEvidence
+        {
+            Id = reviewId,
+            ExecutionEvidenceId = evidence.Id,
+            CandidateId = evidence.CandidateChangeSet.Id,
+            Action = CandidatePromotionAction.Review,
+            Status = CandidatePromotionStatus.Approved,
+            Eligibility = PromotionEligibility.HumanReviewApproved,
+            Actor = "operator@example.com",
+            ApprovalKind = PromotionApprovalKind.HumanReview,
+            ApprovalReference = CandidateReviewReference.Create(reviewId),
+            ConfirmedAt = confirmedAt,
+            BaselineCommit = evidence.Baseline.Commit,
+            DiffHash = evidence.CandidateChangeSet.DiffHash,
+            RepositoryPath = fixture.RepositoryPath,
+            Message = "approved",
+            StartedAt = confirmedAt,
+            FinishedAt = confirmedAt,
+            ReviewDecision = CandidateReviewDecision.Approve,
+            Justification = "reviewed candidate and gates",
+            ValidUntil = confirmedAt.AddMinutes(15),
+            PolicyReference = "policy/promotion-v1"
+        };
+        await fixture.Store.AppendPromotionAsync(
+            evidence.Id,
+            review,
+            CancellationToken.None);
+
+        var promotion = await fixture.Service.PromoteAsync(
+            fixture.Request(evidence, new PromotionApproval
+            {
+                Kind = PromotionApprovalKind.HumanReview,
+                Reference = review.ApprovalReference,
+                ConfirmedAt = DateTime.UtcNow
+            }),
+            CancellationToken.None);
+
+        promotion.Status.Should().Be(CandidatePromotionStatus.Rejected);
+        promotion.Message.Should().Contain("has expired");
+        await fixture.AssertBaselineUnchangedAsync();
+    }
+
+    [Fact]
+    public async Task JarvisReview_ShowsFactsPersistsApprovalAndPromotesOnlyAfterExactConfirmation()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync(TaskDecision.HumanReviewRequired);
+        var originalInput = Console.In;
+        var originalOutput = Console.Out;
+        await using var output = new StringWriter();
+        try
+        {
+            Console.SetIn(new StringReader(string.Join(Environment.NewLine,
+                $"review {evidence.Id:N} --policy policy/jarvis-v1",
+                "approve",
+                "candidate and gates reviewed",
+                $"PROMOTE {evidence.CandidateChangeSet.DiffHash}",
+                "exit")));
+            Console.SetOut(output);
+            using var runtime = AecsExecutionRuntime.CreateForTesting(
+                new MockAgentAdapter(),
+                fixture.Store);
+
+            var exitCode = await new JarvisRepl(
+                fixture.RepositoryPath,
+                runtime).RunAsync(CancellationToken.None);
+
+            exitCode.Should().Be(0);
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
+
+        var text = output.ToString();
+        text.Should().Contain("AECS AUTHENTICATED CANDIDATE REVIEW")
+            .And.Contain($"Baseline: {evidence.Baseline.Commit}")
+            .And.Contain($"Diff hash: {evidence.CandidateChangeSet.DiffHash}")
+            .And.Contain("Risk:")
+            .And.Contain("Gates:")
+            .And.Contain(evidence.CandidateChangeSet.Diff)
+            .And.Contain("Review status: Approved")
+            .And.Contain("Promotion status: Promoted");
+        await fixture.AssertCandidateAppliedAsync(evidence.CandidateChangeSet.Diff);
+        var events = await fixture.LoadPromotionsAsync(evidence.Id);
+        events.Should().Contain(item =>
+            item.Action == CandidatePromotionAction.Review &&
+            item.Status == CandidatePromotionStatus.Approved &&
+            item.PolicyReference == "policy/jarvis-v1");
+        events.Should().Contain(item =>
+            item.Action == CandidatePromotionAction.Promote &&
+            item.Status == CandidatePromotionStatus.Promoted);
+    }
+
+    [Fact]
+    public async Task JarvisReview_InexactConfirmationPersistsAbandonmentAndLeavesRepositoryUntouched()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        var originalInput = Console.In;
+        var originalOutput = Console.Out;
+        await using var output = new StringWriter();
+        try
+        {
+            Console.SetIn(new StringReader(string.Join(Environment.NewLine,
+                $"review {evidence.Id:N}",
+                "approve",
+                "reviewed but will not confirm",
+                "yes",
+                "exit")));
+            Console.SetOut(output);
+            using var runtime = AecsExecutionRuntime.CreateForTesting(
+                new MockAgentAdapter(),
+                fixture.Store);
+
+            await new JarvisRepl(
+                fixture.RepositoryPath,
+                runtime).RunAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
+
+        output.ToString().Should().Contain("Review status: Abandoned")
+            .And.Contain("Repository unchanged");
+        await fixture.AssertBaselineUnchangedAsync();
+        var events = await fixture.LoadPromotionsAsync(evidence.Id);
+        events.Should().Contain(item => item.Status == CandidatePromotionStatus.Approved);
+        events.Should().Contain(item => item.Status == CandidatePromotionStatus.Abandoned);
+        events.Should().NotContain(item => item.Status == CandidatePromotionStatus.Promoted);
+    }
+
+    [Fact]
+    public async Task JarvisExport_ReviewsAndExportsPatchWithoutPromotion()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        var outputPath = Path.Combine(fixture.RootPath, "exports", "jarvis.patch");
+        var originalInput = Console.In;
+        var originalOutput = Console.Out;
+        await using var output = new StringWriter();
+        try
+        {
+            Console.SetIn(new StringReader(string.Join(Environment.NewLine,
+                $"export-patch {evidence.Id:N} {outputPath}",
+                "exit")));
+            Console.SetOut(output);
+            using var runtime = AecsExecutionRuntime.CreateForTesting(
+                new MockAgentAdapter(),
+                fixture.Store);
+
+            await new JarvisRepl(
+                fixture.RepositoryPath,
+                runtime).RunAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
+
+        output.ToString().Should().Contain("AECS AUTHENTICATED CANDIDATE REVIEW")
+            .And.Contain("Promotion status: Exported");
+        (await File.ReadAllTextAsync(outputPath)).Should().Be(evidence.CandidateChangeSet.Diff);
+        await fixture.AssertBaselineUnchangedAsync();
+        (await fixture.LoadPromotionsAsync(evidence.Id)).Should().ContainSingle(item =>
+            item.Action == CandidatePromotionAction.ExportPatch &&
+            item.Status == CandidatePromotionStatus.Exported);
+    }
+
+    [Fact]
+    public async Task ReviewForDifferentRepository_IsRejectedBeforeAnApprovalEventCanBePersisted()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        var otherRepository = await fixture.CreateOtherRepositoryAsync();
+        var request = fixture.ReviewRequest(evidence, CandidateReviewDecision.Approve);
+
+        var result = await fixture.Service.ReviewAsync(new CandidateReviewRequest
+        {
+            EvidenceId = request.EvidenceId,
+            RepositoryPath = otherRepository,
+            ExpectedDiffHash = request.ExpectedDiffHash,
+            Actor = request.Actor,
+            Decision = request.Decision,
+            Justification = request.Justification,
+            ValidUntil = request.ValidUntil,
+            PolicyReference = request.PolicyReference
+        }, CancellationToken.None);
+
+        result.Status.Should().Be(CandidatePromotionStatus.Rejected);
+        result.Persisted.Should().BeFalse();
+        result.Message.Should().Contain("does not match the repository captured in evidence");
+        (await fixture.LoadPromotionsAsync(evidence.Id)).Should().BeEmpty();
+        await fixture.AssertBaselineUnchangedAsync();
+    }
+
+    [Fact]
+    public async Task TamperedHumanReviewEvent_IsRejectedByAuthenticatedStore()
+    {
+        await using var fixture = await PromotionFixture.CreateAsync();
+        var evidence = await fixture.SaveEvidenceAsync();
+        var review = await fixture.Service.ReviewAsync(
+            fixture.ReviewRequest(evidence, CandidateReviewDecision.Approve),
+            CancellationToken.None);
+        review.Persisted.Should().BeTrue();
+        await fixture.MutateEvidenceAsync(
+            evidence.Id,
+            root => root["promotionEvents"]![0]!["promotion"]!["justification"] =
+                "forged justification");
+
+        var load = () => fixture.Store.LoadAsync(evidence.Id, CancellationToken.None);
+
+        await load.Should().ThrowAsync<EvidenceIntegrityException>();
+        await fixture.AssertBaselineUnchangedAsync();
+    }
+
     private sealed class AppendFailingEvidenceStore : IExecutionEvidenceStore
     {
         private readonly IExecutionEvidenceStore _inner;
@@ -435,6 +764,22 @@ public sealed class CandidatePromotionTests
                 }
             };
 
+        public CandidateReviewRequest ReviewRequest(
+            ExecutionEvidence evidence,
+            CandidateReviewDecision decision,
+            Guid? relatedReviewId = null) => new()
+            {
+                EvidenceId = evidence.Id,
+                RepositoryPath = RepositoryPath,
+                ExpectedDiffHash = evidence.CandidateChangeSet.DiffHash,
+                Actor = "operator@example.com",
+                Decision = decision,
+                Justification = "reviewed candidate and gates",
+                ValidUntil = DateTime.UtcNow.AddMinutes(15),
+                PolicyReference = "policy/promotion-v1",
+                RelatedReviewId = relatedReviewId
+            };
+
         public async Task AssertCandidateAppliedAsync(string expectedDiff)
         {
             (await File.ReadAllTextAsync(Path.Combine(RepositoryPath, "one.txt")))
@@ -473,6 +818,22 @@ public sealed class CandidatePromotionTests
         public async Task<string> StatusAsync() =>
             (await GitAsync("status", "--porcelain=v1", "--untracked-files=all"))
             .StandardOutput;
+
+        public async Task<string> CreateOtherRepositoryAsync()
+        {
+            var path = Path.Combine(RootPath, "other-repository");
+            Directory.CreateDirectory(path);
+            await File.WriteAllTextAsync(Path.Combine(path, "README.md"), "other repository\n");
+            await RequiredGitAsync(ProcessRunner, path, "init", "--initial-branch=main");
+            await RequiredGitAsync(
+                ProcessRunner,
+                path,
+                "config", "user.email", "aecs-tests@example.invalid");
+            await RequiredGitAsync(ProcessRunner, path, "config", "user.name", "AECS Tests");
+            await RequiredGitAsync(ProcessRunner, path, "add", "-A", "--");
+            await RequiredGitAsync(ProcessRunner, path, "commit", "-m", "other baseline");
+            return path;
+        }
 
         public Task<ProcessExecutionResult> GitAsync(params string[] arguments) =>
             RequiredGitAsync(ProcessRunner, RepositoryPath, arguments);

@@ -9,11 +9,11 @@ Quando presente, `CSharpSymbolGraph` também é validado estruturalmente antes d
 O documento separa três elementos:
 
 - `evidence`: registro imutável da execução staged, sempre com a lista interna de promoções vazia;
-- `promotionEvents`: exportações e promoções assinadas individualmente, com sequência e assinatura anterior;
+- `promotionEvents`: revisões humanas, exportações e promoções assinadas individualmente, com sequência e assinatura anterior;
 - `replayEvents`: resultados de reprodução assinados, ligados à execução e ao candidato originais;
 - `chainSeal`: cabeça assinada que cobre a quantidade de eventos e a última assinatura.
 
-Promoções e replays usam uma única sequência global. Intercalar os dois tipos não cria cadeias paralelas: cada novo evento aponta para a assinatura do último evento de qualquer tipo.
+Revisões, promoções e replays usam uma única sequência global. Intercalar os tipos não cria cadeias paralelas: cada novo evento aponta para a assinatura do último evento de qualquer tipo. Uma revisão cobre decisão, ator, justificativa, validade, política, baseline, repositório e diff hash; editar ou remover aprovação, recusa ou abandono invalida a cadeia.
 
 A serialização canônica ordena propriedades JSON por nome ordinal e preserva a ordem dos arrays. Propriedades duplicadas, campos desconhecidos, comentários, trailing commas e schemas não reconhecidos são recusados. Alterar em conjunto diff, `DiffHash`, decisão ou aprovação não restaura a validade: o hash e a assinatura cobrem o payload completo.
 

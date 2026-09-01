@@ -1190,8 +1190,97 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new EvidenceIntegrityException("Promotion event references a different diff hash.");
         }
 
+        if (!Enum.IsDefined(promotion.Action) ||
+            !Enum.IsDefined(promotion.Status) ||
+            !Enum.IsDefined(promotion.Eligibility) ||
+            !Enum.IsDefined(promotion.ApprovalKind) ||
+            promotion.StartedAt == default ||
+            promotion.FinishedAt == default ||
+            promotion.FinishedAt < promotion.StartedAt)
+        {
+            throw new EvidenceIntegrityException("Promotion event is incomplete or invalid.");
+        }
+
+        if (promotion.Action == CandidatePromotionAction.Review)
+            ValidateReview(envelope, promotion);
+
         if (validateDuplicate && envelope.PromotionEvents.Any(item => item.Promotion.Id == promotion.Id))
             throw new InvalidOperationException("Promotion evidence has already been recorded.");
+    }
+
+    private static void ValidateReview(
+        SignedExecutionEvidenceEnvelope envelope,
+        CandidatePromotionEvidence review)
+    {
+        if (review.ReviewDecision is null ||
+            !Enum.IsDefined(review.ReviewDecision.Value) ||
+            review.Status is not (CandidatePromotionStatus.Approved or
+                CandidatePromotionStatus.Declined or
+                CandidatePromotionStatus.Abandoned) ||
+            string.IsNullOrWhiteSpace(review.Actor) ||
+            string.IsNullOrWhiteSpace(review.Justification) ||
+            string.IsNullOrWhiteSpace(review.PolicyReference) ||
+            review.ValidUntil is null ||
+            review.ConfirmedAt is null ||
+            review.ValidUntil <= review.ConfirmedAt ||
+            review.ValidUntil > review.ConfirmedAt.Value.AddHours(24) ||
+            review.ConfirmedAt < review.StartedAt ||
+            review.ConfirmedAt > review.FinishedAt ||
+            string.IsNullOrWhiteSpace(review.RepositoryPath))
+        {
+            throw new EvidenceIntegrityException("Human review event is incomplete.");
+        }
+
+        var reviewRepository = Path.GetFullPath(review.RepositoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var evidenceRepository = Path.GetFullPath(envelope.Evidence.Baseline.RepositoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(
+                reviewRepository,
+                evidenceRepository,
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new EvidenceIntegrityException(
+                "Human review event references a different repository path.");
+        }
+
+        if (review.Status == CandidatePromotionStatus.Approved &&
+            (review.ReviewDecision != CandidateReviewDecision.Approve ||
+             review.ApprovalKind != PromotionApprovalKind.HumanReview ||
+             review.RelatedReviewId is not null ||
+             !string.Equals(
+                 review.ApprovalReference,
+                 CandidateReviewReference.Create(review.Id),
+                 StringComparison.Ordinal)))
+        {
+            throw new EvidenceIntegrityException(
+                "Approved human review event has invalid authorization metadata.");
+        }
+        if (review.Status == CandidatePromotionStatus.Declined &&
+            (review.ReviewDecision != CandidateReviewDecision.Reject ||
+             review.ApprovalKind != PromotionApprovalKind.None ||
+             review.RelatedReviewId is not null ||
+             !string.Equals(
+                 review.ApprovalReference,
+                 CandidateReviewReference.Create(review.Id),
+                 StringComparison.Ordinal)))
+        {
+            throw new EvidenceIntegrityException(
+                "Declined human review event has an invalid decision.");
+        }
+        if (review.Status == CandidatePromotionStatus.Abandoned &&
+            (review.ReviewDecision != CandidateReviewDecision.Abandon ||
+             review.ApprovalKind != PromotionApprovalKind.None ||
+             !string.Equals(
+                 review.ApprovalReference,
+                 CandidateReviewReference.Create(review.RelatedReviewId ?? review.Id),
+                 StringComparison.Ordinal)))
+        {
+            throw new EvidenceIntegrityException(
+                "Abandoned human review event has an invalid approval reference.");
+        }
     }
 
     private static void ValidateReplay(

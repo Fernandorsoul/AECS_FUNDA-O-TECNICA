@@ -17,6 +17,28 @@ Antes de aplicar o patch, `CandidatePromotionService` confirma:
 
 Uma decisão `Verified` aceita confirmação do usuário (`--confirm`) ou política referenciada (`--policy`). Uma decisão `HumanReviewRequired` só se torna elegível com `--human-approval <referência>`. Candidatos rejeitados nunca são promovidos.
 
+## Revisão humana no Jarvis
+
+`review <evidence-id>` carrega o candidato pelo mesmo store e exibe, antes da decisão, baseline,
+estado do checkout, diff e hash, arquivos, gates, risco, decisão e elegibilidade. O ator vem da
+identidade do processo; não é um texto informado pelo próprio comando. A revisão registra de forma
+append-only:
+
+- decisão `Approve`, `Reject` ou `Abandon`;
+- ator, justificativa e instante da decisão;
+- validade de 1 a 1.440 minutos e referência da política aplicada;
+- evidence, candidato, baseline, repositório e hash exatos.
+
+Uma aprovação recebe a referência autenticada `aecs-review/<id>`. Ela não modifica o checkout.
+Imediatamente antes da promoção, o Jarvis exige a entrada literal `PROMOTE <diff-hash>` e cria uma
+nova confirmação temporal. O `CandidatePromotionService` recarrega a cadeia assinada, verifica se a
+revisão existe, não expirou nem foi abandonada, e revalida repositório, baseline, branch, worktree e
+hash. Uma confirmação ausente ou diferente acrescenta um evento `Abandoned` e invalida aquela
+aprovação.
+
+`export-patch <evidence-id> <destino>` apresenta a mesma revisão autenticada e exporta sem criar
+aprovação nem chamar a promoção.
+
 ## Atomicidade e concorrência
 
 A aplicação usa `git apply --index`, que atualiza working tree e index como uma única operação. Depois da aplicação, o AECS deriva novamente o diff staged e compara seu hash ao candidato verificado. Uma divergência ou falha ao persistir a evidência causa `git reset --hard` para a baseline.
@@ -29,8 +51,9 @@ A promoção bem-sucedida não cria commit. As mudanças ficam staged para inspe
 
 Cada tentativa acrescenta um evento assinado e ligado à assinatura anterior, preservando:
 
-- ação e resultado (`Exported`, `Promoted`, `Rejected` ou `Failed`);
+- ação e resultado (`Approved`, `Declined`, `Abandoned`, `Exported`, `Promoted`, `Rejected` ou `Failed`);
 - ator, tipo de aprovação, referência e instante da confirmação;
+- decisão humana, justificativa, validade, política e eventual aprovação relacionada;
 - commit-base, hash do diff e identificador do candidato;
 - repositório ou arquivo exportado, mensagem e duração da operação.
 
