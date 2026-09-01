@@ -47,9 +47,10 @@ O protótipo já inclui:
 - `CandidateChangeSet` derivado do Git e evidência canônica assinada em JSON ou PostgreSQL;
 - promoção controlada ou exportação do patch como operações separadas;
 - execução em lote com métricas como taxa de verificação e CPVC;
+- experimentos reproduzíveis por dataset versionado, variantes, repetições, checkpoints e comparação pareada;
 - REPL interativo, chamado Jarvis.
 
-Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes já conectados na CLI daqueles que ainda são fundação para etapas futuras. O fluxo e a matriz de fixtures de EB001–EB004 estão em [Verificação semântica](docs/semantic-verification.md), e o ciclo do EB005 está em [Registro histórico](docs/historical-decision-registry.md).
+Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes já conectados na CLI daqueles que ainda são fundação para etapas futuras. O fluxo e a matriz de fixtures de EB001–EB004 estão em [Verificação semântica](docs/semantic-verification.md), o ciclo do EB005 está em [Registro histórico](docs/historical-decision-registry.md) e a infraestrutura de A/B está em [Experiment Harness](docs/experiment-harness.md).
 
 ## Pré-requisitos
 
@@ -349,7 +350,7 @@ A referência de campos, capabilities preventivas, padrões de escopo, valores p
 | Modo | Exemplo | Uso |
 | --- | --- | --- |
 | Tarefa única | `run --repo <path> --task-file <file> --evidence-store <json\|postgres>` | Executa e verifica um contrato |
-| Experimento | `experiment --repo <path> --tasks <dir> --evidence-store <json\|postgres>` | Executa um conjunto de contratos |
+| Experimento | `experiment --dataset <manifest.json> --output <dir> --evidence-store <json\|postgres>` | Executa matriz versionada, retomável e pareada; `--repo/--tasks` mantém o modo legado |
 | Jarvis | `jarvis --repo <path> --evidence-store <json\|postgres>` | Abre o REPL interativo |
 | Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |

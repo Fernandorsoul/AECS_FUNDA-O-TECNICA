@@ -192,6 +192,10 @@ Locks por repositório coordenam promoções concorrentes. Falha pós-aplicaçã
 
 `IEvidenceGraphSource` projeta o agregado somente depois da validação criptográfica feita pelo store. `EvidenceGraphService` expõe listagem e traço com filtros por task, run, candidato, baseline, decisão e promoção. Snapshot e grafo semântico são nós próprios ligados à baseline, execução e contexto por referências explícitas. IDs e arestas são determinísticos; referências inconsistentes produzem diagnóstico e nenhuma relação inferida. JSON e DOT são visões derivadas, não novas fontes de verdade. Toda leitura exige principal e caminho exato do repositório autenticado; listagens omitem outros escopos e leituras diretas são recusadas. Detalhes estão em [Evidence Graph](evidence-graph.md).
 
+## Experiment Harness
+
+O modo versionado do Experiment Harness lê `aecs.experiment-dataset/v1`, resolve a baseline exata e expande tarefas × variantes × repetições. Cada combinação usa o isolamento staged existente, recebe run key determinístico e checkpoint imutável. O relatório `aecs.experiment-report/v1` preserva ambiente, falhas individuais, pares referência/candidato e links para todas as evidências produzidas. Consulte [Experiment Harness reproduzível](experiment-harness.md).
+
 ## Mapa de componentes
 
 | Projeto | Responsabilidade conectada |

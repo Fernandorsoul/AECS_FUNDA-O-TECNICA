@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AECS.Application;
 using AECS.Application.Classification;
 using AECS.Application.ControlKernel;
+using AECS.Application.ContextCompiler;
 using AECS.Application.Experiments;
 using AECS.Application.EvidenceGraph;
 using AECS.Application.Parsing;
@@ -678,12 +680,17 @@ static async Task<int> RunExperiment(string[] args)
 {
     string? repoPath = null;
     string? tasksDir = null;
+    string? datasetPath = null;
+    string? outputDirectory = null;
     bool useMock = false;
     bool allowHostExecution = false;
+    bool resume = false;
+    bool includeRealProviders = false;
     string? cloudKey = null;
     string? cloudModel = null;
     string? cloudUrl = null;
     var evidenceStoreSelection = new EvidenceStoreSelection();
+    var invalidArgument = false;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -691,10 +698,18 @@ static async Task<int> RunExperiment(string[] args)
             repoPath = args[++i];
         else if (args[i] == "--tasks" && i + 1 < args.Length)
             tasksDir = args[++i];
+        else if (args[i] == "--dataset" && i + 1 < args.Length)
+            datasetPath = args[++i];
+        else if (args[i] == "--output" && i + 1 < args.Length)
+            outputDirectory = args[++i];
         else if (args[i] == "--mock")
             useMock = true;
         else if (args[i] == "--allow-host-execution")
             allowHostExecution = true;
+        else if (args[i] == "--resume")
+            resume = true;
+        else if (args[i] == "--include-real-providers")
+            includeRealProviders = true;
         else if (args[i] == "--cloud-key" && i + 1 < args.Length)
             cloudKey = args[++i];
         else if (args[i] == "--cloud-model" && i + 1 < args.Length)
@@ -704,20 +719,92 @@ static async Task<int> RunExperiment(string[] args)
         else if (evidenceStoreSelection.TryConsume(args, ref i))
         {
         }
+        else
+            invalidArgument = true;
     }
 
-    if (repoPath is null || tasksDir is null)
+    const string datasetUsage =
+        "aecs experiment --dataset <manifest.json> --output <directory> " +
+        "[--resume] [--include-real-providers] [--allow-host-execution] " +
+        "[--cloud-key <key>] [--cloud-url <url>] ";
+    const string legacyUsage =
+        "aecs experiment --repo <path> --tasks <dir> [--mock] " +
+        "[--allow-host-execution] [--cloud-key <key>] [--cloud-model <model>] ";
+    if (invalidArgument || datasetPath is not null &&
+            (repoPath is not null || tasksDir is not null || useMock || cloudModel is not null) ||
+        datasetPath is null && (repoPath is null || tasksDir is null) ||
+        datasetPath is not null && outputDirectory is null)
     {
         Console.WriteLine(
-            "Usage: aecs experiment --repo <path> --tasks <dir> [--mock] " +
-            "[--allow-host-execution] " +
-            "[--cloud-key <key>] [--cloud-model <model>] " +
-            EvidenceStoreSelection.Usage);
+            $"Usage: {datasetUsage}{EvidenceStoreSelection.Usage}\n" +
+            $"       {legacyUsage}{EvidenceStoreSelection.Usage}");
         return 1;
     }
 
-    var taskFiles = Directory.GetFiles(tasksDir, "*.yaml")
-        .Concat(Directory.GetFiles(tasksDir, "*.yml"))
+    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
+        return 1;
+
+    if (datasetPath is not null)
+    {
+        try
+        {
+            var dataset = ExperimentDatasetLoader.Load(datasetPath);
+            var processRunner = new SystemProcessRunner();
+            var baseline = await new GitWorkspaceManager(processRunner).CaptureBaselineAsync(
+                dataset.RepositoryPath,
+                CancellationToken.None);
+            var artifacts = new ExperimentArtifactStore(outputDirectory!);
+            var parser = new TaskContractParser();
+            using var experimentHttpClient = new HttpClient();
+            var runner = new ExperimentRunner(async (definition, cancellationToken) =>
+            {
+                var runBaseline = await new GitWorkspaceManager(processRunner)
+                    .CaptureBaselineAsync(definition.RepositoryPath, cancellationToken);
+                if (!runBaseline.Commit.Equals(
+                        definition.BaselineCommit,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "Dataset repository baseline changed between repetitions.");
+                }
+                var agent = BuildExperimentAgent(
+                    definition,
+                    cloudKey,
+                    cloudUrl,
+                    experimentHttpClient);
+                var pipeline = CreatePipeline(
+                    agent,
+                    evidenceStore,
+                    allowHostExecution,
+                    new RepositoryContextCompiler(defaultOptions: definition.Variant.Context),
+                    new FixedModelExecutionController(definition.Variant.Model));
+                return await pipeline.RunAsync(
+                    definition.RepositoryPath,
+                    parser.ParseFromFile(definition.ContractPath),
+                    cancellationToken);
+            });
+            var datasetReport = await runner.RunDatasetAsync(
+                dataset,
+                baseline.Commit,
+                artifacts,
+                resume,
+                includeRealProviders,
+                CancellationToken.None);
+            Console.WriteLine(ExperimentReportFormatter.Format(datasetReport));
+            Console.WriteLine($"JSON report: {artifacts.ReportPath}");
+            Console.WriteLine($"CSV results: {artifacts.ResultsCsvPath}");
+            Console.WriteLine($"CSV comparisons: {artifacts.ComparisonsCsvPath}");
+            return datasetReport.Succeeded ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"ERROR: experiment failed closed: {ex.Message}");
+            return 1;
+        }
+    }
+
+    var taskFiles = Directory.GetFiles(tasksDir!, "*.yaml")
+        .Concat(Directory.GetFiles(tasksDir!, "*.yml"))
         .OrderBy(f => f)
         .ToList();
 
@@ -728,9 +815,6 @@ static async Task<int> RunExperiment(string[] args)
     }
 
     IAgentAdapter agent = BuildAgent(useMock, cloudKey, cloudModel, cloudUrl);
-    if (!TryCreateEvidenceStore(evidenceStoreSelection, out var evidenceStore))
-        return 1;
-
     ExperimentReport report;
     try
     {
@@ -738,7 +822,7 @@ static async Task<int> RunExperiment(string[] args)
             agent,
             evidenceStore,
             allowHostExecution));
-        report = await runner.RunAsync(repoPath, taskFiles, CancellationToken.None);
+        report = await runner.RunAsync(repoPath!, taskFiles, CancellationToken.None);
     }
     catch (Exception ex)
     {
@@ -794,6 +878,9 @@ static async Task<int> RunSingle(string[] args)
             "       aecs experiment --repo <path> --tasks <dir> [--mock] " +
             "[--allow-host-execution] " +
             "[--cloud-key <key>] [--cloud-model <model>] " + EvidenceStoreSelection.Usage);
+        Console.WriteLine(
+            "       aecs experiment --dataset <manifest.json> --output <directory> " +
+            "[--resume] [--include-real-providers] " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
             "       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
             "--actor <actor> --confirm " + EvidenceStoreSelection.Usage);
@@ -1011,16 +1098,20 @@ static void PrintSemanticEvidence(VerificationResult result)
 static StagedExecutionPipeline CreatePipeline(
     IAgentAdapter agent,
     IExecutionEvidenceStore evidenceStore,
-    bool allowHostExecution = false)
+    bool allowHostExecution = false,
+    RepositoryContextCompiler? contextCompiler = null,
+    IExecutionController? executionController = null)
 {
     var processRunner = new SystemProcessRunner();
     return new StagedExecutionPipeline(
         agent,
         processRunner,
         evidenceStore,
+        contextCompiler,
         stagedProcessRunnerFactory: new DockerStagedProcessRunnerFactory(
             processRunner,
-            allowHostExecution));
+            allowHostExecution),
+        executionController: executionController);
 }
 
 static async Task<int> RunJarvis(string[] args)
@@ -1055,6 +1146,125 @@ static async Task<int> RunJarvis(string[] args)
         allowHostExecution);
     await repl.RunAsync(CancellationToken.None);
     return 0;
+}
+
+static IAgentAdapter BuildExperimentAgent(
+    ExperimentRunDefinition definition,
+    string? cloudKey,
+    string? cloudUrl,
+    HttpClient httpClient)
+{
+    var variant = definition.Variant;
+    if (variant.Provider == ExperimentProvider.Mock)
+    {
+        EnsureExperimentParameters(variant);
+        return new MockAgentAdapter();
+    }
+
+    if (variant.Provider == ExperimentProvider.Local)
+    {
+        EnsureExperimentParameters(variant, "baseUrl", "contextWindowTokens");
+        var baseUrl = Parameter(variant, "baseUrl") ??
+            Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ??
+            "http://localhost:11434";
+        var contextWindow = IntParameter(variant, "contextWindowTokens", 32_768, minimum: 1024);
+        return new OllamaAdapter(
+            httpClient,
+            baseUrl,
+            contextWindow,
+            definition.EffectiveSeed);
+    }
+
+    EnsureExperimentParameters(
+        variant,
+        "baseUrl",
+        "contextWindowTokens",
+        "maxOutputTokens",
+        "temperature");
+    var key = cloudKey
+        ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+        ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    if (string.IsNullOrWhiteSpace(key))
+    {
+        throw new InvalidOperationException(
+            $"Cloud variant '{variant.Id}' requires a provider API key.");
+    }
+    var temperature = DoubleParameter(variant, "temperature", 0.2, 0, 2);
+    return new CloudAdapter(httpClient, new CloudAdapterOptions
+    {
+        ApiKey = key,
+        Model = variant.Model,
+        BaseUrl = Parameter(variant, "baseUrl")
+            ?? cloudUrl
+            ?? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
+            ?? Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL")
+            ?? "https://api.openai.com/v1",
+        ContextWindowTokens = IntParameter(
+            variant,
+            "contextWindowTokens",
+            32_768,
+            minimum: 1024),
+        MaxTokens = IntParameter(variant, "maxOutputTokens", 4096, minimum: 1),
+        Temperature = temperature,
+        Seed = definition.EffectiveSeed
+    });
+}
+
+static void EnsureExperimentParameters(
+    ExperimentVariantDefinition variant,
+    params string[] supported)
+{
+    var supportedSet = supported.ToHashSet(StringComparer.Ordinal);
+    var unknown = variant.Parameters.Keys.Where(key => !supportedSet.Contains(key)).ToList();
+    if (unknown.Count > 0)
+    {
+        throw new InvalidOperationException(
+            $"Variant '{variant.Id}' has unsupported parameters: " +
+            string.Join(", ", unknown));
+    }
+}
+
+static string? Parameter(ExperimentVariantDefinition variant, string name) =>
+    variant.Parameters.TryGetValue(name, out var value) ? value : null;
+
+static int IntParameter(
+    ExperimentVariantDefinition variant,
+    string name,
+    int defaultValue,
+    int minimum)
+{
+    var value = Parameter(variant, name);
+    if (value is null)
+        return defaultValue;
+    if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ||
+        parsed < minimum)
+    {
+        throw new InvalidOperationException(
+            $"Variant '{variant.Id}' parameter '{name}' is invalid.");
+    }
+    return parsed;
+}
+
+static double DoubleParameter(
+    ExperimentVariantDefinition variant,
+    string name,
+    double defaultValue,
+    double minimum,
+    double maximum)
+{
+    var value = Parameter(variant, name);
+    if (value is null)
+        return defaultValue;
+    if (!double.TryParse(
+            value,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var parsed) || parsed < minimum || parsed > maximum)
+    {
+        throw new InvalidOperationException(
+            $"Variant '{variant.Id}' parameter '{name}' is invalid.");
+    }
+    return parsed;
 }
 
 static IAgentAdapter BuildAgent(bool useMock, string? cloudKey, string? cloudModel, string? cloudUrl)

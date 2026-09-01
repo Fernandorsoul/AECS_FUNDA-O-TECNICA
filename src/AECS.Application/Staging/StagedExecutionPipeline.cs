@@ -46,7 +46,7 @@ public sealed class StagedExecutionPipeline
     private readonly GitWorkspaceManager _workspaceManager;
     private readonly RepositoryContextCompiler _contextCompiler;
     private readonly RiskClassifier _riskClassifier = new();
-    private readonly ExecutionController _executionController = new();
+    private readonly IExecutionController _executionController;
     private readonly DecisionEngine _decisionEngine = new();
     private readonly FileApplicator _fileApplicator = new();
     private readonly AgentExecutionCoordinator _agentExecutionCoordinator;
@@ -66,7 +66,8 @@ public sealed class StagedExecutionPipeline
         IReadOnlyList<ISecurityScanner>? securityScanners = null,
         RepositorySnapshotBuilder? repositorySnapshotBuilder = null,
         ICSharpSymbolGraphBuilder? symbolGraphBuilder = null,
-        IHistoricalDecisionStore? historicalDecisionStore = null)
+        IHistoricalDecisionStore? historicalDecisionStore = null,
+        IExecutionController? executionController = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -80,6 +81,7 @@ public sealed class StagedExecutionPipeline
         _symbolGraphBuilder = symbolGraphBuilder ?? new RoslynSymbolGraphBuilder();
         _historicalDecisionStore = historicalDecisionStore ??
             evidenceStore as IHistoricalDecisionStore;
+        _executionController = executionController ?? new ExecutionController();
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,

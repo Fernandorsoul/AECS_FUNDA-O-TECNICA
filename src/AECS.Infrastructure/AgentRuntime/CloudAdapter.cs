@@ -16,6 +16,7 @@ public class CloudAdapterOptions
     public int MaxTokens { get; set; } = 4096;
     public int ContextWindowTokens { get; set; } = 32_768;
     public double Temperature { get; set; } = 0.2;
+    public int? Seed { get; set; }
 }
 
 public class CloudAdapter : IAgentAdapter
@@ -81,7 +82,8 @@ public class CloudAdapter : IAgentAdapter
                     new ChatMessage { Role = "user", Content = prompt }
                 ],
                 MaxTokens = maxOutputTokens,
-                Temperature = _options.Temperature
+                Temperature = _options.Temperature,
+                Seed = _options.Seed
             };
 
             var json = JsonSerializer.Serialize(requestBody, CloudJsonContext.Default.CloudRequest);
@@ -347,6 +349,10 @@ internal class CloudRequest
 
     [JsonPropertyName("temperature")]
     public double Temperature { get; set; }
+
+    [JsonPropertyName("seed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Seed { get; set; }
 }
 
 internal class ChatMessage
