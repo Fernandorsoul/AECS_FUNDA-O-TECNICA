@@ -26,9 +26,12 @@ public sealed class ContextAbExperimentTests
             fileName));
 
         dataset.Manifest.Id.Should().StartWith("context-compiler-h1-local-low-hardware");
-        dataset.Manifest.Version.Should().Be("1.0.0");
+        dataset.Manifest.SchemaVersion.Should().Be(
+            ExperimentDatasetSchema.ContextAbIntegrityVersion);
+        dataset.Manifest.Version.Should().Be("2.0.0");
         dataset.Manifest.Repetitions.Should().Be(repetitions);
         dataset.Manifest.Tasks.Should().HaveCount(taskCount);
+        dataset.Manifest.Tasks.Should().OnlyContain(task => task.RequiredContextPaths.Count == 2);
         dataset.Manifest.Protocol!.MinimumPairedSamples.Should().Be(minimumPairedSamples);
         dataset.Manifest.ReferenceVariantId.Should().Be("naive-local");
         dataset.Manifest.Variants.Should().HaveCount(2).And.OnlyContain(variant =>
@@ -56,9 +59,10 @@ public sealed class ContextAbExperimentTests
 
         dataset.Manifest.SchemaVersion.Should().Be(ExperimentDatasetSchema.Version);
         dataset.Manifest.Protocol.Should().BeNull();
-        dataset.Manifest.Version.Should().Be("1.0.0");
+        dataset.Manifest.Version.Should().Be("2.0.0");
         dataset.Manifest.Repetitions.Should().Be(2);
         dataset.Manifest.Tasks.Should().HaveCount(3);
+        dataset.Manifest.Tasks.Should().OnlyContain(task => task.RequiredContextPaths.Count == 2);
         dataset.Manifest.Variants.Should().ContainSingle().Which.Should().Match<ExperimentVariantDefinition>(
             variant => variant.Provider == ExperimentProvider.Local &&
                 variant.Model == model &&
@@ -246,6 +250,18 @@ public sealed class ContextAbExperimentTests
     }
 
     [Fact]
+    public void ContextAbV3_RequiresRelevantContextPathsForEveryTask()
+    {
+        var valid = () => ExperimentDatasetContract.Validate(Manifest(integrity: true));
+        var missing = () => ExperimentDatasetContract.Validate(Manifest(
+            integrity: true,
+            includeRequiredPaths: false));
+
+        valid.Should().NotThrow();
+        missing.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
     public void Analyzer_ReportsDistributionAndMaintainsH1OnlyForConclusivePairedEffect()
     {
         var manifest = Manifest();
@@ -289,9 +305,14 @@ public sealed class ContextAbExperimentTests
         analysis.ConclusionReason.Should().Contain("cost-efficiency metric is unavailable");
     }
 
-    private static ExperimentDatasetManifest Manifest(string candidateModel = "qwen-test") => new()
+    private static ExperimentDatasetManifest Manifest(
+        string candidateModel = "qwen-test",
+        bool integrity = false,
+        bool includeRequiredPaths = true) => new()
     {
-        SchemaVersion = ExperimentDatasetSchema.ContextAbVersion,
+        SchemaVersion = integrity
+            ? ExperimentDatasetSchema.ContextAbIntegrityVersion
+            : ExperimentDatasetSchema.ContextAbVersion,
         Id = "context-h1",
         Version = "1.0.0",
         Repository = new ExperimentRepositoryDefinition { Path = ".", Baseline = "HEAD" },
@@ -318,7 +339,10 @@ public sealed class ContextAbExperimentTests
             {
                 Id = "TASK-AB",
                 ContractPath = "task.yaml",
-                ExpectedDecision = TaskDecision.Verified
+                ExpectedDecision = TaskDecision.Verified,
+                RequiredContextPaths = integrity && includeRequiredPaths
+                    ? ["src/TargetPolicy.cs"]
+                    : []
             }
         ],
         Variants =

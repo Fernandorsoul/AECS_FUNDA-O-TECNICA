@@ -58,6 +58,7 @@ public sealed class StagedExecutionPipeline
     private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
     private readonly IHistoricalDecisionStore? _historicalDecisionStore;
     private readonly IAdaptiveShadowController? _adaptiveShadowController;
+    private readonly ICompiledContextGate? _compiledContextGate;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -72,7 +73,8 @@ public sealed class StagedExecutionPipeline
         ICSharpSymbolGraphBuilder? symbolGraphBuilder = null,
         IHistoricalDecisionStore? historicalDecisionStore = null,
         IExecutionController? executionController = null,
-        IAdaptiveShadowController? adaptiveShadowController = null)
+        IAdaptiveShadowController? adaptiveShadowController = null,
+        ICompiledContextGate? compiledContextGate = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -93,6 +95,7 @@ public sealed class StagedExecutionPipeline
                     evidenceStore,
                     graphSource)
                 : null);
+        _compiledContextGate = compiledContextGate;
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -263,6 +266,7 @@ public sealed class StagedExecutionPipeline
                 symbolGraph: symbolGraph,
                 agentProfile: contextProfile);
             contextManifest = compiledContext.Manifest;
+            _compiledContextGate?.EnsureAccepted(contract, compiledContext);
 
             var agentOutcome = await _agentExecutionCoordinator.ExecuteAsync(
                 new AgentExecutionRequest

@@ -11,8 +11,12 @@ public static class ContextManifestSchema
     public const string CurrentVersion = "aecs.context-manifest/v2";
     public const string GraphStrategyId = "graph-ranked";
     public const string NaiveStrategyId = "naive-path-order";
-    public const string StrategyVersion = "graph-ranked-token-budget/v1";
+    public const string LegacyGraphStrategyVersion = "graph-ranked-token-budget/v1";
+    public const string StrategyVersion = "graph-ranked-token-budget/v2";
     public const string NaiveStrategyVersion = "naive-path-order-token-budget/v1";
+
+    public static bool IsSupportedStrategyVersion(string value) =>
+        value is LegacyGraphStrategyVersion or StrategyVersion or NaiveStrategyVersion;
 }
 
 public sealed class ContextFileManifest

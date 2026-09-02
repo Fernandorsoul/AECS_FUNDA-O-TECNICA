@@ -14,7 +14,8 @@ public static class ExperimentDatasetSchema
 {
     public const string Version = "aecs.experiment-dataset/v1";
     public const string ContextAbVersion = "aecs.experiment-dataset/v2";
-    public const string ReportVersion = "aecs.experiment-report/v3";
+    public const string ContextAbIntegrityVersion = "aecs.experiment-dataset/v3";
+    public const string ReportVersion = "aecs.experiment-report/v4";
     public const string CheckpointVersion = "aecs.experiment-checkpoint/v1";
 }
 
@@ -89,6 +90,7 @@ public sealed class ExperimentTaskDefinition
     public string Id { get; init; } = string.Empty;
     public string ContractPath { get; init; } = string.Empty;
     public TaskDecision ExpectedDecision { get; init; }
+    public List<string> RequiredContextPaths { get; init; } = [];
 }
 
 public sealed class ExperimentVariantDefinition
@@ -165,6 +167,9 @@ public sealed class ExperimentPairedComparison
     public string CandidateVariantId { get; init; } = string.Empty;
     public string ReferenceRunKey { get; init; } = string.Empty;
     public string CandidateRunKey { get; init; } = string.Empty;
+    public List<ExperimentContextFile> ReferenceIncludedContext { get; init; } = [];
+    public List<ExperimentContextFile> CandidateIncludedContext { get; init; } = [];
+    public bool EffectiveContextChanged { get; init; }
     public ExperimentResultStatus ReferenceStatus { get; init; }
     public ExperimentResultStatus CandidateStatus { get; init; }
     public bool BothCompleted { get; init; }
@@ -289,7 +294,9 @@ public static class ExperimentDatasetContract
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (manifest.SchemaVersion is not (
-                ExperimentDatasetSchema.Version or ExperimentDatasetSchema.ContextAbVersion) ||
+                ExperimentDatasetSchema.Version or
+                ExperimentDatasetSchema.ContextAbVersion or
+                ExperimentDatasetSchema.ContextAbIntegrityVersion) ||
             !ValidId(manifest.Id) ||
             string.IsNullOrWhiteSpace(manifest.Version) ||
             manifest.Version.Length > 100 ||
@@ -309,7 +316,8 @@ public static class ExperimentDatasetContract
                 StringComparison.Ordinal)) ||
             manifest.SchemaVersion == ExperimentDatasetSchema.Version &&
             manifest.Protocol is not null ||
-            manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbVersion &&
+            (manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbVersion ||
+             manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbIntegrityVersion) &&
             InvalidContextAbProtocol(manifest))
         {
             throw new InvalidOperationException(
@@ -339,6 +347,12 @@ public static class ExperimentDatasetContract
                 variant.ContextStrategy == ContextStrategyIds.GraphRanked) != 1 ||
             manifest.Variants.Count(variant =>
                 variant.ContextStrategy == ContextStrategyIds.NaivePathOrder) != 1)
+        {
+            return true;
+        }
+
+        if (manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbIntegrityVersion &&
+            manifest.Tasks.Any(task => task.RequiredContextPaths.Count == 0))
         {
             return true;
         }
@@ -380,7 +394,11 @@ public static class ExperimentDatasetContract
 
     private static bool InvalidTask(ExperimentTaskDefinition task) =>
         task is null || !ValidId(task.Id) || !SafeRelativePath(task.ContractPath) ||
-        !Enum.IsDefined(task.ExpectedDecision);
+        !Enum.IsDefined(task.ExpectedDecision) ||
+        task.RequiredContextPaths is null || task.RequiredContextPaths.Count > 50 ||
+        task.RequiredContextPaths.Any(path => !SafeRelativePath(path)) ||
+        task.RequiredContextPaths.Distinct(StringComparer.Ordinal).Count() !=
+            task.RequiredContextPaths.Count;
 
     private static bool InvalidVariant(ExperimentVariantDefinition variant) =>
         variant is null ||

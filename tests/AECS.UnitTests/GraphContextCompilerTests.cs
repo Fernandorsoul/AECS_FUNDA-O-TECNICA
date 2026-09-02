@@ -160,6 +160,89 @@ public sealed class GraphContextCompilerTests
         first.Prompt.Should().Be(second.Prompt);
     }
 
+    [Fact]
+    public void Compile_DoesNotProjectNamespaceStructureAsSemanticFileDependencies()
+    {
+        using var repository = new ContextRepository();
+        repository.Write("src/AaaDecoy.cs", "namespace Demo; public sealed class AaaDecoy { }");
+        repository.Write("src/TargetPolicy.cs", "namespace Demo; public static class TargetPolicy { }");
+        repository.Write("src/TargetContract.cs", "namespace Demo; public static class TargetContract { }");
+        repository.Write("src/Partial.One.cs", "namespace Demo; public partial class SplitType { }");
+        repository.Write("src/Partial.Two.cs", "namespace Demo; public partial class SplitType { }");
+        var allPaths = new List<string>
+        {
+            "src/AaaDecoy.cs",
+            "src/TargetPolicy.cs",
+            "src/TargetContract.cs",
+            "src/Partial.One.cs",
+            "src/Partial.Two.cs"
+        };
+        var graph = Graph(
+            [
+                new CSharpSymbolGraphNode
+                {
+                    Id = "namespace",
+                    Hash = "sha256:" + new string('a', 64),
+                    Kind = "namespace",
+                    Name = "Demo",
+                    DisplayName = "Demo",
+                    FilePaths = allPaths
+                },
+                TypeNode("decoy", "AaaDecoy", ["src/AaaDecoy.cs"]),
+                TypeNode("policy", "TargetPolicy", ["src/TargetPolicy.cs"]),
+                TypeNode("contract", "TargetContract", ["src/TargetContract.cs"]),
+                TypeNode(
+                    "partial",
+                    "SplitType",
+                    ["src/Partial.One.cs", "src/Partial.Two.cs"],
+                    ["partial"])
+            ],
+            [
+                Edge("namespace-decoy", "contains", "namespace", "decoy"),
+                Edge("namespace-policy", "contains", "namespace", "policy"),
+                Edge("namespace-contract", "contains", "namespace", "contract"),
+                Edge("policy-contract", "references", "policy", "contract")
+            ]);
+
+        var index = new CodebaseIndexer().Index(repository.Path, graph);
+        var relations = index.FileRelations.Values.SelectMany(items => items).ToList();
+        relations.Should().NotContain(relation =>
+            relation.Kind == "contains" || relation.Kind == "declares");
+        relations.Should().Contain(relation =>
+            relation.FromPath == "src/TargetPolicy.cs" &&
+            relation.ToPath == "src/TargetContract.cs" &&
+            relation.Kind == "references");
+        relations.Should().Contain(relation =>
+            relation.FromPath == "src/Partial.One.cs" &&
+            relation.ToPath == "src/Partial.Two.cs" &&
+            relation.Kind == "partial");
+        relations.Should().NotContain(relation =>
+            relation.FromPath == "src/TargetPolicy.cs" &&
+            relation.ToPath == "src/AaaDecoy.cs");
+
+        var result = new RepositoryContextCompiler().Compile(
+            repository.Path,
+            Contract("Replace TargetPolicy with the value from TargetContract", ["src/**"]),
+            "baseline-graph",
+            new ContextCompilationOptions
+            {
+                MaxTokens = 1600,
+                MaxCharacters = 4000,
+                MaxFileCharacters = 400,
+                MaxFileTokens = 200,
+                DependencyDepth = 2
+            },
+            graph);
+
+        result.Manifest.StrategyVersion.Should().Be(ContextManifestSchema.StrategyVersion);
+        result.Manifest.Selections.OrderBy(selection => selection.Rank).Take(2)
+            .Select(selection => selection.Path)
+            .Should().BeEquivalentTo("src/TargetPolicy.cs", "src/TargetContract.cs");
+        result.Manifest.Files.Select(file => file.Path).Should().Contain(
+            "src/TargetPolicy.cs",
+            "src/TargetContract.cs");
+    }
+
     private static TaskContract Contract(string objective, List<string> allowed) => new()
     {
         Id = "CTX-GRAPH",
@@ -194,6 +277,23 @@ public sealed class GraphContextCompilerTests
             Kind = kind,
             FromNodeId = from,
             ToNodeId = to
+        };
+
+    private static CSharpSymbolGraphNode TypeNode(
+        string id,
+        string name,
+        List<string> paths,
+        List<string>? modifiers = null) => new()
+        {
+            Id = id,
+            Hash = "sha256:" + new string('a', 64),
+            Kind = "type",
+            Name = name,
+            DisplayName = $"Demo.{name}",
+            TypeKind = "Class",
+            ProjectPath = "Demo.csproj",
+            FilePaths = paths,
+            Modifiers = modifiers ?? []
         };
 
     private static CSharpSymbolGraph Graph(

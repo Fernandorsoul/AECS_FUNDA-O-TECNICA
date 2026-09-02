@@ -1,5 +1,6 @@
 using AECS.Application.Staging;
 using AECS.Application.AdaptiveController;
+using AECS.Application.Experiments;
 using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -132,6 +133,33 @@ public sealed class StagedExecutionPipelineTests
             .Be(result.ContextManifest.ManifestHash);
         File.ReadAllText(System.IO.Path.Combine(repository.Path, "src", "ExistingHandler.cs"))
             .Should().Be(handler);
+    }
+
+    [Fact]
+    public async Task ContextPreflight_RejectsMissingRequiredPathBeforeCallingAgent()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync(
+            new Dictionary<string, string>
+            {
+                ["src/ExistingHandler.cs"] =
+                    "namespace Fixture; public class ExistingHandler { }"
+            });
+        var agent = Agent.Success(Response("src/new-file.txt"));
+        var pipeline = new StagedExecutionPipeline(
+            agent,
+            repository.ProcessRunner,
+            new JsonExecutionEvidenceStore(repository.EvidencePath),
+            compiledContextGate: new RequiredContextPathsGate(["src/RequiredPolicy.cs"]));
+
+        var action = () => pipeline.RunAsync(
+            repository.Path,
+            Contract(),
+            CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*before provider execution*src/RequiredPolicy.cs*");
+        agent.WasCalled.Should().BeFalse();
+        (await repository.StatusAsync()).Should().BeEmpty();
     }
 
     [Fact]

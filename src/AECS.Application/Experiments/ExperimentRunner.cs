@@ -303,6 +303,7 @@ public sealed class ExperimentRunner
             ActualContextStrategy = execution.ContextManifest.Strategy,
             ContextStrategyVersion = execution.ContextManifest.StrategyVersion,
             ContextManifestHash = execution.ContextManifest.ManifestHash,
+            IncludedContext = IncludedContext(execution.ContextManifest),
             Seed = definition.EffectiveSeed,
             Parameters = new Dictionary<string, string>(
                 definition.Variant.Parameters,
@@ -399,6 +400,10 @@ public sealed class ExperimentRunner
 
     private static TaskExperimentResult MapLegacy(StagedExecutionResult execution) => new()
         {
+            ActualContextStrategy = execution.ContextManifest.Strategy,
+            ContextStrategyVersion = execution.ContextManifest.StrategyVersion,
+            ContextManifestHash = execution.ContextManifest.ManifestHash,
+            IncludedContext = IncludedContext(execution.ContextManifest),
             TaskId = execution.Contract.Id,
             Objective = execution.Contract.Objective,
             Risk = execution.Risk,
@@ -520,6 +525,11 @@ public sealed class ExperimentRunner
                     CandidateVariantId = candidate.VariantId,
                     ReferenceRunKey = reference.RunKey,
                     CandidateRunKey = candidate.RunKey,
+                    ReferenceIncludedContext = reference.IncludedContext.ToList(),
+                    CandidateIncludedContext = candidate.IncludedContext.ToList(),
+                    EffectiveContextChanged = !EquivalentContext(
+                        reference.IncludedContext,
+                        candidate.IncludedContext),
                     ReferenceStatus = reference.Status,
                     CandidateStatus = candidate.Status,
                     BothCompleted = bothCompleted,
@@ -561,4 +571,20 @@ public sealed class ExperimentRunner
     }
 
     private static int Bool(bool value) => value ? 1 : 0;
+
+    private static List<ExperimentContextFile> IncludedContext(ContextManifest manifest) =>
+        manifest.Files.OrderBy(file => file.Rank).Select(file => new ExperimentContextFile
+        {
+            Path = file.Path,
+            IncludedSha256 = file.IncludedSha256,
+            Rank = file.Rank
+        }).ToList();
+
+    private static bool EquivalentContext(
+        IReadOnlyList<ExperimentContextFile> left,
+        IReadOnlyList<ExperimentContextFile> right) =>
+        left.Count == right.Count && left.Zip(right).All(pair =>
+            pair.First.Path.Equals(pair.Second.Path, StringComparison.Ordinal) &&
+            pair.First.IncludedSha256.Equals(pair.Second.IncludedSha256, StringComparison.Ordinal) &&
+            pair.First.Rank == pair.Second.Rank);
 }

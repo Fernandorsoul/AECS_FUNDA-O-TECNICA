@@ -869,7 +869,11 @@ static async Task<int> RunExperiment(string[] args)
                         defaultOptions: definition.Variant.Context,
                         selectionStrategy: definition.Variant.ContextStrategy),
                     new FixedModelExecutionController(definition.Variant.Model),
-                    agent);
+                    agent,
+                    definition.Variant.ContextStrategy == ContextStrategyIds.GraphRanked &&
+                    definition.Task.RequiredContextPaths.Count > 0
+                        ? new RequiredContextPathsGate(definition.Task.RequiredContextPaths)
+                        : null);
                 return await pipeline.RunAsync(
                     definition.RepositoryPath,
                     parser.ParseFromFile(definition.ContractPath),

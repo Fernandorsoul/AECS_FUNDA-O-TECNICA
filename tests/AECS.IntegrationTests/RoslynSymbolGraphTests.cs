@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AECS.Application.ContextCompiler;
+using AECS.Application.Experiments;
 using AECS.Application.Parsing;
 using AECS.Application.RepositorySnapshots;
 using AECS.Application.Staging;
@@ -178,6 +179,99 @@ public sealed class RoslynSymbolGraphTests
             ContextManifestFingerprint.Create(context.Manifest));
         context.Prompt.Should().Contain("Symbols:");
         context.Prompt.Should().Contain("PartialEntity");
+
+        var fileRelations = new CodebaseIndexer().Index(fixture.Path, graph)
+            .FileRelations.Values.SelectMany(relations => relations).ToList();
+        fileRelations.Should().NotContain(relation =>
+            relation.Kind == "contains" ||
+            relation.Kind == "declares" ||
+            relation.Kind == "referenced-by:contains" ||
+            relation.Kind == "referenced-by:declares");
+        fileRelations.Should().Contain(relation =>
+            relation.FromPath == "src/Core/PartialEntity.Part1.cs" &&
+            relation.ToPath == "src/Core/PartialEntity.Part2.cs" &&
+            relation.Kind == "partial");
+        fileRelations.Should().Contain(relation =>
+            relation.FromPath == "src/App/EnvelopeHandler.cs" &&
+            relation.ToPath.StartsWith("src/Core/PartialEntity.", StringComparison.Ordinal) &&
+            (relation.Kind == "constructs" || relation.Kind == "references"));
+        fileRelations.Should().Contain(relation => relation.Kind == "constructs");
+        fileRelations.Should().Contain(relation => relation.Kind == "implements");
+        fileRelations.Should().Contain(relation => relation.Kind == "inherits");
+        fileRelations.Should().Contain(relation => relation.Kind == "references");
+        fileRelations.Should().NotContain(relation =>
+            relation.FromPath == "src/Core/MissingReference.cs" &&
+            relation.Kind == "partial");
+    }
+
+    [Fact]
+    public async Task H1Benchmark_GraphContextIncludesRequiredFilesBeforeDecoys()
+    {
+        var repositoryRoot = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", ".."));
+        var benchmarkRoot = Path.Combine(
+            repositoryRoot,
+            "experiments",
+            "context-compiler-h1",
+            "repository");
+        await using var fixture = await SymbolGraphFixture.CreateFromDirectoryAsync(benchmarkRoot);
+        var snapshot = await fixture.SnapshotAsync("Benchmark.csproj");
+        var graph = await new RoslynSymbolGraphBuilder().BuildAsync(
+            fixture.Path,
+            snapshot,
+            cancellationToken: default);
+        graph.LoadSucceeded.Should().BeTrue(string.Join(
+            "; ",
+            graph.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        var compiler = new RepositoryContextCompiler();
+        var parser = new TaskContractParser();
+        var options = new ContextCompilationOptions
+        {
+            MaxTokens = 1600,
+            MaxCharacters = 4000,
+            MaxFileCharacters = 400,
+            MaxFileTokens = 200,
+            DependencyDepth = 2
+        };
+        var tasks = new[]
+        {
+            (Name: "retention", Policy: "RetentionPolicy", Contract: "RetentionContract"),
+            (Name: "invoice", Policy: "InvoicePolicy", Contract: "InvoiceContract"),
+            (Name: "queue", Policy: "QueuePolicy", Contract: "QueueContract")
+        };
+
+        foreach (var task in tasks)
+        {
+            var contract = parser.ParseFromFile(Path.Combine(
+                fixture.Path,
+                "tasks",
+                task.Name + ".yaml"));
+            var context = compiler.Compile(
+                fixture.Path,
+                contract,
+                snapshot.BaselineCommit,
+                options,
+                graph);
+            var required = new[]
+            {
+                $"src/Policies/{task.Policy}.cs",
+                $"src/Contracts/{task.Contract}.cs"
+            };
+
+            context.Manifest.Selections.OrderBy(selection => selection.Rank).Take(2)
+                .Select(selection => selection.Path)
+                .Should().BeEquivalentTo(required);
+            context.Manifest.Files.Select(file => file.Path).Should().Contain(required);
+            context.Manifest.Selections
+                .Where(selection => selection.Path.StartsWith(
+                    "src/AaaDecoys/",
+                    StringComparison.Ordinal))
+                .Should().OnlyContain(selection => selection.Rank > 2);
+            var gate = () => new RequiredContextPathsGate(required)
+                .EnsureAccepted(contract, context);
+            gate.Should().NotThrow();
+        }
     }
 
     [Fact]
@@ -379,7 +473,32 @@ public sealed class RoslynSymbolGraphTests
             return fixture;
         }
 
-        public async Task<RepositorySnapshot> SnapshotAsync()
+        public static async Task<SymbolGraphFixture> CreateFromDirectoryAsync(string sourcePath)
+        {
+            var fixture = new SymbolGraphFixture(System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"{RootPrefix}{Guid.NewGuid():N}"));
+            Directory.CreateDirectory(fixture.Path);
+            foreach (var sourceFile in Directory.EnumerateFiles(
+                         sourcePath,
+                         "*",
+                         SearchOption.AllDirectories))
+            {
+                var relative = System.IO.Path.GetRelativePath(sourcePath, sourceFile);
+                var target = System.IO.Path.Combine(fixture.Path, relative);
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target)!);
+                File.Copy(sourceFile, target);
+            }
+            await fixture.GitAsync("init", "--initial-branch=fixture");
+            await fixture.GitAsync("config", "user.email", "aecs-roslyn@example.invalid");
+            await fixture.GitAsync("config", "user.name", "AECS Roslyn Tests");
+            await fixture.GitAsync("config", "core.autocrlf", "false");
+            await fixture.GitAsync("add", "-A", "--");
+            await fixture.GitAsync("commit", "-m", "copied semantic graph fixture");
+            return fixture;
+        }
+
+        public async Task<RepositorySnapshot> SnapshotAsync(string target = "Repo.slnx")
         {
             var head = (await GitAsync("rev-parse", "HEAD")).StandardOutput.Trim();
             return await new RepositorySnapshotBuilder(_runner).BuildAsync(
@@ -389,7 +508,7 @@ public sealed class RoslynSymbolGraphTests
                 {
                     Id = "TASK-ROSLYN-GRAPH",
                     Objective = "Build the semantic graph",
-                    Execution = new RepositoryExecutionProfile { Target = "Repo.slnx" }
+                    Execution = new RepositoryExecutionProfile { Target = target }
                 },
                 ToolCommands(),
                 CancellationToken.None);

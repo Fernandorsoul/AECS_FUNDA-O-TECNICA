@@ -39,6 +39,12 @@ public class CodebaseIndex
 
 public class CodebaseIndexer
 {
+    private static readonly HashSet<string> SemanticFileEdgeKinds = new(
+        StringComparer.Ordinal)
+    {
+        "constructs", "implements", "inherits", "references"
+    };
+
     private static readonly HashSet<string> ExcludedDirectoryNames = new(
         StringComparer.OrdinalIgnoreCase)
     {
@@ -182,7 +188,9 @@ public class CodebaseIndexer
         var relations = new Dictionary<string, Dictionary<string, CodeFileRelation>>(
             StringComparer.OrdinalIgnoreCase);
 
-        foreach (var edge in graph.Edges.OrderBy(edge => edge.Id, StringComparer.Ordinal))
+        foreach (var edge in graph.Edges
+                     .Where(edge => SemanticFileEdgeKinds.Contains(edge.Kind))
+                     .OrderBy(edge => edge.Id, StringComparer.Ordinal))
         {
             if (!nodes.TryGetValue(edge.FromNodeId, out var source) ||
                 !nodes.TryGetValue(edge.ToNodeId, out var target) ||
@@ -207,7 +215,10 @@ public class CodebaseIndexer
         }
 
         foreach (var node in graph.Nodes.Where(node =>
-                     !node.IsExternal && node.FilePaths.Count > 1))
+                     !node.IsExternal &&
+                     node.Kind == "type" &&
+                     node.Modifiers.Contains("partial", StringComparer.Ordinal) &&
+                     node.FilePaths.Count > 1))
         {
             foreach (var sourcePath in node.FilePaths.OrderBy(path => path, StringComparer.Ordinal))
                 foreach (var targetPath in node.FilePaths.OrderBy(path => path, StringComparer.Ordinal))

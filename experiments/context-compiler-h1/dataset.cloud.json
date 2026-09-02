@@ -1,7 +1,7 @@
 {
-  "schemaVersion": "aecs.experiment-dataset/v2",
+  "schemaVersion": "aecs.experiment-dataset/v3",
   "id": "context-compiler-h1-cloud",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "repository": {
     "path": "repository",
     "baseline": "HEAD"
@@ -25,17 +25,29 @@
     {
       "id": "H1-RETENTION",
       "contractPath": "tasks/retention.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/RetentionPolicy.cs",
+        "src/Contracts/RetentionContract.cs"
+      ]
     },
     {
       "id": "H1-INVOICE",
       "contractPath": "tasks/invoice.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/InvoicePolicy.cs",
+        "src/Contracts/InvoiceContract.cs"
+      ]
     },
     {
       "id": "H1-QUEUE",
       "contractPath": "tasks/queue.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/QueuePolicy.cs",
+        "src/Contracts/QueueContract.cs"
+      ]
     }
   ],
   "variants": [

@@ -99,10 +99,16 @@ public sealed class ExperimentDatasetTests
             result.Failure.Contains("provider failed", StringComparison.Ordinal));
         first.PairedComparisons.Should().HaveCount(2);
         first.PairedComparisons.Should().ContainSingle(pair => !pair.BothCompleted);
+        first.PairedComparisons.Should().OnlyContain(pair =>
+            pair.EffectiveContextChanged &&
+            pair.ReferenceIncludedContext.Count == 1);
+        first.PairedComparisons.Single(pair => pair.BothCompleted)
+            .CandidateIncludedContext.Should().ContainSingle();
         first.Results.Where(result => result.Status == ExperimentResultStatus.Completed)
             .Should().OnlyContain(result =>
                 result.EvidenceId != Guid.Empty &&
-                !string.IsNullOrWhiteSpace(result.EvidenceLocation));
+                !string.IsNullOrWhiteSpace(result.EvidenceLocation) &&
+                result.IncludedContext.Count == 1);
         File.Exists(artifacts.ReportPath).Should().BeTrue();
         File.Exists(artifacts.AnalysisCsvPath).Should().BeTrue();
         File.Exists(artifacts.CostRecordsCsvPath).Should().BeTrue();
@@ -110,6 +116,10 @@ public sealed class ExperimentDatasetTests
         File.ReadAllLines(artifacts.ResultsCsvPath).Should().HaveCount(5);
         File.ReadAllLines(artifacts.ComparisonsCsvPath).Should().HaveCount(3);
         File.ReadAllLines(artifacts.CostRecordsCsvPath).Should().HaveCount(5);
+        File.ReadLines(artifacts.ResultsCsvPath).First().Should()
+            .Contain("included_context_json");
+        File.ReadLines(artifacts.ComparisonsCsvPath).First().Should()
+            .Contain("effective_context_changed");
 
         var resumedExecutions = 0;
         var resumedRunner = new ExperimentRunner((_, _) =>
@@ -346,7 +356,18 @@ public sealed class ExperimentDatasetTests
         {
             StrategyVersion = ContextManifestSchema.StrategyVersion,
             Strategy = definition.Variant.ContextStrategy + "+fixture",
-            ManifestHash = $"sha256:{new string('b', 64)}"
+            ManifestHash = $"sha256:{new string('b', 64)}",
+            Files =
+            [
+                new ContextFileManifest
+                {
+                    Path = $"src/{definition.Variant.Id}.cs",
+                    IncludedSha256 = $"sha256:{new string(
+                        definition.Variant.Id == "control" ? 'c' : 'd',
+                        64)}",
+                    Rank = 1
+                }
+            ]
         },
         CandidateChangeSet = new CandidateChangeSet { ModifiedFiles = ["result.txt"] },
         Decision = new DecisionResult

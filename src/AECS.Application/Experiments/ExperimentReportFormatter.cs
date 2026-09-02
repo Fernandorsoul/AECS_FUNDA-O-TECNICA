@@ -98,7 +98,8 @@ public static class ExperimentReportFormatter
             foreach (var pair in report.PairedComparisons)
             {
                 var outcome = pair.BothCompleted
-                    ? $"decisionChanged={pair.DecisionChanged} " +
+                    ? $"contextChanged={pair.EffectiveContextChanged} " +
+                      $"decisionChanged={pair.DecisionChanged} " +
                       $"vccDelta={pair.VerifiedCodeChangeDelta} " +
                       $"tokenDelta={pair.TotalTokenDelta} " +
                       $"durationDelta={pair.DurationDeltaSeconds:F2}s " +
