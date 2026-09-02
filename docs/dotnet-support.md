@@ -46,3 +46,6 @@ O passo de reprodução operacional deve publicar, junto dos resultados:
 - identidade e digest observado da imagem Docker staged;
 - resultado das categorias Docker e PostgreSQL, com versões do daemon e do servidor;
 - distinção entre falha de código, dependência indisponível e divergência de ambiente.
+
+A primeira reprodução completa dessa matriz está publicada em
+[Reprodução da stack suportada — 2026-09-02](validation/2026-09-02-supported-stack-reproduction.md).
