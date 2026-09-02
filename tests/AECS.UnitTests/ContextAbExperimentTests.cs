@@ -8,6 +8,37 @@ namespace AECS.UnitTests;
 
 public sealed class ContextAbExperimentTests
 {
+    [Theory]
+    [InlineData("dataset.local-low-hardware-pilot.json", 2, 2, 1)]
+    [InlineData("dataset.local-low-hardware.json", 10, 30, 3)]
+    public void LocalLowHardwareDatasets_ArePreRegisteredSeparately(
+        string fileName,
+        int repetitions,
+        int minimumPairedSamples,
+        int taskCount)
+    {
+        var repository = FindRepositoryRoot();
+        var dataset = ExperimentDatasetLoader.Load(Path.Combine(
+            repository,
+            "experiments",
+            "context-compiler-h1",
+            fileName));
+
+        dataset.Manifest.Id.Should().StartWith("context-compiler-h1-local-low-hardware");
+        dataset.Manifest.Version.Should().Be("1.0.0");
+        dataset.Manifest.Repetitions.Should().Be(repetitions);
+        dataset.Manifest.Tasks.Should().HaveCount(taskCount);
+        dataset.Manifest.Protocol!.MinimumPairedSamples.Should().Be(minimumPairedSamples);
+        dataset.Manifest.ReferenceVariantId.Should().Be("naive-local");
+        dataset.Manifest.Variants.Should().HaveCount(2).And.OnlyContain(variant =>
+            variant.Provider == ExperimentProvider.Local &&
+            variant.Model == "qwen2.5-coder:1.5b" &&
+            variant.RequiresRealProvider &&
+            variant.Seed == 4200 &&
+            variant.Parameters["baseUrl"] == "http://127.0.0.1:11434" &&
+            variant.Parameters["contextWindowTokens"] == "8192");
+    }
+
     [Fact]
     public void RepositoryCompiler_ExecutesTheRequestedStrategyAndVersionsItsManifest()
     {
