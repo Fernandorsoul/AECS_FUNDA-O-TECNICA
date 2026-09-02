@@ -5,86 +5,132 @@ using AECS.Domain.Models;
 
 namespace AECS.Application.Verification;
 
-public class EB005Verifier : IVerifier
+public sealed class EB005Verifier : IVerifier
 {
     private readonly EB005HistoricalConflictVerifier _verifier = new();
-    private readonly List<HistoricalDecision> _decisions;
+    private readonly HistoricalDecisionSelection _selection;
 
-    public EB005Verifier(List<HistoricalDecision>? decisions = null)
+    public EB005Verifier(HistoricalDecisionSelection? selection = null)
     {
-        _decisions = decisions ?? GetDefaultDecisions();
+        _selection = selection ?? new HistoricalDecisionSelection
+        {
+            Status = HistoricalDecisionSelectionStatus.Unavailable,
+            EvaluatedAt = DateTime.UtcNow,
+            Message = "Historical decision selection was not supplied."
+        };
     }
 
     public string Name => "EB005-HistoricalConflict";
     public VerificationCategory Category => VerificationCategory.Probabilistic;
 
     public Task<VerificationResult> VerifyAsync(
-        VerificationContext context, CancellationToken cancellationToken)
+        VerificationContext context,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var result = _verifier.Verify(context.RepoPath, _decisions);
-
-            if (result.HasConflicts)
+            if (_selection.Status is HistoricalDecisionSelectionStatus.Unavailable or
+                HistoricalDecisionSelectionStatus.Ambiguous)
             {
-                var messages = result.Conflicts
-                    .Take(5)
-                    .Select(c => c.Detail);
-
-                var hasErrors = result.Conflicts.Any(c => c.Severity >= RuleSeverity.Error);
-
-                return Task.FromResult(new VerificationResult
-                {
-                    AgentRunId = context.AgentRunId,
-                    Verifier = Name,
-                    Status = hasErrors ? VerificationStatus.Fail : VerificationStatus.Pass,
-                    Severity = hasErrors ? Severity.Error : Severity.Warning,
-                    Message = $"Historical conflicts detected ({result.Conflicts.Count}):\n{string.Join("\n", messages)}"
-                });
+                return Task.FromResult(Result(
+                    context,
+                    VerificationStatus.Error,
+                    _selection.Status == HistoricalDecisionSelectionStatus.Ambiguous
+                        ? Severity.Error
+                        : Severity.Warning,
+                    _selection.Message,
+                    []));
+            }
+            if (_selection.Status == HistoricalDecisionSelectionStatus.NoHistory)
+            {
+                return Task.FromResult(Result(
+                    context,
+                    VerificationStatus.Pass,
+                    Severity.Info,
+                    _selection.Message,
+                    []));
             }
 
-            return Task.FromResult(new VerificationResult
+            var input = SemanticAnalysisInput.From(context);
+            var result = _verifier.Verify(input, _selection);
+            var allConflicts = result.Conflicts.Concat(result.SuppressedConflicts).ToList();
+            if (result.HasConflicts)
             {
-                AgentRunId = context.AgentRunId,
-                Verifier = Name,
-                Status = VerificationStatus.Pass,
-                Severity = Severity.Info,
-                Message = $"No historical conflicts found ({result.FilesAnalyzed} files, {result.DecisionsChecked} decisions)"
-            });
+                var messages = result.Conflicts.Take(5).Select(conflict => conflict.Detail);
+                return Task.FromResult(Result(
+                    context,
+                    result.HasBlockingConflicts
+                        ? VerificationStatus.Fail
+                        : VerificationStatus.Pass,
+                    result.HasBlockingConflicts ? Severity.Error : Severity.Warning,
+                    $"Historical conflicts detected ({result.Conflicts.Count}, " +
+                    $"suppressed {result.SuppressedConflicts.Count}):\n" +
+                    string.Join("\n", messages),
+                    allConflicts));
+            }
+
+            return Task.FromResult(Result(
+                context,
+                VerificationStatus.Pass,
+                result.SuppressedConflicts.Count > 0 ? Severity.Warning : Severity.Info,
+                $"No unsuppressed historical conflicts found " +
+                $"({result.SymbolsAnalyzed} symbols, {result.DecisionsChecked} decisions, " +
+                $"{result.SuppressedConflicts.Count} suppressed)",
+                allConflicts));
         }
         catch (Exception ex)
         {
-            return Task.FromResult(new VerificationResult
-            {
-                AgentRunId = context.AgentRunId,
-                Verifier = Name,
-                Status = VerificationStatus.Error,
-                Severity = Severity.Warning,
-                Message = $"EB005 verifier error: {ex.Message}"
-            });
+            return Task.FromResult(Result(
+                context,
+                VerificationStatus.Error,
+                Severity.Warning,
+                $"EB005 verifier error: {ex.Message}",
+                []));
         }
     }
 
-    private static List<HistoricalDecision> GetDefaultDecisions()
-    {
-        return
-        [
-            new HistoricalDecision
+    private VerificationResult Result(
+        VerificationContext context,
+        VerificationStatus status,
+        Severity severity,
+        string message,
+        IEnumerable<DecisionConflict> conflicts) => new()
+        {
+            AgentRunId = context.AgentRunId,
+            Verifier = Name,
+            Status = status,
+            Severity = severity,
+            Message = message,
+            Historical = new HistoricalDecisionVerificationEvidence
             {
-                Id = "ADR-001",
-                Source = "ADR-001",
-                Type = DecisionType.Adr,
-                Description = "Probabilistic Discovery, Deterministic Enforcement — critical rules must be deterministic",
-                ProhibitedPatterns = ["LLMOnly", "AIDecision", "ProbabilisticOnly"]
-            },
-            new HistoricalDecision
-            {
-                Id = "ADR-006",
-                Source = "ADR-006",
-                Type = DecisionType.Adr,
-                Description = "Verification Before Adaptive Learning — no ML until verification is stable",
-                ProhibitedPatterns = ["ReinforcementLearning", "NeuralNetwork", "DeepLearning"]
+                Status = _selection.Status,
+                EvaluatedAt = _selection.EvaluatedAt,
+                Message = _selection.Message,
+                Decisions = _selection.Decisions,
+                Suppressions = _selection.Suppressions,
+                Conflicts = conflicts.Select(conflict => new HistoricalConflictEvidence
+                    {
+                        RuleId = conflict.RuleId,
+                        DecisionId = conflict.Decision.Id,
+                        DecisionVersion = conflict.Decision.Version,
+                        Source = conflict.Decision.Source,
+                        SourceVersion = conflict.Decision.SourceVersion,
+                        SourceHash = conflict.Decision.SourceHash,
+                        Authority = conflict.Decision.Authority,
+                        SymbolId = conflict.SymbolId,
+                        Symbol = conflict.Symbol,
+                        FilePath = conflict.FilePath,
+                        Severity = conflict.Severity.ToString(),
+                        Pattern = $"{conflict.Pattern.Kind}:{conflict.Pattern.Value}",
+                        Justification = conflict.Detail,
+                        Suppressed = conflict.Suppressed,
+                        SuppressionId = conflict.Suppression?.Id ?? string.Empty,
+                        SuppressionVersion = conflict.Suppression?.Version
+                    })
+                    .OrderBy(conflict => conflict.DecisionId, StringComparer.Ordinal)
+                    .ThenBy(conflict => conflict.FilePath, StringComparer.Ordinal)
+                    .ThenBy(conflict => conflict.SymbolId, StringComparer.Ordinal)
+                    .ToList()
             }
-        ];
-    }
+        };
 }

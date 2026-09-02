@@ -1,0 +1,50 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: AGRO-001
+  objective: Add null validation to CreateAnimalHandler so Name and Breed cannot cause NullReferenceException
+  acceptance:
+    - CreateAnimalHandler throws ArgumentNullException when Name is null
+    - CreateAnimalHandler throws ArgumentNullException when Breed is null
+    - Existing tests still pass
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      reference: FullyQualifiedName=AgronomoPlus.Tests.Handlers.Animal.CreateAnimalHandlerTests.Handle_ShouldThrowArgumentNullException_WhenNameIsNull
+      test_path: Backend/AgronomoPlus.Tests/Handlers/Animal/AnimalHandlerTests.cs
+      behavioral: true
+    - id: AC-002
+      type: test
+      reference: FullyQualifiedName=AgronomoPlus.Tests.Handlers.Animal.CreateAnimalHandlerTests.Handle_ShouldThrowArgumentNullException_WhenBreedIsNull
+      test_path: Backend/AgronomoPlus.Tests/Handlers/Animal/AnimalHandlerTests.cs
+      behavioral: true
+    - id: AC-003
+      type: verifier
+      reference: Tests
+  scope:
+    allowed:
+      - Backend/AgronomoPlus.Application/Modules/Animal/**
+      - Backend/AgronomoPlus.Domain/Models/Animal.cs
+      - Backend/AgronomoPlus.Tests/Handlers/Animal/**
+    forbidden:
+      - Backend/AgronomoPlus.Infrastructure/**
+      - Backend/AgronomoPlus.Api/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 80000
+    usd: 0.30
+    retries: 2
+    wall_clock_seconds: 300
+    max_files_changed: 5
+  execution:
+    runtime: host
+    working_directory: Backend
+    target: AgronomoPlus.Tests/AgronomoPlus.Tests.csproj
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+  approval:
+    production: none

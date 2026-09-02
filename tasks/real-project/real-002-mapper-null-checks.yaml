@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: REAL-002
   objective: Fix CustomerMapper to throw ArgumentNullException instead of NullReferenceException when customer is null. Add null checks to all methods.
@@ -27,6 +28,5 @@ task:
     build: required
     unit_tests: required
     scope: required
-    budget: required
   approval:
     production: none

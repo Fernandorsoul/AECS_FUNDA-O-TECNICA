@@ -1,0 +1,37 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: H1-RETENTION
+  objective: Replace the pending RetentionPolicy implementation with the production value declared by its contract
+  acceptance:
+    - RetentionPolicy returns the production days declared by RetentionContract
+  acceptance_evidence:
+    - id: AC-001
+      type: verifier
+      reference: Build
+  scope:
+    allowed: [src/**]
+    forbidden: [src/Policies/InvoicePolicy.cs, src/Policies/QueuePolicy.cs]
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 8000
+    usd: 0.10
+    retries: 0
+    wall_clock_seconds: 120
+    max_files_changed: 1
+  execution:
+    runtime: host
+    working_directory: .
+    target: Benchmark.csproj
+  verification:
+    build: required
+    unit_tests: disabled
+    integration_tests: disabled
+    scope: required
+    security_scan: disabled
+    architecture: disabled
+    critical_semantic_failures: disabled
+  approval:
+    production: none

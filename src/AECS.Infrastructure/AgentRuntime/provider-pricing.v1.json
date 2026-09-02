@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "aecs.provider-pricing/v1",
+  "version": "2026-09-01",
+  "currency": "USD",
+  "capturedAtUtc": "2026-09-01T00:00:00Z",
+  "rates": [
+    {
+      "modelPattern": "gpt-4o-mini",
+      "inputUsdPerMillionTokens": 0.15,
+      "outputUsdPerMillionTokens": 0.60,
+      "effectiveDate": "2024-07-18",
+      "source": "https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/",
+      "rateKind": "provider-published"
+    },
+    {
+      "modelPattern": "gpt-4o",
+      "inputUsdPerMillionTokens": 2.50,
+      "outputUsdPerMillionTokens": 10.00,
+      "effectiveDate": "2024-10-01",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o",
+      "rateKind": "provider-published"
+    },
+    {
+      "modelPattern": "gpt-4-turbo",
+      "inputUsdPerMillionTokens": 10.00,
+      "outputUsdPerMillionTokens": 30.00,
+      "effectiveDate": "2026-09-01",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4-turbo",
+      "rateKind": "provider-published-retired-model"
+    },
+    {
+      "modelPattern": "claude-3-5-sonnet",
+      "inputUsdPerMillionTokens": 3.00,
+      "outputUsdPerMillionTokens": 15.00,
+      "effectiveDate": "2026-09-01",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rateKind": "provider-published-retired-model"
+    },
+    {
+      "modelPattern": "claude-3-haiku",
+      "inputUsdPerMillionTokens": 0.25,
+      "outputUsdPerMillionTokens": 1.25,
+      "effectiveDate": "2026-09-01",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rateKind": "provider-published-retired-model"
+    },
+    {
+      "modelPattern": "*",
+      "inputUsdPerMillionTokens": 1.00,
+      "outputUsdPerMillionTokens": 3.00,
+      "effectiveDate": "2026-09-01",
+      "source": "https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/blob/dev/docs/cost-accounting.md",
+      "rateKind": "aecs-conservative-fallback"
+    }
+  ]
+}

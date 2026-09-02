@@ -1,19 +1,17 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
     container_name: aecs-postgres
     environment:
-      POSTGRES_USER: aecs
-      POSTGRES_PASSWORD: aecs_dev_password
-      POSTGRES_DB: aecs
+      POSTGRES_USER: ${AECS_POSTGRES_USER:-aecs}
+      POSTGRES_PASSWORD: ${AECS_POSTGRES_PASSWORD:?Set AECS_POSTGRES_PASSWORD in your environment or .env file}
+      POSTGRES_DB: ${AECS_POSTGRES_DATABASE:-aecs}
     ports:
-      - "5432:5432"
+      - "${AECS_POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aecs"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5

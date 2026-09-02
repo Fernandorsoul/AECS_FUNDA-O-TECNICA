@@ -9,4 +9,10 @@ public class VerificationContext
     public AgentRunResult AgentResult { get; init; } = new();
     public CandidateChangeSet CandidateChangeSet { get; init; } = new();
     public List<ExecutionCommandEvidence> CommandEvidence { get; init; } = [];
+    public string Phase { get; init; } = string.Empty;
+    public RepositorySnapshot? BaselineRepositorySnapshot { get; init; }
+    public RepositorySnapshot? CandidateRepositorySnapshot { get; init; }
+    public CSharpSymbolGraph? BaselineCSharpSymbolGraph { get; init; }
+    public CSharpSymbolGraph? CandidateCSharpSymbolGraph { get; init; }
+    public string SemanticAnalysisError { get; init; } = string.Empty;
 }

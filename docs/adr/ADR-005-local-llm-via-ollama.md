@@ -26,6 +26,10 @@ Model strategy by risk level:
 
 ## Implementation note — 2026-08-30
 
-The cloud fallback described above has since been implemented. The current CLI keeps Ollama as the primary runtime and, for `run` and `experiment`, can use an OpenAI-compatible `/chat/completions` endpoint when the local execution fails or returns no useful file blocks. Jarvis still uses Ollama or mock directly.
+The cloud fallback described above has since been implemented. `run`, directory experiments and
+Jarvis now share one versioned composition root. Ollama remains primary; an OpenAI-compatible
+`/chat/completions` fallback is opt-in and requires explicit repository-context authorization,
+an HTTPS endpoint outside loopback, an available credential and a risk allowlist. Runtime
+configuration never weakens the TaskContract budget, capabilities or sandbox policy.
 
 The current model routing also evolved from the initial examples: R0/R1 select `qwen2.5-coder:7b`, while R2–R4 select `qwen2.5-coder:14b`. These are implementation details and may continue to evolve without replacing the architectural decision to prefer a local runtime.

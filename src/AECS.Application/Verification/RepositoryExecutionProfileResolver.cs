@@ -75,6 +75,17 @@ public static partial class RepositoryExecutionProfileResolver
         };
     }
 
+    public static ResolvedRepositoryExecutionProfile ResolveTestSuite(
+        string workspacePath,
+        RepositoryExecutionProfile profile,
+        TestSuiteCommandProfile suite) => Resolve(
+            workspacePath,
+            new RepositoryExecutionProfile
+            {
+                WorkingDirectory = profile.WorkingDirectory,
+                Target = suite.Target
+            });
+
     private static string ResolveRelativePath(
         string root,
         string suppliedPath,

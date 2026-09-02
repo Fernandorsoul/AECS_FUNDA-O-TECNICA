@@ -7,10 +7,14 @@ namespace AECS.Application.Verification;
 public class BuildVerifier : IVerifier
 {
     private readonly IProcessRunner _processRunner;
+    private readonly Func<TimeSpan>? _remainingDuration;
 
-    public BuildVerifier(IProcessRunner processRunner)
+    public BuildVerifier(
+        IProcessRunner processRunner,
+        Func<TimeSpan>? remainingDuration = null)
     {
         _processRunner = processRunner;
+        _remainingDuration = remainingDuration;
     }
 
     public string Name => "Build";
@@ -22,6 +26,9 @@ public class BuildVerifier : IVerifier
     {
         try
         {
+            var timeout = GetTimeout(context.Contract.Budget);
+            if (timeout <= TimeSpan.Zero)
+                return Error(context.AgentRunId, "Wall-clock budget exhausted before build");
             var execution = RepositoryExecutionProfileResolver.Resolve(
                 context.RepoPath,
                 context.Contract.Execution);
@@ -30,8 +37,8 @@ public class BuildVerifier : IVerifier
                 FileName = "dotnet",
                 Arguments = execution.BuildArguments,
                 WorkingDirectory = execution.WorkingDirectory,
-                Timeout = TimeSpan.FromSeconds(
-                    Math.Max(1, context.Contract.Budget.MaxDurationSeconds))
+                Timeout = timeout,
+                Phase = $"{context.Phase}.build"
             };
             var result = await _processRunner.RunAsync(request, cancellationToken);
             context.CommandEvidence.Add(
@@ -75,4 +82,13 @@ public class BuildVerifier : IVerifier
         string.Join(Environment.NewLine, new[] { result.StandardOutput, result.StandardError }
             .Where(value => !string.IsNullOrWhiteSpace(value)))
             .Trim();
+
+    private TimeSpan GetTimeout(ExecutionBudget budget)
+    {
+        var configured = TimeSpan.FromSeconds(Math.Max(1, budget.MaxDurationSeconds));
+        if (_remainingDuration is null)
+            return configured;
+        var remaining = _remainingDuration();
+        return remaining < configured ? remaining : configured;
+    }
 }

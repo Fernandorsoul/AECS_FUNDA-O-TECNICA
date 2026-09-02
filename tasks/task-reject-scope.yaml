@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-REJECT-001
   objective: Modify the BillingService to add a new CalculateDiscount method and also update the OrderService to use it

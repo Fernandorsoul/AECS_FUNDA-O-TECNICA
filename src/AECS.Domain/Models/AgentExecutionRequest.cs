@@ -13,4 +13,17 @@ public class AgentExecutionRequest
     public RiskLevel Risk { get; init; }
     public string Model { get; init; } = string.Empty;
     public Dictionary<string, string> CodeContext { get; init; } = new();
+    public string ContextPrompt { get; init; } = string.Empty;
+
+    public AgentExecutionRequest WithoutContext() => new()
+    {
+        TaskId = TaskId,
+        Objective = Objective,
+        AcceptanceCriteria = AcceptanceCriteria,
+        RepoPath = RepoPath,
+        Scope = Scope,
+        Budget = Budget,
+        Risk = Risk,
+        Model = Model
+    };
 }

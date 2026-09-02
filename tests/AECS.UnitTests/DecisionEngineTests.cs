@@ -1,4 +1,5 @@
 using AECS.Application;
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 using FluentAssertions;
@@ -122,5 +123,122 @@ public class DecisionEngineTests
         results.Add(Result("EB002-Pattern", VerificationStatus.Fail));
 
         _engine.Decide(results, CreateContract()).Decision.Should().Be(TaskDecision.Verified);
+    }
+
+    [Fact]
+    public void Decide_TextualAcceptanceWithoutAggregateEvidence_IsRejected()
+    {
+        var contract = new TaskContract
+        {
+            Id = "T-AC",
+            Objective = "Behavior change",
+            AcceptanceCriteria = ["Observable behavior"],
+            Verification = new VerificationProfile { Build = true, UnitTests = true }
+        };
+
+        var decision = _engine.Decide(AllRequiredPass(), contract);
+
+        decision.Decision.Should().Be(TaskDecision.Rejected);
+        decision.Failures.Should().Contain(failure =>
+            failure.Contains("AcceptanceCriteria") && failure.Contains("missing"));
+    }
+
+    [Fact]
+    public void Decide_AcceptanceAggregatePass_IsVerified()
+    {
+        var contract = new TaskContract
+        {
+            Id = "T-AC",
+            Objective = "Behavior change",
+            AcceptanceCriteria = ["Observable behavior"],
+            Verification = new VerificationProfile { Build = true, UnitTests = true }
+        };
+        var results = AllRequiredPass();
+        results.Add(Result("AcceptanceCriteria"));
+
+        _engine.Decide(results, contract).Decision.Should().Be(TaskDecision.Verified);
+    }
+
+    [Fact]
+    public void Decide_CriticalSemanticFailure_IsBlockedByDefaultPolicy()
+    {
+        var results = AllRequiredPass();
+        results.Add(new VerificationResult
+        {
+            Verifier = "EB003-BreakingChange",
+            Status = VerificationStatus.Fail,
+            Severity = Severity.Critical,
+            Message = "Critical contract break"
+        });
+
+        var decision = _engine.Decide(results, CreateContract());
+
+        decision.Decision.Should().Be(TaskDecision.Rejected);
+        decision.Failures.Should().Contain(failure =>
+            failure.Contains("critical semantic policy"));
+    }
+
+    [Fact]
+    public void Decide_CriticalSemanticFailure_CanBeExplicitlyNonBlocking()
+    {
+        var contract = new TaskContract
+        {
+            Id = "T1",
+            Objective = "Test",
+            Verification = new VerificationProfile
+            {
+                Build = true,
+                UnitTests = true,
+                BlockCriticalSemanticFailures = false
+            }
+        };
+        var results = AllRequiredPass();
+        results.Add(new VerificationResult
+        {
+            Verifier = "EB003-BreakingChange",
+            Status = VerificationStatus.Fail,
+            Severity = Severity.Critical,
+            Message = "Explicitly advisory"
+        });
+
+        _engine.Decide(results, contract).Decision.Should().Be(TaskDecision.Verified);
+    }
+
+    [Fact]
+    public void Decide_VersionedSuites_BlockOnlyRequiredCategory()
+    {
+        var contract = new TaskContract
+        {
+            Verification = new VerificationProfile { Build = false },
+            Execution = new RepositoryExecutionProfile
+            {
+                TestSuites = new TestSuiteMatrix
+                {
+                    Unit = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Required,
+                        Target = "tests/Unit/Unit.csproj"
+                    },
+                    Integration = new TestSuiteCommandProfile
+                    {
+                        Mode = TestGateMode.Optional,
+                        Target = "tests/Integration/Integration.csproj"
+                    }
+                }
+            }
+        };
+        var results = new List<VerificationResult>
+        {
+            Result("AgentSuccess"), Result("Application"), Result("NonEmptyChange"),
+            Result("Scope"), Result("Budget"), Result(TestSuiteVerifier.UnitName),
+            Result(TestSuiteVerifier.IntegrationName, VerificationStatus.Fail)
+        };
+
+        _engine.Decide(results, contract).Decision.Should().Be(TaskDecision.Verified);
+
+        results.RemoveAll(result => result.Verifier == TestSuiteVerifier.UnitName);
+        var rejected = _engine.Decide(results, contract);
+        rejected.Decision.Should().Be(TaskDecision.Rejected);
+        rejected.Failures.Should().Contain(failure => failure.Contains(TestSuiteVerifier.UnitName));
     }
 }

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "aecs.runtime-config/v1",
+  "agent": {
+    "mode": "local",
+    "ollama": {
+      "baseUrl": "http://localhost:11434",
+      "contextWindowTokens": 32768
+    },
+    "cloudFallback": {
+      "enabled": false,
+      "allowRepositoryContext": false,
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "contextWindowTokens": 32768,
+      "maxOutputTokens": 4096,
+      "credentialEnvironmentVariable": "OPENAI_API_KEY",
+      "allowedRisks": ["R0", "R1"]
+    }
+  },
+  "evidence": {
+    "backend": "json"
+  },
+  "execution": {
+    "allowHostExecution": false
+  }
+}

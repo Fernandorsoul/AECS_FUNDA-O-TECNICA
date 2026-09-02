@@ -1,194 +1,198 @@
-using System.Text.RegularExpressions;
+using AECS.Domain.Models;
 
 namespace AECS.Application.SemanticLinter;
 
-public class MissingChange
-{
-    public string RuleId { get; init; } = string.Empty;
-    public string RuleName { get; init; } = string.Empty;
-    public string FilePath { get; init; } = string.Empty;
-    public string Detail { get; init; } = string.Empty;
-    public RuleSeverity Severity { get; init; }
-    public string ExpectedFile { get; init; } = string.Empty;
-}
-
-public class EB004Result
+public sealed class EB004Result
 {
     public bool HasMissingChanges => MissingChanges.Count > 0;
-    public List<MissingChange> MissingChanges { get; init; } = [];
+    public List<SemanticRuleFinding> MissingChanges { get; init; } = [];
     public int FilesAnalyzed { get; init; }
 }
 
-public class EB004MissingChangeVerifier
+public sealed class EB004MissingChangeVerifier
 {
-    private static readonly Regex ClassRegex = new(
-        @"(?:public|internal)\s+(?:static\s+)?(?:partial\s+)?(?:class|interface)\s+(\w+)",
-        RegexOptions.Compiled);
-
-    public EB004Result Verify(string repoPath, string diffContent)
+    public EB004Result Verify(SemanticAnalysisInput input)
     {
-        var missingChanges = new List<MissingChange>();
-        var filesAnalyzed = 0;
-
-        // Parse diff to find changed files
-        var changedFiles = ParseChangedFiles(diffContent);
-
-        foreach (var file in changedFiles)
-        {
-            filesAnalyzed++;
-            var relativePath = file.Replace('\\', '/');
-
-            // Check if source file changed but test file not changed
-            if (IsSourceFile(relativePath) && !IsTestFile(relativePath))
-            {
-                var testFile = FindCorrespondingTestFile(repoPath, relativePath);
-                if (testFile != null && !changedFiles.Contains(testFile))
-                {
-                    missingChanges.Add(new MissingChange
-                    {
-                        RuleId = "EB004-MISSING-TEST",
-                        RuleName = "Missing Test Update",
-                        FilePath = relativePath,
-                        Detail = $"Source file '{relativePath}' was changed but corresponding test file '{testFile}' was not updated",
-                        Severity = RuleSeverity.Warning,
-                        ExpectedFile = testFile
-                    });
-                }
-            }
-
-            // Check if interface changed but implementation not changed
-            if (IsInterfaceFile(relativePath))
-            {
-                var implFile = FindCorrespondingImplementation(repoPath, relativePath);
-                if (implFile != null && !changedFiles.Contains(implFile))
-                {
-                    missingChanges.Add(new MissingChange
-                    {
-                        RuleId = "EB004-MISSING-IMPL",
-                        RuleName = "Missing Implementation Update",
-                        FilePath = relativePath,
-                        Detail = $"Interface '{relativePath}' was changed but implementation '{implFile}' was not updated",
-                        Severity = RuleSeverity.Error,
-                        ExpectedFile = implFile
-                    });
-                }
-            }
-
-            // Check if model changed but migration not created
-            if (IsModelFile(relativePath) && IsDomainModel(repoPath, relativePath))
-            {
-                var hasMigration = changedFiles.Any(f => f.Contains("Migration", StringComparison.OrdinalIgnoreCase));
-                if (!hasMigration)
-                {
-                    missingChanges.Add(new MissingChange
-                    {
-                        RuleId = "EB004-MISSING-MIGRATION",
-                        RuleName = "Missing Database Migration",
-                        FilePath = relativePath,
-                        Detail = $"Domain model '{relativePath}' was changed but no database migration was created",
-                        Severity = RuleSeverity.Warning,
-                        ExpectedFile = "Migrations/"
-                    });
-                }
-            }
-        }
-
+        ArgumentNullException.ThrowIfNull(input);
+        var findings = ContractImplementationFindings(input)
+            .Concat(TestRelationshipFindings(input))
+            .Concat(ModelMigrationFindings(input))
+            .DistinctBy(
+                finding => $"{finding.RuleId}|{finding.SymbolId}|{finding.FilePath}",
+                StringComparer.Ordinal)
+            .OrderBy(finding => finding.RuleId, StringComparer.Ordinal)
+            .ThenBy(finding => finding.FilePath, StringComparer.Ordinal)
+            .ThenBy(finding => finding.SymbolId, StringComparer.Ordinal)
+            .ToList();
         return new EB004Result
         {
-            MissingChanges = missingChanges,
-            FilesAnalyzed = filesAnalyzed
+            MissingChanges = findings,
+            FilesAnalyzed = input.ChangedFiles.Count
         };
     }
 
-    private static List<string> ParseChangedFiles(string diff)
+    private static IEnumerable<SemanticRuleFinding> ContractImplementationFindings(
+        SemanticAnalysisInput input)
     {
-        var files = new List<string>();
-
-        foreach (var line in diff.Split('\n'))
+        foreach (var graph in new[] { input.BaselineGraph, input.CandidateGraph })
         {
-            if (line.StartsWith("+++ b/"))
+            foreach (var contract in graph.Nodes.Where(node =>
+                         node.Kind == "type" &&
+                         node.TypeKind == "Interface" &&
+                         input.IsImpacted(node, graph)))
             {
-                var file = line[6..].Trim();
-                if (!string.IsNullOrEmpty(file))
-                    files.Add(file);
-            }
-        }
-
-        return files;
-    }
-
-    private static bool IsSourceFile(string path)
-    {
-        return path.EndsWith(".cs") &&
-               !path.Contains("Test", StringComparison.OrdinalIgnoreCase) &&
-               !path.Contains("Migration", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsTestFile(string path)
-    {
-        return path.Contains("Test", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsInterfaceFile(string path)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(path);
-        return fileName.StartsWith('I') && fileName.Length > 1 && char.IsUpper(fileName[1]);
-    }
-
-    private static bool IsModelFile(string path)
-    {
-        return path.Contains("Models", StringComparison.OrdinalIgnoreCase) ||
-               path.Contains("Domain", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsDomainModel(string repoPath, string path)
-    {
-        return path.Contains("Domain", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string? FindCorrespondingTestFile(string repoPath, string sourceFile)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(sourceFile);
-        var testFileName = $"{fileName}Tests.cs";
-
-        // Search in test directories
-        var testDirs = new[] { "tests", "test", "Tests", "Test" };
-        foreach (var dir in testDirs)
-        {
-            var testPath = Path.Combine(repoPath, dir);
-            if (Directory.Exists(testPath))
-            {
-                var testFiles = Directory.GetFiles(testPath, testFileName, SearchOption.AllDirectories);
-                if (testFiles.Length > 0)
-                    return Path.GetRelativePath(repoPath, testFiles[0]).Replace('\\', '/');
-            }
-        }
-
-        return null;
-    }
-
-    private static string? FindCorrespondingImplementation(string repoPath, string interfaceFile)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(interfaceFile);
-        if (fileName.StartsWith('I') && fileName.Length > 1)
-        {
-            var implName = fileName[1..]; // Remove 'I' prefix
-            var implFileName = $"{implName}.cs";
-
-            // Search in src directories
-            var srcDirs = new[] { "src", "Src" };
-            foreach (var dir in srcDirs)
-            {
-                var srcPath = Path.Combine(repoPath, dir);
-                if (Directory.Exists(srcPath))
+                foreach (var edge in graph.Edges.Where(edge =>
+                             edge.Kind == "implements" && edge.ToNodeId == contract.Id))
                 {
-                    var implFiles = Directory.GetFiles(srcPath, implFileName, SearchOption.AllDirectories);
-                    if (implFiles.Length > 0)
-                        return Path.GetRelativePath(repoPath, implFiles[0]).Replace('\\', '/');
+                    var implementation = input.Node(graph, edge.FromNodeId);
+                    if (implementation is null ||
+                        implementation.FilePaths.Count == 0 ||
+                        implementation.FilePaths.Any(input.ChangedFiles.Contains))
+                    {
+                        continue;
+                    }
+                    yield return Finding(
+                        input,
+                        "EB004-MISSING-IMPLEMENTATION",
+                        "Missing Related Implementation Change",
+                        implementation,
+                        RuleSeverity.Error,
+                        "contract-implementation",
+                        $"Changed contract '{contract.DisplayName}' has a resolved implements " +
+                        $"relation from '{implementation.DisplayName}', but none of the " +
+                        "implementation declarations changed in the candidate.");
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<SemanticRuleFinding> TestRelationshipFindings(
+        SemanticAnalysisInput input)
+    {
+        foreach (var graphAndSnapshot in new[]
+                 {
+                     (Graph: input.BaselineGraph, Snapshot: input.BaselineSnapshot),
+                     (Graph: input.CandidateGraph, Snapshot: input.CandidateSnapshot)
+                 })
+        {
+            var impacted = graphAndSnapshot.Graph.Nodes
+                .Where(node => (node.Kind is "type" or "member") &&
+                    input.IsImpacted(node, graphAndSnapshot.Graph))
+                .Select(node => node.Id)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var edge in graphAndSnapshot.Graph.Edges.Where(edge =>
+                         edge.Kind is "references" or "constructs" &&
+                         impacted.Contains(edge.ToNodeId)))
+            {
+                var testSymbol = input.Node(graphAndSnapshot.Graph, edge.FromNodeId);
+                var changedSymbol = input.Node(graphAndSnapshot.Graph, edge.ToNodeId);
+                if (testSymbol is null || changedSymbol is null ||
+                    !input.IsTestProject(testSymbol.ProjectPath, graphAndSnapshot.Snapshot) ||
+                    testSymbol.FilePaths.Count == 0 ||
+                    testSymbol.FilePaths.Any(input.ChangedFiles.Contains))
+                {
+                    continue;
+                }
+                yield return Finding(
+                    input,
+                    "EB004-MISSING-TEST",
+                    "Missing Related Test Change",
+                    testSymbol,
+                    RuleSeverity.Warning,
+                    "test-reference",
+                    $"Test symbol '{testSymbol.DisplayName}' has a resolved {edge.Kind} " +
+                    $"relation to impacted symbol '{changedSymbol.DisplayName}', but its " +
+                    "declaration did not change.");
+            }
+        }
+    }
+
+    private static IEnumerable<SemanticRuleFinding> ModelMigrationFindings(
+        SemanticAnalysisInput input)
+    {
+        var graph = input.CandidateGraph;
+        var dbContexts = TypesInheriting(input, graph, "DbContext").ToList();
+        var migrations = TypesInheriting(input, graph, "Migration")
+            .Concat(TypesInheriting(input, graph, "ModelSnapshot"))
+            .DistinctBy(node => node.Id, StringComparer.Ordinal)
+            .ToList();
+        if (dbContexts.Count == 0 || migrations.Count == 0)
+            yield break;
+
+        var entityIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var context in dbContexts)
+        {
+            foreach (var edge in graph.Edges.Where(edge => edge.Kind == "references"))
+            {
+                var source = input.Node(graph, edge.FromNodeId);
+                var target = input.Node(graph, edge.ToNodeId);
+                if (source is not null && target is { Kind: "type", IsExternal: false } &&
+                    input.IsContainedBy(source, context, graph))
+                {
+                    entityIds.Add(target.Id);
                 }
             }
         }
 
-        return null;
+        foreach (var entity in graph.Nodes.Where(node =>
+                     entityIds.Contains(node.Id) && input.IsImpacted(node, graph)))
+        {
+            var relatedMigrations = migrations.Where(migration =>
+                    migration.ProjectPath.Equals(entity.ProjectPath, StringComparison.OrdinalIgnoreCase) ||
+                    migration.AssemblyName.Equals(entity.AssemblyName, StringComparison.Ordinal))
+                .ToList();
+            if (relatedMigrations.Count == 0 || relatedMigrations.Any(migration =>
+                    migration.FilePaths.Any(input.ChangedFiles.Contains)))
+            {
+                continue;
+            }
+            yield return Finding(
+                input,
+                "EB004-MISSING-MIGRATION",
+                "Missing Related Migration Change",
+                entity,
+                RuleSeverity.Warning,
+                "model-migration",
+                $"Impacted entity '{entity.DisplayName}' is referenced by a resolved DbContext " +
+                "and its project contains resolved Migration/ModelSnapshot types, but none " +
+                "of those declarations changed.");
+        }
     }
+
+    private static IEnumerable<CSharpSymbolGraphNode> TypesInheriting(
+        SemanticAnalysisInput input,
+        CSharpSymbolGraph graph,
+        string baseTypeName)
+    {
+        foreach (var edge in graph.Edges.Where(edge => edge.Kind == "inherits"))
+        {
+            var source = input.Node(graph, edge.FromNodeId);
+            var target = input.Node(graph, edge.ToNodeId);
+            if (source is { Kind: "type" } && target is not null &&
+                target.Name.Equals(baseTypeName, StringComparison.Ordinal))
+            {
+                yield return source;
+            }
+        }
+    }
+
+    private static SemanticRuleFinding Finding(
+        SemanticAnalysisInput input,
+        string ruleId,
+        string ruleName,
+        CSharpSymbolGraphNode symbol,
+        RuleSeverity severity,
+        string category,
+        string justification) => new()
+        {
+            RuleId = ruleId,
+            RuleName = ruleName,
+            SymbolId = symbol.Id,
+            Symbol = symbol.DisplayName,
+            FilePath = SemanticAnalysisInput.Location(symbol),
+            Severity = severity,
+            Baseline = input.BaselineSnapshot.BaselineCommit,
+            Category = category,
+            Justification = justification
+        };
 }

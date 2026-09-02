@@ -1,6 +1,7 @@
+schema_version: aecs.task-contract/v1
 task:
   id: REAL-003
-  objective: Add input validation to CustomerService.Create: reject null name, empty email, and invalid email format. Fix GetActive to return only active customers. Fix Deactivate to throw InvalidOperationException for non-existing customer.
+  objective: "Add input validation to CustomerService.Create: reject null name, empty email, and invalid email format. Fix GetActive to return only active customers. Fix Deactivate to throw InvalidOperationException for non-existing customer."
   acceptance:
     - Create(null, email) throws ArgumentException
     - Create(name, "") throws ArgumentException
@@ -29,6 +30,5 @@ task:
     build: required
     unit_tests: required
     scope: required
-    budget: required
   approval:
     production: none

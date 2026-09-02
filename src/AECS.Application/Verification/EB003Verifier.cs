@@ -17,27 +17,14 @@ public class EB003Verifier : IVerifier
     {
         try
         {
-            var diff = context.CandidateChangeSet.Diff;
-
-            if (string.IsNullOrEmpty(diff))
-            {
-                return new VerificationResult
-                {
-                    AgentRunId = context.AgentRunId,
-                    Verifier = Name,
-                    Status = VerificationStatus.Skip,
-                    Severity = Severity.Info,
-                    Message = "No diff available for breaking change analysis"
-                };
-            }
-
-            var result = _verifier.Verify(context.RepoPath, diff);
+            var input = SemanticAnalysisInput.From(context);
+            var result = _verifier.Verify(input);
 
             if (result.HasBreakingChanges)
             {
                 var messages = result.BreakingChanges
                     .Take(5)
-                    .Select(bc => bc.Detail);
+                    .Select(bc => bc.Justification);
 
                 var hasCritical = result.BreakingChanges.Any(bc => bc.Severity >= RuleSeverity.Critical);
 
@@ -47,7 +34,8 @@ public class EB003Verifier : IVerifier
                     Verifier = Name,
                     Status = hasCritical ? VerificationStatus.Fail : VerificationStatus.Pass,
                     Severity = hasCritical ? Severity.Critical : Severity.Warning,
-                    Message = $"Breaking changes detected ({result.BreakingChanges.Count}):\n{string.Join("\n", messages)}"
+                    Message = $"Breaking changes detected ({result.BreakingChanges.Count}):\n{string.Join("\n", messages)}",
+                    Semantic = SemanticEvidenceFactory.Create(input, result.BreakingChanges)
                 };
             }
 
@@ -57,7 +45,8 @@ public class EB003Verifier : IVerifier
                 Verifier = Name,
                 Status = VerificationStatus.Pass,
                 Severity = Severity.Info,
-                Message = $"No breaking changes detected ({result.FilesAnalyzed} files analyzed)"
+                Message = $"No breaking changes detected ({result.FilesAnalyzed} impacted files analyzed)",
+                Semantic = SemanticEvidenceFactory.Create(input, [])
             };
         }
         catch (Exception ex)
@@ -67,7 +56,7 @@ public class EB003Verifier : IVerifier
                 AgentRunId = context.AgentRunId,
                 Verifier = Name,
                 Status = VerificationStatus.Error,
-                Severity = Severity.Warning,
+                Severity = Severity.Critical,
                 Message = $"EB003 verifier error: {ex.Message}"
             };
         }

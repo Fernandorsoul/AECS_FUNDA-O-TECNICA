@@ -10,6 +10,20 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-004](ADR-004-docker-isolation.md) | Accepted | Isolar agentes com Docker |
 | [ADR-005](ADR-005-local-llm-via-ollama.md) | Accepted | Priorizar modelos locais via Ollama |
 | [ADR-006](ADR-006-verification-before-learning.md) | Accepted | Aprender apenas com execuções verificadas |
+| [ADR-007](ADR-007-staged-trust-boundary-and-controlled-promotion.md) | Accepted | Isolar descoberta/verificação em worktrees e promover somente por uma ação controlada |
+| [ADR-008](ADR-008-authenticated-evidence-envelope.md) | Accepted | Autenticar a evidência e encadear eventos de promoção assinados |
+| [ADR-009](ADR-009-preventive-execution-capabilities.md) | Accepted | Aplicar capabilities preventivas versionadas aos comandos staged |
+| [ADR-010](ADR-010-reproducible-security-scan-gate.md) | Accepted | Executar SecurityScan reproduzível com baseline, snapshot fixa e saída sanitizada |
+| [ADR-011](ADR-011-independent-versioned-test-suite-gates.md) | Accepted | Separar suites unitárias, de integração e aceite com política e evidência TRX próprias |
+| [ADR-012](ADR-012-deterministic-repository-snapshot.md) | Accepted | Inventariar a baseline por uma snapshot Git determinística e endereçada por conteúdo |
+| [ADR-013](ADR-013-roslyn-msbuild-symbol-graph.md) | Accepted | Usar Roslyn/MSBuild como autoridade semântica para C# e restringir fallback a inventário textual |
+| [ADR-014](ADR-014-graph-ranked-model-tokenized-context.md) | Accepted | Selecionar contexto pelo grafo e contar tokens conforme o modelo |
+| [ADR-015](ADR-015-baseline-candidate-semantic-verification.md) | Accepted | Comparar grafos da baseline e do candidato nos verificadores semânticos |
+| [ADR-016](ADR-016-versioned-historical-decision-registry.md) | Accepted | Alimentar EB005 por decisões históricas versionadas e revisadas |
+| [ADR-017](ADR-017-reproducible-experiment-datasets.md) | Accepted | Executar experimentos como datasets versionados e runs retomáveis |
+| [ADR-018](ADR-018-preregistered-context-ab.md) | Accepted | Pré-registrar o A/B pareado do Context Compiler e concluir H1 por regra explícita |
+| [ADR-019](ADR-019-versioned-fail-closed-task-contract.md) | Accepted | Versionar o TaskContract, rejeitar entradas ambíguas e selar o contrato efetivo |
+| [ADR-020](ADR-020-dotnet-support-matrix.md) | Accepted | Fixar a matriz .NET vigente e exigir migração para .NET 10 antes do fim do suporte |
 
 ## Convenção para novos ADRs
 

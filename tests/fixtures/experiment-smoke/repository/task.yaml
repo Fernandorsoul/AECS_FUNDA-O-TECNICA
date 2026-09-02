@@ -1,0 +1,32 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: EXP-SMOKE-001
+  objective: Create the deterministic experiment smoke result
+  acceptance: []
+  scope:
+    allowed:
+      - result.txt
+    forbidden: []
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 5000
+    usd: 0.01
+    retries: 0
+    wall_clock_seconds: 30
+    max_files_changed: 1
+  execution:
+    runtime: host
+    working_directory: .
+  verification:
+    build: disabled
+    unit_tests: disabled
+    integration_tests: disabled
+    scope: required
+    security_scan: disabled
+    architecture: disabled
+    critical_semantic_failures: disabled
+  approval:
+    production: none

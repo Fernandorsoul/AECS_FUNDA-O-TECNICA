@@ -4,6 +4,10 @@ Você é o principal engenheiro responsável por continuar o desenvolvimento do 
 
 O projeto já possui base funcional + Agent Runtime. **NÃO reescreva o que já funciona.**
 
+> **ARQUIVO HISTÓRICO:** números de testes, componentes e a afirmação “Solution .NET 10” abaixo
+> representam o snapshot de planejamento deste milestone, não o repositório atual. Consulte
+> `README.md`, `docs/architecture.md`, `docs/dotnet-support.md` e o ADR-020.
+
 ---
 
 ## 1. ESTADO ATUAL DO PROJETO

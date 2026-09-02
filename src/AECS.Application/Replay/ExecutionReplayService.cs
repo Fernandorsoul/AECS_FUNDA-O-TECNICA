@@ -1,0 +1,1012 @@
+using AECS.Application.Staging;
+using AECS.Application.Verification;
+using AECS.Application.RepositorySnapshots;
+using AECS.Application.SemanticLinter;
+using AECS.Application.SymbolGraphs;
+using AECS.Domain.Enums;
+using AECS.Domain.Interfaces;
+using AECS.Domain.Models;
+using System.Text.Json;
+
+namespace AECS.Application.Replay;
+
+public sealed class ExecutionReplayService
+{
+    private static readonly HashSet<string> SupportedCandidateGates = new(
+        [
+            "AgentSuccess", "Application", "NonEmptyChange", "Scope", "Budget",
+            "Build", "Tests", TestSuiteVerifier.UnitName,
+            TestSuiteVerifier.IntegrationName, TestSuiteVerifier.AcceptanceName,
+            "EB001-Architecture", "EB002-Pattern",
+            "EB003-BreakingChange", "EB004-MissingChange",
+            "EB005-HistoricalConflict", SecurityScanVerifier.VerifierName,
+            AcceptanceCriteriaVerifier.Name
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
+    private readonly IProcessRunner _processRunner;
+    private readonly IExecutionEvidenceStore _evidenceStore;
+    private readonly GitWorkspaceManager _workspaceManager;
+    private readonly IStagedProcessRunnerFactory _stagedProcessRunnerFactory;
+    private readonly IReadOnlyList<ISecurityScanner> _securityScanners;
+    private readonly RepositorySnapshotBuilder _repositorySnapshotBuilder;
+    private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
+
+    public ExecutionReplayService(
+        IProcessRunner processRunner,
+        IExecutionEvidenceStore evidenceStore,
+        IStagedProcessRunnerFactory? stagedProcessRunnerFactory = null,
+        IReadOnlyList<ISecurityScanner>? securityScanners = null,
+        ICSharpSymbolGraphBuilder? symbolGraphBuilder = null)
+    {
+        ArgumentNullException.ThrowIfNull(processRunner);
+        ArgumentNullException.ThrowIfNull(evidenceStore);
+        _processRunner = processRunner;
+        _evidenceStore = evidenceStore;
+        _workspaceManager = new GitWorkspaceManager(processRunner);
+        _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
+            new DefaultStagedProcessRunnerFactory(processRunner);
+        _securityScanners = securityScanners ?? SecurityScanVerifier.CreateDefaultScanners();
+        _repositorySnapshotBuilder = new RepositorySnapshotBuilder(processRunner);
+        _symbolGraphBuilder = symbolGraphBuilder ?? new RoslynSymbolGraphBuilder();
+    }
+
+    public async Task<ExecutionReplayResult> ReplayAsync(
+        ExecutionReplayRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.EvidenceId == Guid.Empty)
+            throw new ArgumentException("A non-empty evidence ID is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.RepositoryPath))
+            throw new ArgumentException("A repository path is required.", nameof(request));
+
+        var startedAt = DateTime.UtcNow;
+        var repositoryPath = Path.GetFullPath(request.RepositoryPath);
+        _evidenceStore.EnsureRepositoryIsolation(repositoryPath);
+        var original = await _evidenceStore.LoadAsync(request.EvidenceId, cancellationToken)
+            ?? throw new FileNotFoundException(
+                $"Execution evidence '{request.EvidenceId:N}' was not found.");
+
+        ReplayRun run;
+        BaselineSnapshot? checkoutSnapshot = null;
+        if (!PathsEqual(repositoryPath, original.Baseline.RepositoryPath))
+        {
+            run = ReplayRun.Failed(
+                ExecutionReplayOutcome.Failed,
+                "Requested repository does not match the repository authenticated by the evidence.");
+        }
+        else
+        {
+            try
+            {
+                checkoutSnapshot = await _workspaceManager.CaptureBaselineAsync(
+                    repositoryPath,
+                    cancellationToken);
+                run = await ExecuteCoreAsync(
+                    original,
+                    repositoryPath,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                run = ReplayRun.Failed(
+                    ExecutionReplayOutcome.Failed,
+                    $"Replay failed closed: {ex.Message}");
+            }
+            finally
+            {
+                if (checkoutSnapshot is not null)
+                {
+                    await _workspaceManager.EnsureBaselineUnchangedAsync(
+                        checkoutSnapshot,
+                        CancellationToken.None);
+                }
+            }
+        }
+
+        var replay = new ExecutionReplayEvidence
+        {
+            ExecutionEvidenceId = original.Id,
+            CandidateId = original.CandidateChangeSet.Id,
+            Outcome = run.Outcome,
+            RepositoryPath = original.Baseline.RepositoryPath,
+            RequestedRepositoryPath = repositoryPath,
+            BaselineCommit = original.Baseline.Commit,
+            ExpectedDiffHash = original.CandidateChangeSet.DiffHash,
+            ActualDiffHash = run.ActualDiffHash,
+            ExpectedRepositorySnapshotHash = original.RepositorySnapshot?.SnapshotHash,
+            ActualRepositorySnapshotHash = run.ActualRepositorySnapshotHash,
+            RepositorySnapshotDiff = run.RepositorySnapshotDiff,
+            ExpectedCSharpSymbolGraphHash = original.CSharpSymbolGraph?.GraphHash,
+            ActualCSharpSymbolGraphHash = run.ActualCSharpSymbolGraphHash,
+            Tools = run.Tools,
+            Commands = run.Commands,
+            Gates = run.Gates,
+            AcceptanceCriteria = run.AcceptanceCriteria,
+            Message = run.Message,
+            StartedAt = startedAt,
+            FinishedAt = DateTime.UtcNow
+        };
+        await _evidenceStore.AppendReplayAsync(
+            original.Id,
+            replay,
+            CancellationToken.None);
+
+        return new ExecutionReplayResult
+        {
+            Outcome = replay.Outcome,
+            Message = replay.Message,
+            Evidence = replay
+        };
+    }
+
+    private async Task<ReplayRun> ExecuteCoreAsync(
+        ExecutionEvidence original,
+        string repositoryPath,
+        CancellationToken cancellationToken)
+    {
+        if (!IsGitObjectId(original.Baseline.Commit))
+        {
+            return ReplayRun.Failed(
+                ExecutionReplayOutcome.Failed,
+                "Authenticated baseline commit is not a valid Git object ID.");
+        }
+
+        var baselineExists = await _processRunner.RunAsync(new ProcessExecutionRequest
+        {
+            FileName = "git",
+            Arguments = ["cat-file", "-e", $"{original.Baseline.Commit}^{{commit}}"],
+            WorkingDirectory = repositoryPath,
+            Timeout = TimeSpan.FromSeconds(30)
+        }, cancellationToken);
+        if (!baselineExists.Succeeded)
+        {
+            return ReplayRun.Failed(
+                ExecutionReplayOutcome.BaselineUnavailable,
+                $"Baseline commit '{original.Baseline.Commit}' is unavailable in the requested repository.");
+        }
+
+        var persistedBaseline = new BaselineSnapshot
+        {
+            Commit = original.Baseline.Commit,
+            Branch = original.Baseline.Branch,
+            GitStatus = string.Empty,
+            RepositoryPath = repositoryPath,
+            CapturedAt = original.Baseline.CapturedAt
+        };
+        await using var workspace = await _workspaceManager.CreateWorkspaceAsync(
+            persistedBaseline,
+            cancellationToken);
+        var stagedProcessRunner = await _stagedProcessRunnerFactory.CreateAsync(
+            workspace.Path,
+            ReplayExecutionProfile(original),
+            cancellationToken);
+
+        var baselineCommands = new List<ExecutionCommandEvidence>();
+        var baselineContext = CreateContext(
+            original,
+            workspace.Path,
+            original.CandidateChangeSet,
+            baselineCommands,
+            "baseline");
+        await ToolVersionProbe.CaptureAsync(
+            stagedProcessRunner,
+            baselineContext,
+            cancellationToken);
+        RepositorySnapshot? replaySnapshot = null;
+        RepositorySnapshotDiff? repositorySnapshotDiff = null;
+        CSharpSymbolGraph? replaySymbolGraph = null;
+        if (original.RepositorySnapshot is not null)
+        {
+            replaySnapshot = await _repositorySnapshotBuilder.BuildAsync(
+                workspace.Path,
+                original.Baseline.Commit,
+                original.TaskContract,
+                baselineCommands,
+                cancellationToken);
+            repositorySnapshotDiff = RepositorySnapshotComparer.Compare(
+                original.RepositorySnapshot,
+                replaySnapshot);
+        }
+        if (original.CSharpSymbolGraph is not null && replaySnapshot is not null)
+        {
+            replaySymbolGraph = await _symbolGraphBuilder.BuildAsync(
+                workspace.Path,
+                replaySnapshot,
+                original.CSharpSymbolGraph.Limits,
+                cancellationToken);
+        }
+        var baselineResults = await VerifyBaselineAsync(
+            stagedProcessRunner,
+            baselineContext,
+            cancellationToken);
+
+        var patchApplied = await ApplyAuthenticatedDiffAsync(
+            workspace.Path,
+            original.CandidateChangeSet.Diff,
+            cancellationToken);
+        if (!patchApplied.Succeeded)
+        {
+            var baselineComparisons = CompareGates(
+                "baseline",
+                original.BaselineVerificationResults,
+                baselineResults,
+                SupportedBaselineGates(original.TaskContract));
+            return new ReplayRun
+            {
+                Outcome = ExecutionReplayOutcome.CandidateDivergence,
+                Message = $"Authenticated diff could not be applied to its baseline: " +
+                    FormatFailure(patchApplied),
+                Tools = CompareTools(original.BaselineCommands, baselineCommands),
+                Commands = CompareCommands(
+                    "baseline",
+                    NonProbeCommands(original.BaselineCommands),
+                    NonProbeCommands(baselineCommands)).ToList(),
+                Gates = baselineComparisons.ToList(),
+                ActualRepositorySnapshotHash = replaySnapshot?.SnapshotHash,
+                RepositorySnapshotDiff = repositorySnapshotDiff,
+                ActualCSharpSymbolGraphHash = replaySymbolGraph?.GraphHash
+            };
+        }
+
+        var candidate = await _workspaceManager.CreateCandidateAsync(
+            workspace,
+            original.TaskContract.Id,
+            original.AgentRun.Id.ToString("N"),
+            cancellationToken);
+        var candidateMatches = CandidateEquals(original.CandidateChangeSet, candidate);
+
+        var candidateCommands = new List<ExecutionCommandEvidence>();
+        var candidateContext = CreateContext(
+            original,
+            workspace.Path,
+            candidate,
+            candidateCommands,
+            "candidate");
+        var acceptanceCriteria = new List<AcceptanceCriterionResult>();
+        var candidateResults = await VerifyCandidateAsync(
+            stagedProcessRunner,
+            candidateContext,
+            replaySnapshot,
+            replaySymbolGraph,
+            baselineCommands,
+            HistoricalDecisionSelector.FromEvidence(
+                original.VerificationResults.FirstOrDefault(result => result.Verifier ==
+                    "EB005-HistoricalConflict")?.Historical,
+                DateTime.UtcNow),
+            BaselineSecurityFingerprints(baselineResults),
+            acceptanceCriteria,
+            cancellationToken);
+
+        var tools = CompareTools(original.BaselineCommands, baselineCommands);
+        var commands = CompareCommands(
+                "baseline",
+                NonProbeCommands(original.BaselineCommands),
+                NonProbeCommands(baselineCommands))
+            .Concat(CompareCommands(
+                "candidate",
+                original.CandidateCommands,
+                candidateCommands))
+            .ToList();
+        var gates = CompareGates(
+                "baseline",
+                original.BaselineVerificationResults,
+                baselineResults,
+                SupportedBaselineGates(original.TaskContract))
+            .Concat(CompareGates(
+                "candidate",
+                original.VerificationResults,
+                candidateResults,
+                SupportedCandidateGates,
+                original.FinalDecision.RequiredVerifiers))
+            .ToList();
+        var acceptanceMatches = AcceptanceEquals(
+            original.AcceptanceCriteriaResults,
+            acceptanceCriteria);
+        var repositorySnapshotMatches = original.RepositorySnapshot is null ||
+            string.Equals(
+                original.RepositorySnapshot.SnapshotHash,
+                replaySnapshot?.SnapshotHash,
+                StringComparison.Ordinal);
+        var symbolGraphMatches = original.CSharpSymbolGraph is null ||
+            string.Equals(
+                original.CSharpSymbolGraph.GraphHash,
+                replaySymbolGraph?.GraphHash,
+                StringComparison.Ordinal);
+
+        ExecutionReplayOutcome outcome;
+        string message;
+        if (!candidateMatches)
+        {
+            outcome = ExecutionReplayOutcome.CandidateDivergence;
+            message = "Reconstructed candidate differs from the authenticated candidate hash or file set.";
+        }
+        else if (!repositorySnapshotMatches)
+        {
+            outcome = ExecutionReplayOutcome.EnvironmentDivergence;
+            message = "The baseline repository snapshot diverged from the authenticated inventory.";
+        }
+        else if (!symbolGraphMatches)
+        {
+            outcome = ExecutionReplayOutcome.EnvironmentDivergence;
+            message = "The baseline C# symbol graph diverged from the authenticated semantic graph.";
+        }
+        else if (tools.Any(item => item.Status == ReplayComparisonStatus.Missing) ||
+                 gates.Any(item => item.Status is ReplayComparisonStatus.NotReproducible or
+                     ReplayComparisonStatus.Missing))
+        {
+            outcome = ExecutionReplayOutcome.GateNotReproducible;
+            message = "One or more original tools or gates cannot be reproduced by this runtime.";
+        }
+        else if (tools.Any(item => item.Status == ReplayComparisonStatus.Diverged) ||
+                 commands.Any(item => item.Definition != ReplayComparisonStatus.Match ||
+                     item.Result != ReplayComparisonStatus.Match) ||
+                 gates.Any(item => item.Status != ReplayComparisonStatus.Match) ||
+                 !acceptanceMatches)
+        {
+            outcome = ExecutionReplayOutcome.EnvironmentDivergence;
+            message = "The candidate is identical, but tools, command results, gates, or acceptance artifacts diverged.";
+        }
+        else
+        {
+            outcome = ExecutionReplayOutcome.Reproduced;
+            message = "Candidate, repository snapshot, C# symbol graph, tool versions, commands, " +
+                "gates, and acceptance artifacts were reproduced.";
+        }
+
+        return new ReplayRun
+        {
+            Outcome = outcome,
+            Message = message,
+            ActualDiffHash = candidate.DiffHash,
+            Tools = tools,
+            Commands = commands,
+            Gates = gates,
+            AcceptanceCriteria = acceptanceCriteria,
+            ActualRepositorySnapshotHash = replaySnapshot?.SnapshotHash,
+            RepositorySnapshotDiff = repositorySnapshotDiff,
+            ActualCSharpSymbolGraphHash = replaySymbolGraph?.GraphHash
+        };
+    }
+
+    private static VerificationContext CreateContext(
+        ExecutionEvidence original,
+        string workspacePath,
+        CandidateChangeSet candidate,
+        List<ExecutionCommandEvidence> commands,
+        string phase) => new()
+        {
+            TaskId = original.TaskContract.Id,
+            AgentRunId = original.AgentRun.Id.ToString("N"),
+            RepoPath = workspacePath,
+            Contract = original.TaskContract,
+            AgentResult = original.AgentResult,
+            CandidateChangeSet = candidate,
+            CommandEvidence = commands,
+            Phase = phase
+        };
+
+    private static RepositoryExecutionProfile ReplayExecutionProfile(
+        ExecutionEvidence original)
+    {
+        var profile = original.TaskContract.Execution;
+        var commands = original.BaselineCommands.Concat(original.CandidateCommands).ToList();
+        var capabilityAware = commands.Any(command =>
+            command.Environment?.Capabilities is not null);
+        if (capabilityAware)
+        {
+            return profile;
+        }
+
+        var runtime = profile.Runtime;
+        if (runtime is null && commands.All(command => command.Environment is null))
+            runtime = RepositoryExecutionProfile.HostRuntime;
+
+        // Capability-unaware evidence is replayed under its authenticated legacy
+        // boundary; new executions can never select this compatibility policy.
+        return new RepositoryExecutionProfile
+        {
+            WorkingDirectory = profile.WorkingDirectory,
+            Target = profile.Target,
+            Runtime = runtime,
+            Sandbox = profile.Sandbox,
+            TestSuites = profile.TestSuites,
+            RepositorySnapshot = profile.RepositorySnapshot,
+            Capabilities = ExecutionCapabilityPolicy.LegacyCompatibility(
+                profile.Sandbox?.NetworkAccess == true)
+        };
+    }
+
+    private async Task<List<VerificationResult>> VerifyBaselineAsync(
+        IProcessRunner stagedProcessRunner,
+        VerificationContext context,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<VerificationResult>();
+        if (context.Contract.Verification.Build)
+        {
+            results.Add(await RunVerifierAsync(
+                new BuildVerifier(stagedProcessRunner),
+                context,
+                cancellationToken));
+        }
+
+        var buildPassed = results
+            .Where(item => item.Verifier == "Build")
+            .All(item => item.Status == VerificationStatus.Pass);
+        if (context.Contract.Execution.TestSuites is null &&
+            (context.Contract.Verification.UnitTests ||
+             context.Contract.Verification.IntegrationTests))
+        {
+            results.Add(buildPassed
+                ? await RunVerifierAsync(
+                    new TestVerifier(stagedProcessRunner),
+                    context,
+                    cancellationToken)
+                : Skipped(context.AgentRunId, "Tests", "Baseline build prerequisite failed"));
+        }
+        else if (context.Contract.Execution.TestSuites is not null)
+        {
+            foreach (var suite in context.Contract.Execution.TestSuites.EnabledSuites)
+            {
+                results.Add(buildPassed
+                    ? await RunVerifierAsync(
+                        new TestSuiteVerifier(
+                            stagedProcessRunner,
+                            suite.Category,
+                            suite.Profile),
+                        context,
+                        cancellationToken)
+                    : Skipped(
+                        context.AgentRunId,
+                        TestSuiteVerifier.NameFor(suite.Category),
+                        "Baseline build prerequisite failed"));
+            }
+        }
+
+        if (context.Contract.Verification.SecurityScan)
+        {
+            results.Add(buildPassed
+                ? await RunVerifierAsync(
+                    new SecurityScanVerifier(
+                        stagedProcessRunner,
+                        _securityScanners,
+                        isBaseline: true),
+                    context,
+                    cancellationToken)
+                : Skipped(
+                    context.AgentRunId,
+                    SecurityScanVerifier.VerifierName,
+                    "Baseline build prerequisite failed"));
+        }
+
+        return results;
+    }
+
+    private async Task<List<VerificationResult>> VerifyCandidateAsync(
+        IProcessRunner stagedProcessRunner,
+        VerificationContext context,
+        RepositorySnapshot? baselineSnapshot,
+        CSharpSymbolGraph? baselineGraph,
+        IReadOnlyCollection<ExecutionCommandEvidence> baselineCommands,
+        HistoricalDecisionSelection historicalSelection,
+        IReadOnlySet<string> baselineSecurityFingerprints,
+        List<AcceptanceCriterionResult> acceptanceCriteria,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<VerificationResult>();
+        IVerifier[] prerequisites =
+        [
+            new AgentSuccessVerifier(),
+            new FileApplicationVerifier(new FileApplicatorResult { Success = true }),
+            new CandidateChangeVerifier(),
+            new ScopeVerifier(),
+            new BudgetVerifier()
+        ];
+        foreach (var verifier in prerequisites)
+            results.Add(await RunVerifierAsync(verifier, context, cancellationToken));
+
+        var prerequisitesPassed = results.All(item => item.Status == VerificationStatus.Pass);
+        if (context.Contract.Verification.Build)
+        {
+            results.Add(prerequisitesPassed
+                ? await RunVerifierAsync(
+                    new BuildVerifier(stagedProcessRunner),
+                    context,
+                    cancellationToken)
+                : Skipped(context.AgentRunId, "Build", "Trust-boundary prerequisite failed"));
+        }
+
+        var buildPassed = results
+            .Where(item => item.Verifier == "Build")
+            .All(item => item.Status == VerificationStatus.Pass);
+        if (context.Contract.Execution.TestSuites is null &&
+            (context.Contract.Verification.UnitTests ||
+             context.Contract.Verification.IntegrationTests))
+        {
+            results.Add(prerequisitesPassed && buildPassed
+                ? await RunVerifierAsync(
+                    new TestVerifier(stagedProcessRunner),
+                    context,
+                    cancellationToken)
+                : Skipped(context.AgentRunId, "Tests", "Trust-boundary or build prerequisite failed"));
+        }
+        else if (context.Contract.Execution.TestSuites is not null)
+        {
+            foreach (var suite in context.Contract.Execution.TestSuites.EnabledSuites)
+            {
+                results.Add(prerequisitesPassed && buildPassed
+                    ? await RunVerifierAsync(
+                        new TestSuiteVerifier(
+                            stagedProcessRunner,
+                            suite.Category,
+                            suite.Profile),
+                        context,
+                        cancellationToken)
+                    : Skipped(
+                        context.AgentRunId,
+                        TestSuiteVerifier.NameFor(suite.Category),
+                        "Trust-boundary or build prerequisite failed"));
+            }
+        }
+
+        if (context.Contract.Verification.SecurityScan)
+        {
+            results.Add(prerequisitesPassed && buildPassed
+                ? await RunVerifierAsync(
+                    new SecurityScanVerifier(
+                        stagedProcessRunner,
+                        _securityScanners,
+                        baselineSecurityFingerprints),
+                    context,
+                    cancellationToken)
+                : Skipped(
+                    context.AgentRunId,
+                    SecurityScanVerifier.VerifierName,
+                    "Trust-boundary or build prerequisite failed"));
+        }
+
+        if (prerequisitesPassed && buildPassed)
+        {
+            var semanticContext = baselineSnapshot is not null && baselineGraph is not null
+                ? await SemanticVerificationContextFactory.CreateAsync(
+                    context,
+                    baselineSnapshot,
+                    baselineGraph,
+                    baselineCommands,
+                    _repositorySnapshotBuilder,
+                    _symbolGraphBuilder,
+                    cancellationToken)
+                : SemanticVerificationContextFactory.CreateError(
+                    context,
+                    baselineSnapshot,
+                    baselineGraph,
+                    "Authenticated replay has no baseline semantic snapshot.");
+            IVerifier[] semanticVerifiers =
+            [
+                new EB001Verifier(), new EB002Verifier(), new EB003Verifier(),
+                new EB004Verifier()
+            ];
+            foreach (var verifier in semanticVerifiers)
+                results.Add(await RunVerifierAsync(verifier, semanticContext, cancellationToken));
+            results.Add(await RunVerifierAsync(
+                new EB005Verifier(historicalSelection),
+                semanticContext,
+                cancellationToken));
+        }
+
+        if (AcceptanceCriteriaVerifier.GetEffectiveCriteria(context.Contract).Count > 0)
+        {
+            var acceptance = await new AcceptanceCriteriaVerifier(stagedProcessRunner).VerifyAsync(
+                context,
+                results,
+                prerequisitesPassed && buildPassed,
+                cancellationToken);
+            acceptanceCriteria.AddRange(acceptance.Criteria);
+            results.Add(acceptance.AggregateResult);
+        }
+
+        return results;
+    }
+
+    private static async Task<VerificationResult> RunVerifierAsync(
+        IVerifier verifier,
+        VerificationContext context,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await verifier.VerifyAsync(context, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return new VerificationResult
+            {
+                AgentRunId = context.AgentRunId,
+                Verifier = verifier.Name,
+                Status = VerificationStatus.Error,
+                Severity = Severity.Critical,
+                Message = $"Verifier threw an exception: {ex.Message}"
+            };
+        }
+    }
+
+    private async Task<ProcessExecutionResult> ApplyAuthenticatedDiffAsync(
+        string workspacePath,
+        string diff,
+        CancellationToken cancellationToken)
+    {
+        var patchPath = Path.Combine(
+            Path.GetTempPath(),
+            $"aecs-replay-{Guid.NewGuid():N}.patch");
+        try
+        {
+            await File.WriteAllTextAsync(patchPath, diff, cancellationToken);
+            return await _processRunner.RunAsync(new ProcessExecutionRequest
+            {
+                FileName = "git",
+                Arguments = ["apply", "--index", "--binary", "--whitespace=nowarn", "--", patchPath],
+                WorkingDirectory = workspacePath,
+                Timeout = TimeSpan.FromMinutes(2)
+            }, cancellationToken);
+        }
+        finally
+        {
+            if (File.Exists(patchPath))
+                File.Delete(patchPath);
+        }
+    }
+
+    private static List<ReplayToolComparison> CompareTools(
+        IReadOnlyList<ExecutionCommandEvidence> expectedCommands,
+        IReadOnlyList<ExecutionCommandEvidence> actualCommands)
+    {
+        var expected = expectedCommands.Where(ToolVersionProbe.IsProbe).ToList();
+        var actual = actualCommands.Where(ToolVersionProbe.IsProbe).ToList();
+        var tools = new[] { "git", "dotnet" };
+        return tools.Select(tool =>
+        {
+            var expectedMatches = expected.Where(item =>
+                string.Equals(item.FileName, tool, StringComparison.OrdinalIgnoreCase)).ToList();
+            var actualMatches = actual.Where(item =>
+                string.Equals(item.FileName, tool, StringComparison.OrdinalIgnoreCase)).ToList();
+            var expectedProbe = expectedMatches.Count == 1 ? expectedMatches[0] : null;
+            var actualProbe = actualMatches.Count == 1 ? actualMatches[0] : null;
+            var expectedVersion = VersionOutput(expectedProbe);
+            var actualVersion = VersionOutput(actualProbe);
+            var status = !SuccessfulProbe(expectedProbe) || !SuccessfulProbe(actualProbe)
+                ? ReplayComparisonStatus.Missing
+                : string.Equals(expectedVersion, actualVersion, StringComparison.Ordinal) &&
+                  EnvironmentEquals(expectedProbe!, actualProbe!)
+                    ? ReplayComparisonStatus.Match
+                    : ReplayComparisonStatus.Diverged;
+            return new ReplayToolComparison
+            {
+                Tool = tool,
+                Status = status,
+                ExpectedVersion = expectedVersion,
+                ActualVersion = actualVersion
+            };
+        }).ToList();
+    }
+
+    private static bool SuccessfulProbe(ExecutionCommandEvidence? command) =>
+        command is not null && command.ExitCode == 0 && !command.TimedOut && !command.Cancelled;
+
+    private static IEnumerable<ReplayCommandComparison> CompareCommands(
+        string phase,
+        IReadOnlyList<ExecutionCommandEvidence> expected,
+        IReadOnlyList<ExecutionCommandEvidence> actual)
+    {
+        var count = Math.Max(expected.Count, actual.Count);
+        for (var index = 0; index < count; index++)
+        {
+            var expectedCommand = index < expected.Count ? expected[index] : null;
+            var actualCommand = index < actual.Count ? actual[index] : null;
+            var definition = expectedCommand is null || actualCommand is null
+                ? ReplayComparisonStatus.Missing
+                : CommandDefinitionEquals(expectedCommand, actualCommand)
+                    ? ReplayComparisonStatus.Match
+                    : ReplayComparisonStatus.Diverged;
+            var result = expectedCommand is null || actualCommand is null
+                ? ReplayComparisonStatus.Missing
+                : CommandResultEquals(expectedCommand, actualCommand)
+                    ? ReplayComparisonStatus.Match
+                    : ReplayComparisonStatus.Diverged;
+            var command = actualCommand ?? expectedCommand!;
+            yield return new ReplayCommandComparison
+            {
+                Phase = phase,
+                FileName = command.FileName,
+                Arguments = command.Arguments,
+                Definition = definition,
+                Result = result,
+                ExpectedExitCode = expectedCommand?.ExitCode,
+                ActualExitCode = actualCommand?.ExitCode,
+                Message = definition == ReplayComparisonStatus.Match &&
+                    result == ReplayComparisonStatus.Match
+                    ? "Command definition and result matched."
+                    : "Command definition or result diverged."
+            };
+        }
+    }
+
+    private static IEnumerable<ReplayGateComparison> CompareGates(
+        string phase,
+        IReadOnlyList<VerificationResult> expected,
+        IReadOnlyList<VerificationResult> actual,
+        IReadOnlySet<string> supported,
+        IEnumerable<string>? required = null)
+    {
+        var names = expected.Select(item => item.Verifier)
+            .Concat(actual.Select(item => item.Verifier))
+            .Concat(required ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names)
+        {
+            var expectedMatches = expected.Where(item => string.Equals(
+                item.Verifier,
+                name,
+                StringComparison.OrdinalIgnoreCase)).ToList();
+            var actualMatches = actual.Where(item => string.Equals(
+                item.Verifier,
+                name,
+                StringComparison.OrdinalIgnoreCase)).ToList();
+            ReplayComparisonStatus status;
+            if (!supported.Contains(name))
+                status = ReplayComparisonStatus.NotReproducible;
+            else if (expectedMatches.Count != 1 || actualMatches.Count != 1)
+                status = ReplayComparisonStatus.Missing;
+            else
+                status = GateResultsEqual(expectedMatches[0], actualMatches[0])
+                    ? ReplayComparisonStatus.Match
+                    : ReplayComparisonStatus.Diverged;
+
+            yield return new ReplayGateComparison
+            {
+                Gate = $"{phase}:{name}",
+                Status = status,
+                Expected = expectedMatches.Count == 1
+                    ? expectedMatches[0].Status.ToString()
+                    : "missing-or-ambiguous",
+                Actual = actualMatches.Count == 1
+                    ? actualMatches[0].Status.ToString()
+                    : "missing-or-ambiguous",
+                Message = status switch
+                {
+                    ReplayComparisonStatus.Match => "Gate status matched.",
+                    ReplayComparisonStatus.NotReproducible => "Gate is not implemented by the replay runtime.",
+                    ReplayComparisonStatus.Missing => "Gate result is missing or ambiguous.",
+                    _ => "Gate status diverged."
+                }
+            };
+        }
+    }
+
+    private static bool GateResultsEqual(VerificationResult expected, VerificationResult actual)
+    {
+        if (expected.Status != actual.Status)
+            return false;
+        if (expected.TestSuite is not null)
+        {
+            return actual.TestSuite is not null &&
+                TestSuiteEvidenceEquals(expected.TestSuite, actual.TestSuite);
+        }
+        if (expected.Historical is not null)
+        {
+            return actual.Historical is not null &&
+                JsonSerializer.Serialize(expected.Historical) ==
+                JsonSerializer.Serialize(actual.Historical);
+        }
+        if (expected.SecurityScan is null)
+            return true;
+        return actual.SecurityScan is not null &&
+            JsonSerializer.Serialize(expected.SecurityScan) ==
+            JsonSerializer.Serialize(actual.SecurityScan);
+    }
+
+    private static bool TestSuiteEvidenceEquals(
+        TestSuiteEvidence expected,
+        TestSuiteEvidence actual) =>
+        expected.SchemaVersion == actual.SchemaVersion &&
+        expected.ProfileVersion == actual.ProfileVersion &&
+        expected.Category == actual.Category &&
+        expected.Mode == actual.Mode &&
+        expected.Target == actual.Target &&
+        expected.Arguments.SequenceEqual(actual.Arguments, StringComparer.Ordinal) &&
+        expected.DiscoveryCompleted == actual.DiscoveryCompleted &&
+        expected.Discovered == actual.Discovered &&
+        expected.Executed == actual.Executed &&
+        expected.Passed == actual.Passed &&
+        expected.Failed == actual.Failed &&
+        expected.Skipped == actual.Skipped;
+
+    private static IReadOnlySet<string> SupportedBaselineGates(TaskContract contract)
+    {
+        var gates = new HashSet<string>(["Build"], StringComparer.OrdinalIgnoreCase);
+        if (contract.Execution.TestSuites is null)
+        {
+            gates.Add("Tests");
+        }
+        else
+        {
+            foreach (var suite in contract.Execution.TestSuites.EnabledSuites)
+                gates.Add(TestSuiteVerifier.NameFor(suite.Category));
+        }
+        if (contract.Verification.SecurityScan)
+            gates.Add(SecurityScanVerifier.VerifierName);
+        return gates;
+    }
+
+    private static IReadOnlySet<string> BaselineSecurityFingerprints(
+        IEnumerable<VerificationResult> results) => results
+        .Where(result => result.Verifier == SecurityScanVerifier.VerifierName)
+        .SelectMany(result => result.SecurityScan?.Findings ?? [])
+        .Where(finding => finding.Disposition != SecurityFindingDisposition.Suppressed)
+        .Select(finding => finding.Fingerprint)
+        .ToHashSet(StringComparer.Ordinal);
+
+    private static bool AcceptanceEquals(
+        IReadOnlyList<AcceptanceCriterionResult> expected,
+        IReadOnlyList<AcceptanceCriterionResult> actual)
+    {
+        if (expected.Count != actual.Count)
+            return false;
+        for (var index = 0; index < expected.Count; index++)
+        {
+            var left = expected[index];
+            var right = actual[index];
+            if (!string.Equals(left.CriterionId, right.CriterionId, StringComparison.Ordinal) ||
+                left.Status != right.Status ||
+                left.EvidenceType != right.EvidenceType ||
+                !string.Equals(left.EvidenceReference, right.EvidenceReference, StringComparison.Ordinal) ||
+                !string.Equals(left.TestPath, right.TestPath, StringComparison.OrdinalIgnoreCase) ||
+                !NormalizeReferences(left.EvidenceReferences).SequenceEqual(
+                    NormalizeReferences(right.EvidenceReferences),
+                    StringComparer.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static IEnumerable<string> NormalizeReferences(IEnumerable<string> references) =>
+        references.Select(reference =>
+            reference.StartsWith("execution-command:", StringComparison.OrdinalIgnoreCase)
+                ? "execution-command:*"
+                : reference.StartsWith("verification-result:", StringComparison.OrdinalIgnoreCase)
+                    ? "verification-result:*"
+                    : reference);
+
+    private static bool CandidateEquals(CandidateChangeSet expected, CandidateChangeSet actual) =>
+        string.Equals(expected.DiffHash, actual.DiffHash, StringComparison.Ordinal) &&
+        expected.ChangedFiles.SequenceEqual(actual.ChangedFiles, StringComparer.OrdinalIgnoreCase);
+
+    private static bool CommandDefinitionEquals(
+        ExecutionCommandEvidence expected,
+        ExecutionCommandEvidence actual) =>
+        string.Equals(expected.FileName, actual.FileName, StringComparison.OrdinalIgnoreCase) &&
+        expected.Arguments.SequenceEqual(actual.Arguments, StringComparer.Ordinal) &&
+        string.Equals(
+            NormalizeWorkingDirectory(expected.WorkingDirectory),
+            NormalizeWorkingDirectory(actual.WorkingDirectory),
+            StringComparison.OrdinalIgnoreCase) &&
+        EnvironmentEquals(expected, actual);
+
+    private static bool EnvironmentEquals(
+        ExecutionCommandEvidence expected,
+        ExecutionCommandEvidence actual)
+    {
+        // Legacy authenticated commands did not carry environment metadata.
+        if (expected.Environment is null)
+            return true;
+        var left = expected.Environment;
+        var right = actual.Environment;
+        return right is not null &&
+            left.Runtime == right.Runtime &&
+            left.RuntimeVersion == right.RuntimeVersion &&
+            left.Image == right.Image &&
+            left.ImageDigest == right.ImageDigest &&
+            left.NetworkMode == right.NetworkMode &&
+            left.CpuLimit == right.CpuLimit &&
+            left.MemoryLimit == right.MemoryLimit &&
+            left.ProcessLimit == right.ProcessLimit &&
+            left.WorkspaceMount == right.WorkspaceMount &&
+            left.DevelopmentHostOverride == right.DevelopmentHostOverride &&
+            CapabilityEnvironmentEquals(left.Capabilities, right.Capabilities);
+    }
+
+    private static bool CapabilityEnvironmentEquals(
+        ExecutionCapabilityEvidence? expected,
+        ExecutionCapabilityEvidence? actual)
+    {
+        if (expected is null)
+            return true;
+        return actual is not null &&
+            expected.PolicyVersion == actual.PolicyVersion &&
+            expected.Authority == actual.Authority &&
+            expected.PolicyHash == actual.PolicyHash &&
+            expected.Phase == actual.Phase &&
+            expected.Granted.SequenceEqual(actual.Granted, StringComparer.Ordinal) &&
+            expected.Denied.SequenceEqual(actual.Denied, StringComparer.Ordinal) &&
+            expected.InjectedSecrets.SequenceEqual(actual.InjectedSecrets, StringComparer.Ordinal);
+    }
+
+    private static bool CommandResultEquals(
+        ExecutionCommandEvidence expected,
+        ExecutionCommandEvidence actual) =>
+        expected.ExitCode == actual.ExitCode &&
+        expected.TimedOut == actual.TimedOut &&
+        expected.Cancelled == actual.Cancelled;
+
+    private static IReadOnlyList<ExecutionCommandEvidence> NonProbeCommands(
+        IReadOnlyList<ExecutionCommandEvidence> commands) =>
+        commands.Where(command => !ToolVersionProbe.IsProbe(command)).ToList();
+
+    private static string VersionOutput(ExecutionCommandEvidence? command) => command is null
+        ? string.Empty
+        : string.Join('\n', new[] { command.StandardOutput, command.StandardError }
+            .Where(value => !string.IsNullOrWhiteSpace(value)))
+            .Trim()
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    private static string NormalizeWorkingDirectory(string path) =>
+        string.IsNullOrWhiteSpace(path) ? "." : path.Replace('\\', '/').TrimEnd('/');
+
+    private static VerificationResult Skipped(
+        string agentRunId,
+        string verifier,
+        string reason) => new()
+        {
+            AgentRunId = agentRunId,
+            Verifier = verifier,
+            Status = VerificationStatus.Skip,
+            Severity = Severity.Warning,
+            Message = reason
+        };
+
+    private static bool PathsEqual(string left, string right) => string.Equals(
+        Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static bool IsGitObjectId(string value) =>
+        value.Length is 40 or 64 && value.All(Uri.IsHexDigit);
+
+    private static string FormatFailure(ProcessExecutionResult result)
+    {
+        if (result.TimedOut)
+            return "command timed out";
+        if (result.Cancelled)
+            return "command was cancelled";
+        return $"exit code {result.ExitCode}: {result.StandardError.Trim()}";
+    }
+
+    private sealed class ReplayRun
+    {
+        public ExecutionReplayOutcome Outcome { get; init; }
+        public string Message { get; init; } = string.Empty;
+        public string ActualDiffHash { get; init; } = string.Empty;
+        public List<ReplayToolComparison> Tools { get; init; } = [];
+        public List<ReplayCommandComparison> Commands { get; init; } = [];
+        public List<ReplayGateComparison> Gates { get; init; } = [];
+        public List<AcceptanceCriterionResult> AcceptanceCriteria { get; init; } = [];
+        public string? ActualRepositorySnapshotHash { get; init; }
+        public RepositorySnapshotDiff? RepositorySnapshotDiff { get; init; }
+        public string? ActualCSharpSymbolGraphHash { get; init; }
+
+        public static ReplayRun Failed(ExecutionReplayOutcome outcome, string message) => new()
+        {
+            Outcome = outcome,
+            Message = message
+        };
+    }
+}

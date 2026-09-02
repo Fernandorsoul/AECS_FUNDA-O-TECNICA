@@ -8,15 +8,43 @@ public class FallbackAdapter : IAgentAdapter
     private readonly IAgentAdapter _primary;
     private readonly IAgentAdapter _fallback;
     private readonly Func<AgentRunResult, bool> _shouldFallback;
+    private readonly Func<AgentExecutionRequest, bool> _authorizeFallback;
 
     public FallbackAdapter(
         IAgentAdapter primary,
         IAgentAdapter fallback,
-        Func<AgentRunResult, bool>? shouldFallback = null)
+        Func<AgentRunResult, bool>? shouldFallback = null,
+        Func<AgentExecutionRequest, bool>? authorizeFallback = null)
     {
         _primary = primary;
         _fallback = fallback;
         _shouldFallback = shouldFallback ?? DefaultShouldFallback;
+        _authorizeFallback = authorizeFallback ?? (_ => true);
+    }
+
+    public AgentContextProfile GetContextProfile(AgentExecutionRequest request)
+    {
+        var primary = _primary.GetContextProfile(request);
+        if (!_authorizeFallback(request))
+            return primary;
+        var fallback = _fallback.GetContextProfile(request);
+        return new AgentContextProfile
+        {
+            Adapter = $"{nameof(FallbackAdapter)}({primary.Adapter},{fallback.Adapter})",
+            Model = $"{primary.Model}|{fallback.Model}",
+            TokenizerId = primary.TokenizerId == fallback.TokenizerId
+                ? primary.TokenizerId
+                : ConservativeTokenCounter.Id,
+            ContextWindowTokens = Math.Min(
+                primary.ContextWindowTokens,
+                fallback.ContextWindowTokens),
+            ReservedOutputTokens = Math.Max(
+                primary.ReservedOutputTokens,
+                fallback.ReservedOutputTokens),
+            PromptOverheadTokens = Math.Max(
+                primary.PromptOverheadTokens,
+                fallback.PromptOverheadTokens)
+        };
     }
 
     public async Task<AgentRunResult> ExecuteAsync(
@@ -26,13 +54,35 @@ public class FallbackAdapter : IAgentAdapter
         // Try primary (local) first
         var result = await _primary.ExecuteAsync(request, cancellationToken);
 
-        if (!_shouldFallback(result))
+        if (!_shouldFallback(result) || IsHardStop(result, cancellationToken))
             return result;
+
+        if (!_authorizeFallback(request))
+            return BlockedByPolicy(result);
+
+        var remainingTokens = request.Budget.MaxTokens - result.InputTokens - result.OutputTokens;
+        var remainingCost = request.Budget.MaxCostUsd - result.EstimatedCost;
+        if (remainingTokens <= 0 || remainingCost < 0)
+        {
+            return Aggregate(
+                result,
+                new AgentRunResult
+                {
+                    Success = false,
+                    StdErr = "Fallback was blocked because the agent budget is exhausted",
+                    ExitCode = -1,
+                    ExitReason = "BudgetExceeded",
+                    FailureKind = AgentFailureKind.BudgetExceeded
+                },
+                AgentFailureKind.BudgetExceeded);
+        }
 
         // Primary failed or produced no useful output — try fallback (cloud)
         Console.WriteLine($"  [AECS] Local model failed ({result.ExitReason}). Falling back to cloud API...");
 
-        var fallbackResult = await _fallback.ExecuteAsync(request, cancellationToken);
+        var fallbackResult = await _fallback.ExecuteAsync(
+            WithBudget(request, remainingTokens, Math.Max(0m, remainingCost)),
+            cancellationToken);
 
         if (!fallbackResult.Success)
             Console.WriteLine($"  [AECS] Cloud API also failed: {fallbackResult.StdErr}");
@@ -41,26 +91,156 @@ public class FallbackAdapter : IAgentAdapter
         else
             Console.WriteLine($"  [AECS] Cloud API succeeded: {fallbackResult.FilesChanged.Count} file(s).");
 
-        // Mark as fallback execution
-        return new AgentRunResult
+        var aggregate = Aggregate(result, fallbackResult, fallbackResult.FailureKind);
+        if (aggregate.InputTokens + aggregate.OutputTokens > request.Budget.MaxTokens ||
+            aggregate.EstimatedCost > request.Budget.MaxCostUsd)
         {
-            Success = fallbackResult.Success,
-            StdOut = fallbackResult.StdOut,
-            StdErr = fallbackResult.StdErr,
-            ExitCode = fallbackResult.ExitCode,
-            Duration = result.Duration + fallbackResult.Duration,
-            InputTokens = result.InputTokens + fallbackResult.InputTokens,
-            OutputTokens = result.OutputTokens + fallbackResult.OutputTokens,
-            EstimatedCost = result.EstimatedCost + fallbackResult.EstimatedCost,
-            FilesChanged = fallbackResult.FilesChanged,
-            ExitReason = fallbackResult.Success ? "CompletedViaFallback" : fallbackResult.ExitReason
-        };
+            return new AgentRunResult
+            {
+                Success = false,
+                StdOut = aggregate.StdOut,
+                StdErr = "Fallback result exceeded the remaining token or cost budget",
+                ExitCode = -1,
+                Duration = aggregate.Duration,
+                InputTokens = aggregate.InputTokens,
+                OutputTokens = aggregate.OutputTokens,
+                EstimatedCost = aggregate.EstimatedCost,
+                UsageAccounting = aggregate.UsageAccounting,
+                FilesChanged = aggregate.FilesChanged,
+                ExitReason = "BudgetExceeded",
+                FailureKind = AgentFailureKind.BudgetExceeded
+            };
+        }
+
+        return aggregate;
     }
 
     private static bool DefaultShouldFallback(AgentRunResult result)
     {
         // FilesChanged is agent telemetry. Only the filesystem-derived
         // CandidateChangeSet can determine whether useful changes exist.
-        return !result.Success;
+        if (result.Success)
+            return false;
+        var kind = Classify(result);
+        return kind is AgentFailureKind.Transient or
+            AgentFailureKind.RateLimited or
+            AgentFailureKind.Timeout;
+    }
+
+    private static AgentRunResult BlockedByPolicy(AgentRunResult primary) => new()
+    {
+        Success = false,
+        StdOut = primary.StdOut,
+        StdErr = string.IsNullOrWhiteSpace(primary.StdErr)
+            ? "Cloud fallback was blocked by the effective runtime policy"
+            : primary.StdErr + "; cloud fallback was blocked by the effective runtime policy",
+        ExitCode = -1,
+        Duration = primary.Duration,
+        InputTokens = primary.InputTokens,
+        OutputTokens = primary.OutputTokens,
+        EstimatedCost = primary.EstimatedCost,
+        UsageAccounting = primary.UsageAccounting,
+        FilesChanged = primary.FilesChanged,
+        ExitReason = "FallbackPolicyBlocked",
+        FailureKind = AgentFailureKind.PolicyViolation,
+        RetryAfter = primary.RetryAfter
+    };
+
+    private static bool IsHardStop(
+        AgentRunResult result,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return true;
+        return Classify(result) is AgentFailureKind.Cancelled or
+            AgentFailureKind.Permanent or
+            AgentFailureKind.PolicyViolation or
+            AgentFailureKind.BudgetExceeded;
+    }
+
+    private static AgentFailureKind Classify(AgentRunResult result)
+    {
+        if (result.Success)
+            return AgentFailureKind.None;
+        if (result.FailureKind != AgentFailureKind.None)
+            return result.FailureKind;
+        if (result.ExitCode == 429)
+            return AgentFailureKind.RateLimited;
+        if (result.ExitCode == 408 || result.ExitCode is >= 500 and <= 599)
+            return AgentFailureKind.Transient;
+        if (result.ExitReason.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+            return AgentFailureKind.Timeout;
+        if (result.ExitReason.Contains("cancel", StringComparison.OrdinalIgnoreCase))
+            return AgentFailureKind.Cancelled;
+        if (result.ExitReason.Contains("connection", StringComparison.OrdinalIgnoreCase))
+            return AgentFailureKind.Transient;
+        return AgentFailureKind.Permanent;
+    }
+
+    private static AgentExecutionRequest WithBudget(
+        AgentExecutionRequest request,
+        int remainingTokens,
+        decimal remainingCost) => new()
+        {
+            TaskId = request.TaskId,
+            Objective = request.Objective,
+            AcceptanceCriteria = request.AcceptanceCriteria,
+            RepoPath = request.RepoPath,
+            Scope = request.Scope,
+            Budget = new ExecutionBudget
+            {
+                MaxTokens = remainingTokens,
+                MaxCostUsd = remainingCost,
+                MaxRetries = request.Budget.MaxRetries,
+                MaxDurationSeconds = request.Budget.MaxDurationSeconds,
+                MaxFilesChanged = request.Budget.MaxFilesChanged
+            },
+            Risk = request.Risk,
+            Model = request.Model,
+            CodeContext = request.CodeContext,
+            ContextPrompt = request.ContextPrompt
+        };
+
+    private static AgentRunResult Aggregate(
+        AgentRunResult primary,
+        AgentRunResult fallback,
+        AgentFailureKind failureKind)
+    {
+        var suppliedAccounting = new[]
+            {
+                primary.UsageAccounting,
+                fallback.UsageAccounting
+            };
+        var hasAccounting = suppliedAccounting.Any(accounting => accounting is not null);
+        var accountingComponents = hasAccounting
+            ? suppliedAccounting.Select((accounting, index) => accounting ??
+                new AgentUsageAccounting
+                {
+                    Adapter = nameof(FallbackAdapter),
+                    Model = index == 0 ? "unreported-primary" : "unreported-fallback",
+                    CostComplete = false
+                }).ToList()
+            : [];
+        return new AgentRunResult
+        {
+            Success = fallback.Success,
+            StdOut = fallback.StdOut,
+            StdErr = fallback.StdErr,
+            ExitCode = fallback.ExitCode,
+            Duration = primary.Duration + fallback.Duration,
+            InputTokens = primary.InputTokens + fallback.InputTokens,
+            OutputTokens = primary.OutputTokens + fallback.OutputTokens,
+            EstimatedCost = primary.EstimatedCost + fallback.EstimatedCost,
+            UsageAccounting = accountingComponents.Count == 0
+                ? null
+                : AgentUsageAccountingAggregation.Aggregate(
+                    nameof(FallbackAdapter),
+                    string.Join('|', accountingComponents.Select(item => item.Model)),
+                    accountingComponents),
+            FilesChanged = fallback.FilesChanged,
+            ExitReason = fallback.Success ? "CompletedViaFallback" : fallback.ExitReason,
+            FailureKind = fallback.Success ? AgentFailureKind.None : failureKind,
+            RetryAfter = fallback.RetryAfter
+        };
     }
 }

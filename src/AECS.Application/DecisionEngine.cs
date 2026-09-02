@@ -1,3 +1,4 @@
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 
@@ -46,6 +47,22 @@ public class DecisionEngine
                 failures.Add($"{result.Verifier}: {result.Status} - {result.Message}");
         }
 
+        if (contract.Verification.BlockCriticalSemanticFailures)
+        {
+            var criticalSemanticFailures = results.Where(result =>
+                result.Verifier.StartsWith("EB", StringComparison.OrdinalIgnoreCase) &&
+                result.Severity == Severity.Critical &&
+                result.Status != VerificationStatus.Pass);
+            foreach (var result in criticalSemanticFailures)
+            {
+                if (!requiredVerifiers.Contains(result.Verifier))
+                {
+                    failures.Add(
+                        $"{result.Verifier}: critical semantic policy blocked {result.Status} - {result.Message}");
+                }
+            }
+        }
+
         if (failures.Count > 0)
         {
             return new DecisionResult
@@ -89,8 +106,16 @@ public class DecisionEngine
         if (contract.Verification.Build)
             required.Add("Build");
 
-        if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
-            required.Add("Tests");
+        if (contract.Execution.TestSuites is null)
+        {
+            if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
+                required.Add("Tests");
+        }
+        else
+        {
+            foreach (var suite in contract.Execution.TestSuites.RequiredSuites)
+                required.Add(TestSuiteVerifier.NameFor(suite.Category));
+        }
 
         if (contract.Verification.Architecture)
             required.Add("EB001-Architecture");
@@ -98,8 +123,12 @@ public class DecisionEngine
         if (contract.Verification.SecurityScan)
             required.Add("SecurityScan");
 
-        // EB001-EB005 são verificadores semânticos informativos, não gates
-        // Eles podem ter falsos positivos e não devem bloquear automaticamente
+        if (contract.AcceptanceCriteria.Count > 0 || contract.AcceptanceRequirements.Count > 0)
+            required.Add(AcceptanceCriteriaVerifier.Name);
+
+        foreach (var verifier in contract.Verification.RequiredSemanticVerifiers)
+            required.Add(verifier);
+
         return required;
     }
 }

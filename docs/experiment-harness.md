@@ -1,0 +1,146 @@
+# Experiment Harness reproduzível
+
+O modo de dataset do comando `aecs experiment` executa uma matriz versionada de tarefas, variantes e repetições. Cada observação preserva a baseline Git resolvida, configuração solicitada, ambiente, resultado, falha individual e vínculo para a evidência autenticada da execução staged.
+
+O modo legado `--repo/--tasks` continua disponível para execuções exploratórias de uma passagem. Experimentos comparáveis devem usar `--dataset`.
+
+## Manifesto do dataset
+
+O schema geral é `aecs.experiment-dataset/v1`; o contrato controlado de contexto A/B usa
+`aecs.experiment-dataset/v2`. A identidade efetiva do dataset é o hash SHA-256 do manifesto
+mais a baseline resolvida. `HEAD` é aceito como referência portátil, mas é convertido para o
+commit exato antes do primeiro run; uma mudança posterior do HEAD invalida a retomada.
+
+```json
+{
+  "schemaVersion": "aecs.experiment-dataset/v1",
+  "id": "context-model-ab",
+  "version": "1.0.0",
+  "repository": {
+    "path": "repository",
+    "baseline": "HEAD"
+  },
+  "repetitions": 3,
+  "referenceVariantId": "control",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "contractPath": "tasks/task-001.yaml",
+      "expectedDecision": "Verified"
+    }
+  ],
+  "variants": [
+    {
+      "id": "control",
+      "provider": "Mock",
+      "model": "mock-control-v1",
+      "contextStrategy": "graph-ranked",
+      "context": {
+        "maxTokens": 12000,
+        "maxCharacters": 48000,
+        "maxFileCharacters": 16000,
+        "maxFileTokens": 4000,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": false,
+      "parameters": {}
+    }
+  ]
+}
+```
+
+O caminho do repositório é relativo ao manifesto; contratos são relativos ao repositório. Caminhos absolutos, traversal, IDs duplicados, propriedades JSON duplicadas, schemas desconhecidos e combinações inválidas falham antes de executar.
+
+Cada variante fixa:
+
+- provider `Mock`, `Local` ou `Cloud`;
+- identificador do modelo;
+- nome e limites da estratégia de contexto;
+- parâmetros suportados do provider;
+- seed inicial, quando o provider a aceita.
+
+Em v1, nomes históricos de estratégia continuam significando o compilador orientado ao grafo.
+Em v2, somente `naive-path-order` e `graph-ranked` são aceitos. A primeira variante ignora
+objetivo, símbolos e relações e inclui arquivos exclusivamente pela ordem ordinal dos caminhos;
+a segunda usa o ranqueamento semântico normal.
+
+## Protocolo A/B pré-registrado
+
+Um manifesto v2 exige exatamente duas variantes e o bloco `protocol`. O loader comprova antes
+da primeira chamada que provider, modelo, seed, parâmetros e todos os limites são idênticos.
+A referência deve ser `naive-path-order`, a candidata `graph-ranked`, e
+`tasks × repetitions` deve atingir `minimumPairedSamples`.
+
+O protocolo registra H1, métrica primária `vcc-per-estimated-cost`, confiança de 95%, efeito
+mínimo, taxa máxima de falhas e taxa máxima de violações de escopo. O benchmark canônico fica
+em [`experiments/context-compiler-h1`](../experiments/context-compiler-h1/README.md), com 30
+pares e provider real opt-in; ele não roda no smoke barato do CI.
+
+Seeds de variantes `Local` e `Cloud` são enviados ao Ollama/OpenAI-compatible provider. A repetição `n` usa `seed + n - 1`. O mock é determinístico e rejeita seed. Parâmetros desconhecidos falham, evitando configurações registradas mas não aplicadas.
+
+## Execução e isolamento
+
+```powershell
+aecs experiment `
+  --dataset .\dataset.json `
+  --output C:\aecs-results\context-model-ab `
+  --evidence-root C:\aecs-evidence `
+  --key-directory C:\aecs-keys
+```
+
+Um ledger posterior de cobrança pode ser aplicado com
+`--cost-reconciliation <ledger.json>`, inclusive junto de `--resume`, sem executar novamente o
+provider. O formato e as validações estão em [Contabilidade de custo, VCC e CPVC](cost-accounting.md).
+
+O diretório de saída deve ficar fora do repositório. Antes de cada repetição, o harness exige checkout limpo e o mesmo commit resolvido. O pipeline staged cria worktrees Git descartáveis e únicos para preflight/candidato; o resultado ainda exige `OriginalRepositoryUnchanged=true`. Assim, uma repetição nunca usa arquivos produzidos pela anterior.
+
+Variantes `Local` e `Cloud` precisam declarar `requiresRealProvider=true` e são registradas como `Skipped` até que `--include-real-providers` seja passado. Chaves continuam externas ao manifesto. Parâmetros atuais:
+
+| Provider | Parâmetros versionados |
+| --- | --- |
+| Mock | nenhum |
+| Local | `baseUrl`, `contextWindowTokens` |
+| Cloud | `baseUrl`, `contextWindowTokens`, `maxOutputTokens`, `temperature` |
+
+## Checkpoints e retomada
+
+Cada combinação `(datasetHash, task, variant, repetition)` recebe um `runKey` determinístico e um checkpoint imutável em `runs/<runKey>.json`. O checkpoint é gravado atomicamente somente depois do run terminar ou produzir uma falha/skip explícito.
+
+```powershell
+aecs experiment --dataset .\dataset.json --output C:\aecs-results\context-model-ab --resume
+```
+
+`--resume` carrega os mesmos run keys, não chama o provider novamente e não duplica resultados/evidências. Um output pertencente a outro hash de dataset é rejeitado. Sem `--resume`, reutilizar um output existente também é rejeitado.
+
+## Relatórios
+
+O output contém:
+
+- `session.json`: hash do dataset e início da sessão;
+- `runs/*.json`: checkpoints individuais, inclusive falhas e skips;
+- `report.json`: relatório normalizado `aecs.experiment-report/v3`, ambiente, análise, custo e comparações pareadas;
+- `results.csv`: uma linha por run, com modelo, contexto, seed, baseline, decisão e evidência;
+- `comparisons.csv`: uma linha por par e repetição, com deltas de VCC, first-pass, tokens,
+  custo estimado, latência, escopo e rework;
+- `analysis.csv`: uma linha por variante com amostra, taxas, custo e intervalos de confiança;
+- `cost-records.csv`: uso estimado/final, divergências, custo estimado/reconciliado e vínculo de
+  evidência por run;
+- `cost-efficiency.csv`: CPVC e incerteza geral, por modelo, risco, tarefa, estratégia e período.
+
+O pareamento é sempre feito dentro da mesma tarefa e repetição. Falha de uma variante não some da agregação: o par permanece com `bothCompleted=false` e a razão de cada lado. Runs concluídos registram `EvidenceId` e localização do envelope autenticado que originou os números.
+
+VCC segue `aecs.vcc/v1`: decisão `Verified`, execução concluída, mudança Git não vazia, checkout
+original intacto, nenhuma violação de escopo e evidência de origem persistida. First-pass exige também zero retry.
+`rework` é declarado estritamente como novas tentativas do agente dentro do run; não representa
+rework pós-merge. O custo efetivo prefere reconciliação e mantém estimativas explicitamente
+rotuladas. Custo ausente ou nenhum VCC deixa CPVC indisponível, nunca zero. Consulte a
+[especificação completa](cost-accounting.md).
+
+Para cada distribuição, o relatório preserva tamanho, mínimo, quartis, média, mediana, máximo,
+desvio-padrão e intervalo de confiança de 95% da média. A conclusão automática é `Maintain`
+somente quando o efeito mínimo é atingido e o intervalo pareado exclui zero; evidência faltante
+ou incerta produz `Adjust`; um critério de morte atingido produz `Abandon`.
+
+## CI e providers reais
+
+`tests/fixtures/experiment-smoke` é um dataset barato com provider mock, duas variantes e duas repetições. O CI inicializa sua baseline Git temporária, exige quatro checkpoints, valida JSON/CSV e repete o comando com `--resume` para provar idempotência. Datasets que dependem de Ollama ou cloud ficam fora desse smoke e só rodam com configuração explícita de provider/segredo.

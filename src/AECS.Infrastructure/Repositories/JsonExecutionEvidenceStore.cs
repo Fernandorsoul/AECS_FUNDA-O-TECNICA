@@ -1,22 +1,53 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text.Json;
+using AECS.Domain.Exceptions;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
+using AECS.Infrastructure.Cryptography;
 
 namespace AECS.Infrastructure.Repositories;
 
-public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
+public sealed partial class JsonExecutionEvidenceStore :
+    IExecutionEvidenceStore,
+    IEvidenceGraphSource,
+    IHistoricalDecisionStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
+    public const string CurrentSchemaVersion = EvidenceEnvelopeFormat.CurrentSchemaVersion;
+
+    private static readonly TimeSpan EvidenceLockTimeout = TimeSpan.FromSeconds(10);
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> WriteLocks = new(
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
 
     private readonly string _rootPath;
+    private readonly string? _keyDirectoryPath;
+    private readonly Lazy<AuthenticatedEvidenceEnvelopeCodec> _envelopes;
 
     public JsonExecutionEvidenceStore(string rootPath)
+        : this(rootPath, GetDefaultKeyDirectoryPath())
+    {
+    }
+
+    public JsonExecutionEvidenceStore(string rootPath, string keyDirectoryPath)
     {
         _rootPath = Path.GetFullPath(rootPath);
+        _keyDirectoryPath = Path.GetFullPath(keyDirectoryPath);
+        _envelopes = new Lazy<AuthenticatedEvidenceEnvelopeCodec>(
+            () => new AuthenticatedEvidenceEnvelopeCodec(
+                RsaEvidenceSignatureService.LoadOrCreate(_keyDirectoryPath)),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    public JsonExecutionEvidenceStore(
+        string rootPath,
+        IEvidenceSignatureService signatureService)
+    {
+        ArgumentNullException.ThrowIfNull(signatureService);
+        _rootPath = Path.GetFullPath(rootPath);
+        _envelopes = new Lazy<AuthenticatedEvidenceEnvelopeCodec>(
+            () => new AuthenticatedEvidenceEnvelopeCodec(signatureService));
     }
 
     public static string GetDefaultRootPath()
@@ -25,43 +56,43 @@ public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
         if (!string.IsNullOrWhiteSpace(configuredPath))
             return configuredPath;
 
-        var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localData))
-            localData = Path.GetTempPath();
+        return Path.Combine(GetAecsLocalDataRoot(), "evidence");
+    }
 
-        return Path.Combine(localData, "AECS", "evidence");
+    public static string GetDefaultKeyDirectoryPath()
+    {
+        var configuredPath = Environment.GetEnvironmentVariable("AECS_EVIDENCE_KEY_DIRECTORY");
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return Path.GetFullPath(configuredPath);
+
+        return Path.Combine(GetAecsLocalDataRoot(), "keys");
     }
 
     public void EnsureRepositoryIsolation(string repositoryPath)
     {
         var repositoryRoot = Path.GetFullPath(repositoryPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var repositoryPrefix = repositoryRoot + Path.DirectorySeparatorChar;
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        if (string.Equals(_rootPath, repositoryRoot, comparison) ||
-            _rootPath.StartsWith(repositoryPrefix, comparison))
-        {
-            throw new InvalidOperationException(
-                $"Evidence path '{_rootPath}' must be outside target repository '{repositoryRoot}'.");
-        }
+        EnsureOutsideRepository(_rootPath, repositoryRoot, "Evidence path");
+        if (_keyDirectoryPath is not null)
+            EnsureOutsideRepository(_keyDirectoryPath, repositoryRoot, "Evidence key directory");
     }
 
     public async Task<string> SaveAsync(
         ExecutionEvidence evidence,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(_rootPath);
+        ArgumentNullException.ThrowIfNull(evidence);
+        AuthenticatedEvidenceEnvelopeCodec.ValidateEvidenceStructure(evidence);
+        EnsureRepositoryIsolation(evidence.Baseline.RepositoryPath);
 
+        Directory.CreateDirectory(_rootPath);
+        var envelope = _envelopes.Value.Create(evidence);
         var targetPath = GetEvidencePath(evidence.Id);
         var temporaryPath = targetPath + $".{Guid.NewGuid():N}.tmp";
-        var json = JsonSerializer.Serialize(evidence, SerializerOptions);
 
         try
         {
-            await File.WriteAllTextAsync(temporaryPath, json, cancellationToken);
+            await WriteEnvelopeAsync(temporaryPath, envelope, cancellationToken);
             File.Move(temporaryPath, targetPath, overwrite: false);
             return targetPath;
         }
@@ -80,13 +111,318 @@ public sealed class JsonExecutionEvidenceStore : IExecutionEvidenceStore
         if (!File.Exists(path))
             return null;
 
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<ExecutionEvidence>(
-            stream,
-            SerializerOptions,
+        var envelope = await ReadAndValidateEnvelopeAsync(
+            path,
+            evidenceId,
             cancellationToken);
+        foreach (var promotionEvent in envelope.PromotionEvents)
+            envelope.Evidence.Promotions.Add(promotionEvent.Promotion);
+        return envelope.Evidence;
+    }
+
+    public async Task AppendPromotionAsync(
+        Guid evidenceId,
+        CandidatePromotionEvidence promotion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(promotion);
+        var targetPath = GetEvidencePath(evidenceId);
+        var writeLock = WriteLocks.GetOrAdd(targetPath, _ => new SemaphoreSlim(1, 1));
+        await writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            await using var fileLock = await AcquireFileLockAsync(
+                targetPath + ".lock",
+                cancellationToken);
+            if (!File.Exists(targetPath))
+                throw new FileNotFoundException("Execution evidence not found.", targetPath);
+
+            var envelope = await ReadAndValidateEnvelopeAsync(
+                targetPath,
+                evidenceId,
+                cancellationToken);
+            _envelopes.Value.AppendPromotion(envelope, promotion);
+
+            var temporaryPath = targetPath + $".{Guid.NewGuid():N}.tmp";
+            try
+            {
+                await WriteEnvelopeAsync(temporaryPath, envelope, cancellationToken);
+                File.Move(temporaryPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+        }
+        finally
+        {
+            writeLock.Release();
+        }
+    }
+
+    public async Task AppendReplayAsync(
+        Guid evidenceId,
+        ExecutionReplayEvidence replay,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(replay);
+        var targetPath = GetEvidencePath(evidenceId);
+        var writeLock = WriteLocks.GetOrAdd(targetPath, _ => new SemaphoreSlim(1, 1));
+        await writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            await using var fileLock = await AcquireFileLockAsync(
+                targetPath + ".lock",
+                cancellationToken);
+            if (!File.Exists(targetPath))
+                throw new FileNotFoundException("Execution evidence not found.", targetPath);
+
+            var envelope = await ReadAndValidateEnvelopeAsync(
+                targetPath,
+                evidenceId,
+                cancellationToken);
+            var existingEvent = envelope.ReplayEvents
+                .FirstOrDefault(item => item.Replay.Id == replay.Id);
+            if (existingEvent is not null)
+            {
+                if (!AuthenticatedEvidenceEnvelopeCodec.ReplayEquals(
+                        existingEvent.Replay,
+                        replay))
+                {
+                    throw new InvalidOperationException(
+                        "Replay evidence ID is already associated with different content.");
+                }
+
+                return;
+            }
+
+            _envelopes.Value.AppendReplay(envelope, replay);
+
+            var temporaryPath = targetPath + $".{Guid.NewGuid():N}.tmp";
+            try
+            {
+                await WriteEnvelopeAsync(temporaryPath, envelope, cancellationToken);
+                File.Move(temporaryPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+        }
+        finally
+        {
+            writeLock.Release();
+        }
+    }
+
+    public async Task<EvidenceGraphQueryResult> QueryEvidenceGraphsAsync(
+        EvidenceGraphQuery query,
+        EvidenceReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(scope);
+        EnsureRepositoryIsolation(scope.RepositoryPath);
+        var graphs = new List<EvidenceGraph>();
+        var diagnostics = new List<string>();
+        if (!Directory.Exists(_rootPath))
+            return new EvidenceGraphQueryResult();
+
+        foreach (var path in Directory.EnumerateFiles(_rootPath, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Guid.TryParseExact(Path.GetFileNameWithoutExtension(path), "N", out var evidenceId))
+            {
+                diagnostics.Add("An evidence file has an invalid storage key and was omitted.");
+                continue;
+            }
+
+            try
+            {
+                var envelope = await ReadAndValidateEnvelopeAsync(
+                    path,
+                    evidenceId,
+                    cancellationToken);
+                EvidenceGraphProjection.EnsureAuthorized(
+                    envelope.Evidence.Baseline.RepositoryPath,
+                    scope);
+                var graph = EvidenceGraphProjection.Project(envelope, scope);
+                if (EvidenceGraphProjection.Matches(graph.Summary, query))
+                    graphs.Add(graph);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Repository-scoped reads intentionally reveal no cross-repository record.
+            }
+            catch (EvidenceIntegrityException)
+            {
+                diagnostics.Add("An evidence record was invalid and was omitted.");
+            }
+            catch (IOException)
+            {
+                diagnostics.Add("An evidence record could not be read and was omitted.");
+            }
+        }
+
+        return new EvidenceGraphQueryResult
+        {
+            Items = graphs
+                .OrderByDescending(item => item.Summary.CreatedAt)
+                .Take(query.Limit)
+                .Select(item => item.Summary)
+                .ToList(),
+            Diagnostics = diagnostics
+        };
+    }
+
+    public async Task<EvidenceGraph?> LoadEvidenceGraphAsync(
+        Guid evidenceId,
+        EvidenceReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        EnsureRepositoryIsolation(scope.RepositoryPath);
+        var path = GetEvidencePath(evidenceId);
+        if (!File.Exists(path))
+            return null;
+
+        var envelope = await ReadAndValidateEnvelopeAsync(path, evidenceId, cancellationToken);
+        EvidenceGraphProjection.EnsureAuthorized(
+            envelope.Evidence.Baseline.RepositoryPath,
+            scope);
+        return EvidenceGraphProjection.Project(envelope, scope);
+    }
+
+    private async Task<SignedExecutionEvidenceEnvelope> ReadAndValidateEnvelopeAsync(
+        string path,
+        Guid expectedEvidenceId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            using var document = await JsonDocument.ParseAsync(
+                stream,
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = false,
+                    CommentHandling = JsonCommentHandling.Disallow,
+                    MaxDepth = EvidenceEnvelopeFormat.SerializerOptions.MaxDepth
+                },
+                cancellationToken);
+            CanonicalJson.RejectDuplicateProperties(document.RootElement);
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("schemaVersion", out var schemaVersion) ||
+                schemaVersion.ValueKind != JsonValueKind.String ||
+                !string.Equals(
+                    schemaVersion.GetString(),
+                    CurrentSchemaVersion,
+                    StringComparison.Ordinal))
+            {
+                throw new EvidenceIntegrityException(
+                    "Unsigned, legacy, or unsupported evidence schema was rejected.");
+            }
+
+            var envelope = document.RootElement.Deserialize<SignedExecutionEvidenceEnvelope>(
+                    EvidenceEnvelopeFormat.SerializerOptions)
+                ?? throw new EvidenceIntegrityException("Evidence envelope is empty.");
+            if (envelope.Evidence?.Baseline is null)
+                throw new EvidenceIntegrityException("Evidence envelope is incomplete.");
+            EnsureRepositoryIsolation(envelope.Evidence.Baseline.RepositoryPath);
+            _envelopes.Value.Validate(envelope, expectedEvidenceId);
+            return envelope;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (EvidenceIntegrityException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is JsonException or CryptographicException or FormatException)
+        {
+            throw new EvidenceIntegrityException(
+                "Evidence envelope is malformed or cannot be cryptographically verified.",
+                ex);
+        }
+    }
+
+    private static async Task WriteEnvelopeAsync(
+        string path,
+        SignedExecutionEvidenceEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.WriteThrough);
+        await JsonSerializer.SerializeAsync(
+            stream,
+            envelope,
+            EvidenceEnvelopeFormat.SerializerOptions,
+            cancellationToken);
+        await stream.FlushAsync(cancellationToken);
+    }
+
+    private static async Task<FileStream> AcquireFileLockAsync(
+        string lockPath,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + EvidenceLockTimeout;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.Asynchronous);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            }
+        }
+    }
+
+    private static string GetAecsLocalDataRoot()
+    {
+        var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(localData))
+            localData = Path.GetTempPath();
+        return Path.Combine(localData, "AECS");
+    }
+
+    private static void EnsureOutsideRepository(
+        string targetPath,
+        string repositoryRoot,
+        string description)
+    {
+        var resolvedTarget = Path.GetFullPath(targetPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var repositoryPrefix = repositoryRoot + Path.DirectorySeparatorChar;
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(resolvedTarget, repositoryRoot, comparison) ||
+            resolvedTarget.StartsWith(repositoryPrefix, comparison))
+        {
+            throw new InvalidOperationException(
+                $"{description} '{resolvedTarget}' must be outside target repository '{repositoryRoot}'.");
+        }
     }
 
     private string GetEvidencePath(Guid evidenceId) =>
         Path.Combine(_rootPath, $"{evidenceId:N}.json");
+
 }

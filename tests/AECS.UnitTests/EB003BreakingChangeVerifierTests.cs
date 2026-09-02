@@ -3,158 +3,102 @@ using FluentAssertions;
 
 namespace AECS.UnitTests;
 
-public class EB003BreakingChangeVerifierTests
+public sealed class EB003BreakingChangeVerifierTests
 {
     [Fact]
-    public void Verify_RemovedPublicMethod_Detected()
+    public void RemovingOneOverload_IsDetectedByDocumentationIdentity()
     {
-        var diff = """
-            --- a/src/MyApp/Services/CustomerService.cs
-            +++ b/src/MyApp/Services/CustomerService.cs
-            @@ -10,7 +10,3 @@ namespace MyApp.Services
-                 public class CustomerService
-                 {
-            -        public void CreateCustomer(string name)
-            -        {
-            -            // implementation
-            -        }
-                 }
-            """;
+        var type = PublicType();
+        var integer = Method("int", "M:Api.Service.Get(System.Int32)", "Api.Service.Get(int)");
+        var text = Method("string", "M:Api.Service.Get(System.String)", "Api.Service.Get(string)");
+        var input = SemanticGraphFixture.Input(
+            [type, integer, text],
+            [type, integer]);
 
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", diff);
+        var result = new EB003BreakingChangeVerifier().Verify(input);
 
-        result.HasBreakingChanges.Should().BeTrue();
-        result.BreakingChanges.Should().Contain(bc => bc.RuleId == "EB003-REMOVED-METHOD");
-        result.BreakingChanges.Should().Contain(bc => bc.SymbolName == "CreateCustomer");
+        result.BreakingChanges.Should().ContainSingle(finding =>
+            finding.RuleId == "EB003-REMOVED-MEMBER" &&
+            finding.Symbol == "Api.Service.Get(string)");
     }
 
     [Fact]
-    public void Verify_RemovedPublicProperty_Detected()
+    public void MovingPublicApiWithoutSemanticChange_IsNotBreaking()
     {
-        var diff = """
-            --- a/src/MyApp/Models/Customer.cs
-            +++ b/src/MyApp/Models/Customer.cs
-            @@ -5,4 +5,3 @@ namespace MyApp.Models
-                 public class Customer
-                 {
-            -        public string Name { get; set; }
-                     public string Email { get; set; }
-                 }
-            """;
+        var baselineType = PublicType(file: "src/App/Changed.cs");
+        var candidateType = PublicType(file: "src/App/Moved.cs");
+        var baselineMethod = Method(
+            "method", "M:Api.Service.Get", "Api.Service.Get()", "src/App/Changed.cs");
+        var candidateMethod = Method(
+            "method", "M:Api.Service.Get", "Api.Service.Get()", "src/App/Moved.cs");
+        var input = SemanticGraphFixture.Input(
+            [baselineType, baselineMethod],
+            [candidateType, candidateMethod],
+            changedFiles: ["src/App/Changed.cs", "src/App/Moved.cs"]);
 
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", diff);
-
-        result.HasBreakingChanges.Should().BeTrue();
-        result.BreakingChanges.Should().Contain(bc => bc.RuleId == "EB003-REMOVED-PROPERTY");
-        result.BreakingChanges.Should().Contain(bc => bc.SymbolName == "Name");
+        new EB003BreakingChangeVerifier().Verify(input).BreakingChanges.Should().BeEmpty();
     }
 
     [Fact]
-    public void Verify_RemovedClass_Detected()
+    public void NullableContractChange_IsBreaking()
     {
-        var diff = """
-            --- a/src/MyApp/Services/OldService.cs
-            +++ b/src/MyApp/Services/OldService.cs
-            @@ -1,5 +0,0 @@
-            -namespace MyApp.Services;
-            -
-            -public class OldService
-            -{
-            -}
-            """;
+        var type = PublicType();
+        var baseline = Method(
+            "method", "M:Api.Service.Find(System.String)", "string? Api.Service.Find(string?)");
+        var candidate = Method(
+            "method", "M:Api.Service.Find(System.String)", "string Api.Service.Find(string)");
+        var input = SemanticGraphFixture.Input(
+            [type, baseline],
+            [type, candidate]);
 
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", diff);
-
-        result.HasBreakingChanges.Should().BeTrue();
-        result.BreakingChanges.Should().Contain(bc => bc.RuleId == "EB003-REMOVED-CLASS");
-        result.BreakingChanges.Should().Contain(bc => bc.Severity == RuleSeverity.Critical);
+        new EB003BreakingChangeVerifier().Verify(input).BreakingChanges.Should()
+            .ContainSingle(finding => finding.RuleId == "EB003-CHANGED-SIGNATURE");
     }
 
     [Fact]
-    public void Verify_MultipleBreakingChanges_AllDetected()
+    public void GenericConstraintChange_IsBreaking()
     {
-        var diff = """
---- a/src/MyApp/Services/CustomerService.cs
-+++ b/src/MyApp/Services/CustomerService.cs
-@@ -10,7 +10,3 @@ namespace MyApp.Services
-     public class CustomerService
-     {
--        public void CreateCustomer(string name)
--        {
--            // implementation
--        }
--        public string GetName(int id)
--        {
--            return "";
--        }
-     }
-""";
+        var type = PublicType();
+        var baseline = Method(
+            "method", "M:Api.Service.Map``1(``0)", "T Api.Service.Map<T>(T)",
+            modifiers: ["constraint:T:class"]);
+        var candidate = Method(
+            "method", "M:Api.Service.Map``1(``0)", "T Api.Service.Map<T>(T)",
+            modifiers: ["constraint:T:notnull"]);
+        var input = SemanticGraphFixture.Input(
+            [type, baseline],
+            [type, candidate]);
 
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", diff);
-
-        result.HasBreakingChanges.Should().BeTrue();
-        result.BreakingChanges.Should().HaveCount(2);
-        result.BreakingChanges.Should().Contain(bc => bc.SymbolName == "CreateCustomer");
-        result.BreakingChanges.Should().Contain(bc => bc.SymbolName == "GetName");
+        new EB003BreakingChangeVerifier().Verify(input).BreakingChanges.Should()
+            .ContainSingle(finding => finding.Justification.Contains("constraint:T:notnull"));
     }
 
     [Fact]
-    public void Verify_MethodRenamed_DetectedAsRemoveAndAdd()
+    public void RemovedPrivateMember_IsIgnored()
     {
-        var diff = """
-            --- a/src/MyApp/Services/CustomerService.cs
-            +++ b/src/MyApp/Services/CustomerService.cs
-            @@ -10,4 +10,4 @@ namespace MyApp.Services
-                 public class CustomerService
-                 {
-            -        public void CreateCustomer(string name)
-            +        public void AddCustomer(string name)
-                     {
-                     }
-                 }
-            """;
+        var type = PublicType();
+        var privateMethod = SemanticGraphFixture.Node(
+            "private", "member", "Internal", "Api.Service.Internal()",
+            containing: type.Id, accessibility: "Private", memberKind: "Method",
+            documentationId: "M:Api.Service.Internal");
+        var input = SemanticGraphFixture.Input(
+            [type, privateMethod],
+            [type]);
 
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", diff);
-
-        result.HasBreakingChanges.Should().BeTrue();
-        result.BreakingChanges.Should().Contain(bc => bc.RuleId == "EB003-REMOVED-METHOD");
-        result.BreakingChanges.Should().Contain(bc => bc.SymbolName == "CreateCustomer");
+        new EB003BreakingChangeVerifier().Verify(input).BreakingChanges.Should().BeEmpty();
     }
 
-    [Fact]
-    public void Verify_NoBreakingChanges_NoViolation()
-    {
-        var diff = """
-            --- a/src/MyApp/Services/CustomerService.cs
-            +++ b/src/MyApp/Services/CustomerService.cs
-            @@ -10,4 +10,8 @@ namespace MyApp.Services
-                 public class CustomerService
-                 {
-                     public void Create(string name) { }
-            +
-            +        public void Update(string name)
-            +        {
-            +        }
-                 }
-            """;
+    private static AECS.Domain.Models.CSharpSymbolGraphNode PublicType(
+        string file = "src/App/Changed.cs") => SemanticGraphFixture.Node(
+            "type", "type", "Service", "Api.Service", file: file,
+            typeKind: "Class", documentationId: "T:Api.Service");
 
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", diff);
-
-        result.HasBreakingChanges.Should().BeFalse();
-    }
-
-    [Fact]
-    public void Verify_EmptyDiff_NoViolation()
-    {
-        var verifier = new EB003BreakingChangeVerifier();
-        var result = verifier.Verify("/repo", "");
-
-        result.HasBreakingChanges.Should().BeFalse();
-    }
+    private static AECS.Domain.Models.CSharpSymbolGraphNode Method(
+        string id,
+        string documentationId,
+        string display,
+        string file = "src/App/Changed.cs",
+        IEnumerable<string>? modifiers = null) => SemanticGraphFixture.Node(
+            id, "member", "Get", display, file: file, containing: "type",
+            memberKind: "Method", documentationId: documentationId, modifiers: modifiers);
 }

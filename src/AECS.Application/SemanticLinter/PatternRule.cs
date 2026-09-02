@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 namespace AECS.Application.SemanticLinter;
 
 public class PatternRule
@@ -8,10 +6,21 @@ public class PatternRule
     public string Name { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
     public PatternType Type { get; init; }
+    /// <summary>
+    /// Legacy textual hint retained for contract compatibility. EB002 does not consume it as
+    /// semantic authority; structural fields and resolved graph relations drive enforcement.
+    /// </summary>
+    [Obsolete("Text patterns are non-authoritative; configure structural semantic fields instead.")]
     public string Pattern { get; init; } = string.Empty;
     public string ExpectedPattern { get; init; } = string.Empty;
     public string Scope { get; init; } = string.Empty; // namespace pattern
     public RuleSeverity Severity { get; init; } = RuleSeverity.Warning;
+    public string SymbolKind { get; init; } = string.Empty;
+    public string NameSuffix { get; init; } = string.Empty;
+    public string RequiredImplementedType { get; init; } = string.Empty;
+    public string ProhibitedConstructedTypeSuffix { get; init; } = string.Empty;
+    public List<string> AllowedNameSuffixes { get; init; } = [];
+    public bool RequireAsyncSuffix { get; init; }
 }
 
 public enum PatternType
@@ -35,15 +44,6 @@ public class PatternViolation
     public string ActualPattern { get; init; } = string.Empty;
 }
 
-public class EB002Result
-{
-    public bool HasViolations => Violations.Count > 0;
-    public List<PatternViolation> Violations { get; init; } = [];
-    public int FilesScanned { get; init; }
-    public int RulesChecked { get; init; }
-    public Dictionary<string, int> PatternStats { get; init; } = new();
-}
-
 public static class DefaultPatternRules
 {
     public static List<PatternRule> GetCommonPatternRules()
@@ -57,8 +57,10 @@ public static class DefaultPatternRules
                 Name = "Service Interface Implementation",
                 Description = "Service classes should implement a corresponding interface (e.g., IMyService)",
                 Type = PatternType.InterfaceImplementation,
-                Pattern = @"class\s+(\w+Service)\b",
-                ExpectedPattern = @"interface\s+I\1",
+                SymbolKind = "type",
+                NameSuffix = "Service",
+                RequiredImplementedType = "I{Name}",
+                ExpectedPattern = "Resolved implements edge to I{Name}",
                 Scope = "Application",
                 Severity = RuleSeverity.Warning
             },
@@ -70,8 +72,10 @@ public static class DefaultPatternRules
                 Name = "Repository Interface Implementation",
                 Description = "Repository classes should implement a corresponding interface (e.g., IMyRepository)",
                 Type = PatternType.InterfaceImplementation,
-                Pattern = @"class\s+(\w+Repository)\b",
-                ExpectedPattern = @"interface\s+I\1",
+                SymbolKind = "type",
+                NameSuffix = "Repository",
+                RequiredImplementedType = "I{Name}",
+                ExpectedPattern = "Resolved implements edge to I{Name}",
                 Scope = "Infrastructure",
                 Severity = RuleSeverity.Warning
             },
@@ -83,7 +87,8 @@ public static class DefaultPatternRules
                 Name = "Controller Dependency Injection",
                 Description = "Controllers should use constructor dependency injection, not direct instantiation",
                 Type = PatternType.MethodSignature,
-                Pattern = @"new\s+\w+Service\s*\(",
+                SymbolKind = "member",
+                ProhibitedConstructedTypeSuffix = "Service",
                 ExpectedPattern = "Constructor injection via ILogger<T>, IService, etc.",
                 Scope = "Controllers",
                 Severity = RuleSeverity.Error
@@ -96,7 +101,8 @@ public static class DefaultPatternRules
                 Name = "DTO Naming Convention",
                 Description = "DTOs should end with 'Dto', 'Request', 'Response', or 'Command'",
                 Type = PatternType.NamingConvention,
-                Pattern = @"class\s+(\w+)\s*{[^}]*(?:public\s+\w+\s+\w+\s*\{)",
+                SymbolKind = "type",
+                AllowedNameSuffixes = ["Dto", "Request", "Response", "Command"],
                 ExpectedPattern = "ClassName should end with Dto, Request, Response, or Command",
                 Scope = "DTOs",
                 Severity = RuleSeverity.Info
@@ -109,7 +115,8 @@ public static class DefaultPatternRules
                 Name = "Async Method Naming",
                 Description = "Async methods should end with 'Async' suffix",
                 Type = PatternType.NamingConvention,
-                Pattern = @"(?:public|private|protected|internal)\s+(?:async\s+)?Task\S*\s+(\w+)\s*\(",
+                SymbolKind = "member",
+                RequireAsyncSuffix = true,
                 ExpectedPattern = "Async methods should have 'Async' suffix",
                 Scope = "",
                 Severity = RuleSeverity.Warning
@@ -122,8 +129,10 @@ public static class DefaultPatternRules
                 Name = "CQRS Handler Pattern",
                 Description = "Command/Query handlers should implement IRequestHandler<T>",
                 Type = PatternType.InterfaceImplementation,
-                Pattern = @"class\s+(\w+Handler)\b",
-                ExpectedPattern = @"IRequestHandler<",
+                SymbolKind = "type",
+                NameSuffix = "Handler",
+                RequiredImplementedType = "IRequestHandler",
+                ExpectedPattern = "Resolved implements edge to IRequestHandler<T>",
                 Scope = "Handlers",
                 Severity = RuleSeverity.Warning
             }

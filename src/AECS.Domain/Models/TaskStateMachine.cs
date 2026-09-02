@@ -19,6 +19,8 @@ public class TaskStateMachine
         [
             TaskState.Running,
             TaskState.Rejected,
+            TaskState.BudgetExceeded,
+            TaskState.TimedOut,
             TaskState.Cancelled
         ],
         [TaskState.Running] =
@@ -34,13 +36,20 @@ public class TaskStateMachine
         [
             TaskState.Verifying,
             TaskState.Rejected,
+            TaskState.BudgetExceeded,
+            TaskState.TimedOut,
+            TaskState.AgentFailed,
             TaskState.Cancelled
         ],
         [TaskState.Verifying] =
         [
             TaskState.Verified,
             TaskState.Rejected,
-            TaskState.HumanReviewRequired
+            TaskState.HumanReviewRequired,
+            TaskState.BudgetExceeded,
+            TaskState.TimedOut,
+            TaskState.AgentFailed,
+            TaskState.Cancelled
         ],
         // Terminal states — no transitions out
         [TaskState.Verified] = [],

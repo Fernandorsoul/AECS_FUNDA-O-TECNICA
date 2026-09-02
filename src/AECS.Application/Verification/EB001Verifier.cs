@@ -17,13 +17,14 @@ public class EB001Verifier : IVerifier
     {
         try
         {
-            var result = _verifier.Verify(context.RepoPath);
+            var input = SemanticAnalysisInput.From(context);
+            var result = _verifier.Verify(input);
 
             if (result.HasViolations)
             {
                 var violationMessages = result.Violations
                     .Take(5) // Limit to first 5 violations
-                    .Select(v => v.ViolationDetail);
+                    .Select(v => v.Justification);
 
                 return Task.FromResult(new VerificationResult
                 {
@@ -33,7 +34,8 @@ public class EB001Verifier : IVerifier
                     Severity = result.Violations.Any(v => v.Severity == RuleSeverity.Critical)
                         ? Severity.Critical
                         : Severity.Error,
-                    Message = $"Architecture violations found ({result.Violations.Count}):\n{string.Join("\n", violationMessages)}"
+                    Message = $"Architecture violations found ({result.Violations.Count}):\n{string.Join("\n", violationMessages)}",
+                    Semantic = SemanticEvidenceFactory.Create(input, result.Violations)
                 });
             }
 
@@ -43,7 +45,8 @@ public class EB001Verifier : IVerifier
                 Verifier = Name,
                 Status = VerificationStatus.Pass,
                 Severity = Severity.Info,
-                Message = $"No architecture violations found ({result.FilesScanned} files, {result.RulesChecked} rules)"
+                Message = $"No architecture violations found ({result.FilesScanned} impacted files, {result.RulesChecked} rules)",
+                Semantic = SemanticEvidenceFactory.Create(input, [])
             });
         }
         catch (Exception ex)
@@ -53,7 +56,7 @@ public class EB001Verifier : IVerifier
                 AgentRunId = context.AgentRunId,
                 Verifier = Name,
                 Status = VerificationStatus.Error,
-                Severity = Severity.Warning,
+                Severity = Severity.Critical,
                 Message = $"EB001 verifier error: {ex.Message}"
             });
         }

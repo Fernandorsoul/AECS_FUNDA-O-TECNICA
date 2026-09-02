@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-003
   objective: Refactor CustomerMapper to also update Billing records when mapping customers

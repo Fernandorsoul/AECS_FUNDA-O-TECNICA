@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-004
   objective: Change CustomerMapper to return null instead of empty string for missing phone numbers

@@ -57,11 +57,15 @@ coverage/
 # User-specific files
 **/local.settings.json
 **/launchSettings.json
+/aecs.runtime.local.json
+/aecs.runtime.*.local.json
+/aecs.alert-policy.local.json
+/aecs.alert-policy.*.local.json
 
 # Compiled source
 **/Generated\ Files/
 **/generated-sources/
 
 # Local repositories used for demos and experiments
-real-world-demo/
+/real-world-demo/
 sample/

@@ -1,16 +1,14 @@
 using AECS.Application;
 using AECS.Application.Classification;
-using AECS.Application.ContextCompiler;
-using AECS.Application.ControlKernel;
 using AECS.Application.Experiments;
+using AECS.Application.Jarvis;
 using AECS.Application.Parsing;
-using AECS.Application.Staging;
-using AECS.Application.Verification;
+using AECS.Application.Promotion;
+using AECS.Application.ProactiveAlerts;
+using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
-using AECS.Infrastructure.AgentRuntime;
-using AECS.Infrastructure.Processes;
 using AECS.Infrastructure.Repositories;
 
 namespace AECS.Cli.Jarvis;
@@ -18,23 +16,46 @@ namespace AECS.Cli.Jarvis;
 public class JarvisRepl
 {
     private readonly string _repoPath;
-    private readonly bool _useMock;
+    private readonly AecsExecutionRuntime _runtime;
     private readonly TaskContractParser _parser = new();
     private readonly RiskClassifier _riskClassifier = new();
-    private readonly ExecutionController _executionController = new();
-    private readonly ControlKernel _kernel = new();
-    private readonly DecisionEngine _decisionEngine = new();
-    private readonly List<TaskExperimentResult> _history = [];
-    private TaskExperimentResult? _lastResult;
+    private readonly DurableExecutionHistoryService? _durableHistory;
+    private readonly CandidatePromotionService _promotion;
+    private readonly string? _alertPolicyPath;
+    private readonly string _alertRoot;
 
-    public JarvisRepl(string repoPath, bool useMock)
+    public EffectiveAecsRuntimeConfiguration RuntimeConfiguration => _runtime.Configuration;
+
+    public JarvisRepl(
+        string repoPath,
+        AecsExecutionRuntime runtime,
+        string? alertPolicyPath = null,
+        string? alertRoot = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repoPath);
+        ArgumentNullException.ThrowIfNull(runtime);
         _repoPath = repoPath;
-        _useMock = useMock;
+        _runtime = runtime;
+        _promotion = runtime.CreatePromotionService();
+        _alertPolicyPath = string.IsNullOrWhiteSpace(alertPolicyPath)
+            ? null
+            : Path.GetFullPath(alertPolicyPath);
+        _alertRoot = string.IsNullOrWhiteSpace(alertRoot)
+            ? JsonProactiveAlertStore.GetDefaultRootPath()
+            : Path.GetFullPath(alertRoot);
+        if (_runtime.EvidenceStore is IEvidenceGraphSource graphSource)
+        {
+            _durableHistory = new DurableExecutionHistoryService(
+                _runtime.EvidenceStore,
+                graphSource,
+                repoPath,
+                Environment.UserName);
+        }
     }
 
-    public async Task RunAsync(CancellationToken cancellationToken)
+    public async Task<int> RunAsync(CancellationToken cancellationToken)
     {
+        var exitCode = 0;
         Console.WriteLine("AECS — Agentic Engineering Control System");
         Console.WriteLine("Type 'help' for commands, 'exit' to quit.");
         Console.WriteLine();
@@ -63,11 +84,14 @@ public class JarvisRepl
             }
             catch (Exception ex)
             {
+                exitCode = 1;
                 Console.WriteLine($"Error: {ex.Message}");
             }
 
             Console.WriteLine();
         }
+
+        return exitCode;
     }
 
     private async Task<bool> ExecuteCommandAsync(string command, string argument, CancellationToken ct)
@@ -87,15 +111,15 @@ public class JarvisRepl
                 return false;
 
             case "status":
-                ShowStatus();
+                await ShowStatus(argument, ct);
                 return false;
 
             case "history":
-                ShowHistory();
+                await ShowHistory(argument, ct);
                 return false;
 
             case "explain":
-                ExplainTask(argument);
+                await ExplainTask(argument, ct);
                 return false;
 
             case "risk":
@@ -103,7 +127,19 @@ public class JarvisRepl
                 return false;
 
             case "context":
-                ShowContext(argument);
+                await ShowContext(argument, ct);
+                return false;
+
+            case "review":
+                await ReviewCandidate(argument, ct);
+                return false;
+
+            case "export-patch":
+                await ExportCandidatePatch(argument, ct);
+                return false;
+
+            case "alerts":
+                await ManageAlerts(argument, ct);
                 return false;
 
             case "exit" or "quit":
@@ -121,11 +157,15 @@ public class JarvisRepl
         Console.WriteLine("Commands:");
         Console.WriteLine("  run <task-file>     Execute a single task");
         Console.WriteLine("  experiment <dir>    Run experiment on task directory");
-        Console.WriteLine("  status              Show last run status");
-        Console.WriteLine("  history             Show execution history");
-        Console.WriteLine("  explain <task-id>   Explain what happened in a task");
+        Console.WriteLine("  status [--json]     Show latest persisted execution");
+        Console.WriteLine("  history [filters]   Query authenticated execution history");
+        Console.WriteLine("  explain <task-id>   Explain persisted evidence (--json supported)");
         Console.WriteLine("  risk <objective>    Classify risk for an objective");
-        Console.WriteLine("  context <task-id>   Show context package for a task");
+        Console.WriteLine("  context <task-id>   Show persisted context manifest (--json supported)");
+        Console.WriteLine("  review <evidence>   Review, approve/reject and optionally promote a candidate");
+        Console.WriteLine("  export-patch <evidence> <path>  Review and export without promotion");
+        Console.WriteLine("  alerts <evaluate|list|read|act|metrics>  Manage opt-in proactive alerts");
+        Console.WriteLine("  filters: --task <id> --run <id> --candidate <id> --evidence <id> --limit <n>");
         Console.WriteLine("  exit                Quit AECS");
     }
 
@@ -138,36 +178,13 @@ public class JarvisRepl
         }
 
         var contract = _parser.ParseFromFile(taskFile);
-        IAgentAdapter agent = _useMock
-            ? new MockAgentAdapter()
-            : new OllamaAdapter(new HttpClient());
-
-        var execution = await CreatePipeline(agent).RunAsync(_repoPath, contract, ct);
-
-        var result = new TaskExperimentResult
-        {
-            TaskId = execution.Contract.Id,
-            Objective = execution.Contract.Objective,
-            Risk = execution.Risk,
-            Model = execution.Model,
-            Decision = execution.Decision.Decision,
-            DecisionReason = execution.Decision.Reason,
-            Duration = execution.AgentResult.Duration,
-            InputTokens = execution.AgentResult.InputTokens,
-            OutputTokens = execution.AgentResult.OutputTokens,
-            EstimatedCost = execution.AgentResult.EstimatedCost,
-            FilesChanged = execution.CandidateChangeSet.ChangedFiles.Count,
-            EvidenceId = execution.EvidenceId,
-            OriginalRepositoryUnchanged = execution.OriginalRepositoryUnchanged
-        };
-
-        _history.Add(result);
-        _lastResult = result;
+        var execution = await _runtime.CreatePipeline().RunAsync(_repoPath, contract, ct);
 
         Console.WriteLine($"Decision: {execution.Decision.Decision}");
         Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
         Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
         Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
+        await EvaluateConfiguredAlerts(ct);
     }
 
     private async Task RunExperiment(string tasksDir, CancellationToken ct)
@@ -189,88 +206,175 @@ public class JarvisRepl
             return;
         }
 
-        IAgentAdapter agent = _useMock
-            ? new MockAgentAdapter()
-            : new OllamaAdapter(new HttpClient());
-
-        var runner = new ExperimentRunner(CreatePipeline(agent));
+        var runner = new ExperimentRunner(_runtime.CreatePipeline());
         var report = await runner.RunAsync(_repoPath, taskFiles, ct);
 
         Console.WriteLine(ExperimentReportFormatter.Format(report));
+        await EvaluateConfiguredAlerts(ct);
 
-        _history.AddRange(report.Results);
-        if (report.Results.Count > 0)
-            _lastResult = report.Results.Last();
     }
 
-    private static StagedExecutionPipeline CreatePipeline(IAgentAdapter agent)
+    private async Task ManageAlerts(string argument, CancellationToken cancellationToken)
     {
-        var processRunner = new SystemProcessRunner();
-        var evidenceStore = new JsonExecutionEvidenceStore(
-            JsonExecutionEvidenceStore.GetDefaultRootPath());
-        return new StagedExecutionPipeline(agent, processRunner, evidenceStore);
-    }
-
-    private void ShowStatus()
-    {
-        if (_lastResult is null)
+        const string usage =
+            "Usage: alerts <evaluate|list|read <id>|act <id> <action-ref>|metrics> [--json]";
+        if (_alertPolicyPath is null)
         {
-            Console.WriteLine("No executions yet. Use 'run' or 'experiment' first.");
+            Console.WriteLine(
+                "Proactive alerts are opt-in. Start Jarvis with --alert-policy <policy.json>.");
+            return;
+        }
+        if (!TryCreateAlertService(out var service))
+        {
+            Console.WriteLine("Authenticated Evidence Graph support is required for proactive alerts.");
             return;
         }
 
-        Console.WriteLine($"Last execution: {_lastResult.TaskId}");
-        Console.WriteLine($"Objective: {_lastResult.Objective}");
-        Console.WriteLine($"Risk: {_lastResult.Risk}");
-        Console.WriteLine($"Model: {_lastResult.Model}");
-        Console.WriteLine($"Decision: {_lastResult.Decision}");
-        Console.WriteLine($"Duration: {_lastResult.Duration.TotalSeconds:F1}s");
-        Console.WriteLine($"Cost: ${_lastResult.EstimatedCost:F2}");
+        var tokens = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        var json = tokens.Remove("--json");
+        if (tokens.Count == 0)
+        {
+            Console.WriteLine(usage);
+            return;
+        }
+        var operation = tokens[0].ToLowerInvariant();
+        if (operation == "evaluate" && tokens.Count == 1)
+        {
+            var report = await service.EvaluateAsync(LoadAlertPolicy(), cancellationToken);
+            Console.Write(json
+                ? ProactiveAlertPolicyJson.ToJson(report) + Environment.NewLine
+                : ProactiveAlertFormatter.EvaluationToText(report));
+            return;
+        }
+        if (operation == "list" && tokens.Count == 1)
+        {
+            var alerts = await service.ListAsync(cancellationToken);
+            Console.Write(json
+                ? ProactiveAlertPolicyJson.ToJson(alerts) + Environment.NewLine
+                : ProactiveAlertFormatter.AlertsToText(alerts));
+            return;
+        }
+        if (operation == "read" && tokens.Count == 2 && Guid.TryParse(tokens[1], out var readId))
+        {
+            var alert = await service.MarkReadAsync(
+                readId,
+                Environment.UserName,
+                cancellationToken);
+            Console.WriteLine($"Alert {alert.Id:N}: {alert.Status}; no approval was inferred.");
+            return;
+        }
+        if (operation == "act" && tokens.Count == 3 && Guid.TryParse(tokens[1], out var actionId))
+        {
+            var alert = await service.MarkActionedAsync(
+                actionId,
+                Environment.UserName,
+                tokens[2],
+                cancellationToken);
+            Console.WriteLine($"Alert {alert.Id:N}: {alert.Status}; no approval was granted.");
+            return;
+        }
+        if (operation == "metrics" && tokens.Count == 1)
+        {
+            var report = await service.MeasureAsync(LoadAlertPolicy(), cancellationToken);
+            Console.Write(json
+                ? ProactiveAlertPolicyJson.ToJson(report) + Environment.NewLine
+                : ProactiveAlertFormatter.EffectivenessToText(report));
+            return;
+        }
+        Console.WriteLine(usage);
     }
 
-    private void ShowHistory()
+    private async Task EvaluateConfiguredAlerts(CancellationToken cancellationToken)
     {
-        if (_history.Count == 0)
-        {
-            Console.WriteLine("No executions yet.");
+        if (_alertPolicyPath is null || !TryCreateAlertService(out var service))
             return;
-        }
-
-        Console.WriteLine($"{"Task",-12} {"Decision",-12} {"Duration",8} {"Cost",8} {"Files",6}");
-        Console.WriteLine(new string('-', 50));
-
-        foreach (var r in _history)
+        try
         {
-            Console.WriteLine($"{r.TaskId,-12} {r.Decision,-12} {r.Duration.TotalSeconds,6:F1}s  ${r.EstimatedCost:F2}  {r.FilesChanged}");
+            var report = await service.EvaluateAsync(LoadAlertPolicy(), cancellationToken);
+            Console.Write(ProactiveAlertFormatter.EvaluationToText(report));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"WARNING: proactive alert evaluation failed closed ({ex.GetType().Name}).");
         }
     }
 
-    private void ExplainTask(string taskId)
+    private ProactiveAlertPolicy LoadAlertPolicy() =>
+        ProactiveAlertPolicyJson.Load(_alertPolicyPath!);
+
+    private bool TryCreateAlertService(out ProactiveAlertService service)
     {
-        if (string.IsNullOrEmpty(taskId))
+        if (_runtime.EvidenceStore is not IEvidenceGraphSource graphSource)
         {
-            Console.WriteLine("Usage: explain <task-id>");
+            service = null!;
+            return false;
+        }
+        var store = new JsonProactiveAlertStore(_alertRoot);
+        var sink = new LocalJsonProactiveAlertSink(_alertRoot, _repoPath);
+        service = new ProactiveAlertService(
+            _runtime.EvidenceStore,
+            graphSource,
+            store,
+            sink,
+            _repoPath,
+            Environment.UserName);
+        return true;
+    }
+
+    private async Task ShowStatus(string argument, CancellationToken cancellationToken)
+    {
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: false, out var options, out var error) ||
+            !IsUnfiltered(options.Query) || options.Query.Limit != 50)
+        {
+            Console.WriteLine($"Usage: status [--json]. {error}");
             return;
         }
+        var result = await _durableHistory!.StatusAsync(cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.HistoryToText(result, status: true));
+    }
 
-        var record = _history.FirstOrDefault(r =>
-            r.TaskId.Equals(taskId, StringComparison.OrdinalIgnoreCase));
-
-        if (record is null)
+    private async Task ShowHistory(string argument, CancellationToken cancellationToken)
+    {
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: false, out var options, out var error))
         {
-            Console.WriteLine($"No execution found for task '{taskId}'.");
+            Console.WriteLine(
+                "Usage: history [--task <id>] [--run <id>] [--candidate <id>] " +
+                "[--evidence <id>] [--limit <1-500>] [--json]. " + error);
             return;
         }
+        var result = await _durableHistory!.QueryAsync(options.Query, cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.HistoryToText(result));
+    }
 
-        Console.WriteLine($"Task: {record.Objective}");
-        Console.WriteLine($"Risk: {record.Risk}");
-        Console.WriteLine($"Model: {record.Model}");
-        Console.WriteLine($"Decision: {record.Decision}");
-        Console.WriteLine($"Reason: {record.DecisionReason}");
-        Console.WriteLine($"Duration: {record.Duration.TotalSeconds:F1}s");
-        Console.WriteLine($"Tokens: {record.InputTokens} in / {record.OutputTokens} out");
-        Console.WriteLine($"Cost: ${record.EstimatedCost:F2}");
-        Console.WriteLine($"Files changed: {record.FilesChanged}");
+    private async Task ExplainTask(string argument, CancellationToken cancellationToken)
+    {
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: true, out var options, out var error) ||
+            IsUnfiltered(options.Query))
+        {
+            Console.WriteLine(
+                "Usage: explain <task-id> | --task <id> | --run <id> | " +
+                "--candidate <id> | --evidence <id> [--json]. " + error);
+            return;
+        }
+        var result = await _durableHistory!.ExplainAsync(options.Query, cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.ExplanationToText(result));
     }
 
     private void ClassifyRisk(string objective)
@@ -293,62 +397,378 @@ public class JarvisRepl
         Console.WriteLine($"Objective: {objective}");
     }
 
-    private void ShowContext(string taskId)
+    private async Task ShowContext(string argument, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(taskId))
+        if (!EnsureDurableHistory())
+            return;
+        if (!TryParseLookup(argument, allowLegacyTask: true, out var options, out var error) ||
+            IsUnfiltered(options.Query))
         {
-            Console.WriteLine("Usage: context <task-id>");
+            Console.WriteLine(
+                "Usage: context <task-id> | --task <id> | --run <id> | " +
+                "--candidate <id> | --evidence <id> [--json]. " + error);
             return;
         }
-
-        var samplePath = Path.Combine(_repoPath, "src");
-        if (!Directory.Exists(samplePath))
-        {
-            Console.WriteLine($"Source path not found: {samplePath}");
-            return;
-        }
-
-        var indexer = new CodebaseIndexer();
-        var index = indexer.Index(samplePath);
-
-        var selector = new ContextSelector();
-        var package = selector.Select(index, taskId, taskId, ["src/**"]);
-
-        var compiler = new ContextCompiler();
-        var prompt = compiler.Compile(package, samplePath, taskId);
-
-        Console.WriteLine($"Context Package: {package.Id}");
-        Console.WriteLine($"Strategy: {package.Strategy}");
-        Console.WriteLine($"Estimated tokens: {package.EstimatedTokens}");
-        Console.WriteLine();
-        Console.WriteLine("Compiled Prompt Preview:");
-        Console.WriteLine(new string('-', 50));
-        
-        // Mostrar apenas as primeiras linhas do prompt
-        var lines = prompt.Split('\n').Take(30).ToArray();
-        foreach (var line in lines)
-        {
-            Console.WriteLine(line);
-        }
-        
-        if (prompt.Split('\n').Length > 30)
-        {
-            Console.WriteLine($"\n... [{prompt.Split('\n').Length - 30} more lines]");
-        }
+        var result = await _durableHistory!.ContextAsync(options.Query, cancellationToken);
+        Console.Write(options.Json
+            ? DurableExecutionHistoryFormatter.ToJson(result) + Environment.NewLine
+            : DurableExecutionHistoryFormatter.ContextToText(result));
     }
 
-    private static string BuildLegacyPrompt(TaskContract contract, Dictionary<string, string> codeContext)
+    private async Task ReviewCandidate(string argument, CancellationToken cancellationToken)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Task: {contract.Objective}");
-        sb.AppendLine();
-        sb.AppendLine("Code Context:");
-        foreach (var kv in codeContext)
+        if (!TryParseReviewOptions(argument, out var options, out var error))
         {
-            sb.AppendLine($"// File: {kv.Key}");
-            sb.AppendLine(kv.Value);
-            sb.AppendLine();
+            Console.WriteLine(
+                "Usage: review <evidence-id> [--valid-minutes <1-1440>] " +
+                "[--policy <reference>]. " + error);
+            return;
         }
-        return sb.ToString();
+
+        var snapshot = await _promotion.InspectAsync(
+            options.EvidenceId,
+            _repoPath,
+            cancellationToken);
+        PrintReviewSnapshot(snapshot);
+        if (!snapshot.Available)
+            return;
+
+        var actor = Environment.UserName;
+        var policyReference = options.PolicyReference ??
+            $"task-contract/{snapshot.TaskId}/approval";
+        var validUntil = DateTime.UtcNow.AddMinutes(options.ValidMinutes);
+        Console.WriteLine($"Authenticated actor: {actor}");
+        Console.WriteLine($"Policy reference: {policyReference}");
+        Console.WriteLine($"Decision validity: {validUntil:O}");
+        Console.Write("Decision [approve/reject/abandon]: ");
+        var decisionInput = Console.ReadLine()?.Trim().ToLowerInvariant();
+        var decision = decisionInput switch
+        {
+            "approve" => CandidateReviewDecision.Approve,
+            "reject" => CandidateReviewDecision.Reject,
+            null or "" or "abandon" => CandidateReviewDecision.Abandon,
+            _ => (CandidateReviewDecision?)null
+        };
+        if (!decision.HasValue)
+        {
+            Console.WriteLine("Decision must be approve, reject, or abandon.");
+            return;
+        }
+
+        string justification;
+        if (decision == CandidateReviewDecision.Abandon && string.IsNullOrEmpty(decisionInput))
+        {
+            justification = "Review input ended before an explicit decision";
+        }
+        else
+        {
+            Console.Write("Justification: ");
+            justification = Console.ReadLine()?.Trim() ?? string.Empty;
+        }
+
+        var review = await _promotion.ReviewAsync(new CandidateReviewRequest
+        {
+            EvidenceId = snapshot.EvidenceId,
+            RepositoryPath = _repoPath,
+            ExpectedDiffHash = snapshot.DiffHash,
+            Actor = actor,
+            Decision = decision.Value,
+            Justification = justification,
+            ValidUntil = validUntil,
+            PolicyReference = policyReference
+        }, cancellationToken);
+        PrintReviewResult(review);
+        if (review.Status != CandidatePromotionStatus.Approved || !review.Persisted)
+            return;
+
+        var requiredConfirmation = $"PROMOTE {snapshot.DiffHash}";
+        Console.WriteLine("The approval is persisted, but the repository is still unchanged.");
+        Console.Write($"Type '{requiredConfirmation}' to promote now: ");
+        var confirmation = Console.ReadLine()?.Trim();
+        if (!string.Equals(confirmation, requiredConfirmation, StringComparison.Ordinal))
+        {
+            var abandonment = await _promotion.ReviewAsync(new CandidateReviewRequest
+            {
+                EvidenceId = snapshot.EvidenceId,
+                RepositoryPath = _repoPath,
+                ExpectedDiffHash = snapshot.DiffHash,
+                Actor = actor,
+                Decision = CandidateReviewDecision.Abandon,
+                Justification = "Promotion confirmation was not supplied exactly as required",
+                ValidUntil = validUntil,
+                PolicyReference = policyReference,
+                RelatedReviewId = review.Evidence.Id
+            }, CancellationToken.None);
+            PrintReviewResult(abandonment);
+            Console.WriteLine("Repository unchanged; the approval can no longer authorize promotion.");
+            return;
+        }
+
+        var promoted = await _promotion.PromoteAsync(new CandidatePromotionRequest
+        {
+            EvidenceId = snapshot.EvidenceId,
+            RepositoryPath = _repoPath,
+            ExpectedDiffHash = snapshot.DiffHash,
+            Actor = actor,
+            Approval = new PromotionApproval
+            {
+                Kind = PromotionApprovalKind.HumanReview,
+                Reference = review.Evidence.ApprovalReference,
+                ConfirmedAt = DateTime.UtcNow
+            }
+        }, cancellationToken);
+        PrintPromotionResult(promoted);
+    }
+
+    private async Task ExportCandidatePatch(
+        string argument,
+        CancellationToken cancellationToken)
+    {
+        var tokens = argument.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length != 2 || !Guid.TryParse(tokens[0], out var evidenceId))
+        {
+            Console.WriteLine("Usage: export-patch <evidence-id> <output-path>");
+            return;
+        }
+
+        var snapshot = await _promotion.InspectAsync(
+            evidenceId,
+            _repoPath,
+            cancellationToken);
+        PrintReviewSnapshot(snapshot);
+        if (!snapshot.Available)
+            return;
+        var result = await _promotion.ExportPatchAsync(new CandidatePatchExportRequest
+        {
+            EvidenceId = evidenceId,
+            DestinationPath = tokens[1],
+            ExpectedDiffHash = snapshot.DiffHash,
+            Actor = Environment.UserName
+        }, cancellationToken);
+        PrintPromotionResult(result);
+    }
+
+    private static void PrintReviewSnapshot(CandidateReviewSnapshot snapshot)
+    {
+        Console.WriteLine("AECS AUTHENTICATED CANDIDATE REVIEW");
+        Console.WriteLine($"Evidence: {snapshot.EvidenceId:N}");
+        if (!snapshot.Available)
+        {
+            Console.WriteLine($"Unavailable: {snapshot.Message}");
+            return;
+        }
+        Console.WriteLine($"Candidate: {snapshot.CandidateId:N}");
+        Console.WriteLine($"Baseline: {snapshot.BaselineCommit} ({snapshot.BaselineBranch})");
+        Console.WriteLine($"Repository: {snapshot.RepositoryPath}");
+        Console.WriteLine(
+            $"Repository state: {(snapshot.RepositoryReady ? "ready" : "changed")} " +
+            $"- {snapshot.RepositoryState}");
+        Console.WriteLine($"Risk: {snapshot.Risk}");
+        Console.WriteLine($"Decision: {snapshot.Decision}/{snapshot.State}");
+        Console.WriteLine(
+            $"Promotion eligibility: {snapshot.Eligibility}; reviewable={snapshot.Reviewable}");
+        Console.WriteLine($"Diff hash: {snapshot.DiffHash}");
+        Console.WriteLine("Changed files:");
+        foreach (var file in snapshot.ChangedFiles)
+            Console.WriteLine($"  {file}");
+        Console.WriteLine("Gates:");
+        foreach (var gate in snapshot.Gates)
+        {
+            Console.WriteLine(
+                $"  [{gate.Phase}] {gate.Verifier}: {gate.Status} {gate.Message}".TrimEnd());
+        }
+        if (snapshot.Gates.Count == 0)
+            Console.WriteLine("  (none recorded)");
+        Console.WriteLine("Diff:");
+        Console.WriteLine(snapshot.Diff);
+    }
+
+    private static void PrintReviewResult(CandidateReviewResult result)
+    {
+        Console.WriteLine($"Review status: {result.Status}");
+        Console.WriteLine($"Review message: {result.Message}");
+        Console.WriteLine($"Review evidence: {result.Evidence.Id:N}");
+        Console.WriteLine($"Persisted: {result.Persisted}");
+    }
+
+    private static void PrintPromotionResult(CandidatePromotionResult result)
+    {
+        Console.WriteLine($"Promotion status: {result.Status}");
+        Console.WriteLine($"Promotion message: {result.Message}");
+        Console.WriteLine($"Promotion evidence: {result.Evidence.Id:N}");
+        if (!string.IsNullOrWhiteSpace(result.OutputPath))
+            Console.WriteLine($"Output: {result.OutputPath}");
+    }
+
+    private static bool TryParseReviewOptions(
+        string argument,
+        out JarvisReviewOptions options,
+        out string error)
+    {
+        var tokens = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Guid? evidenceId = null;
+        var validMinutes = 15;
+        string? policyReference = null;
+        for (var index = 0; index < tokens.Length; index++)
+        {
+            var token = tokens[index];
+            if (token == "--evidence" && index + 1 < tokens.Length &&
+                Guid.TryParse(tokens[++index], out var parsedEvidence))
+            {
+                evidenceId = parsedEvidence;
+                continue;
+            }
+            if (token == "--valid-minutes" && index + 1 < tokens.Length &&
+                int.TryParse(tokens[++index], out var parsedMinutes) &&
+                parsedMinutes is >= 1 and <= 1440)
+            {
+                validMinutes = parsedMinutes;
+                continue;
+            }
+            if (token == "--policy" && index + 1 < tokens.Length)
+            {
+                policyReference = tokens[++index];
+                continue;
+            }
+            if (!token.StartsWith("--", StringComparison.Ordinal) &&
+                evidenceId is null && Guid.TryParse(token, out var positionalEvidence))
+            {
+                evidenceId = positionalEvidence;
+                continue;
+            }
+            options = new JarvisReviewOptions();
+            error = $"Invalid argument '{token}'.";
+            return false;
+        }
+
+        if (!evidenceId.HasValue || string.IsNullOrWhiteSpace(policyReference) &&
+            tokens.Contains("--policy", StringComparer.Ordinal))
+        {
+            options = new JarvisReviewOptions();
+            error = "A valid evidence ID and non-empty policy reference are required.";
+            return false;
+        }
+        options = new JarvisReviewOptions
+        {
+            EvidenceId = evidenceId.Value,
+            ValidMinutes = validMinutes,
+            PolicyReference = policyReference
+        };
+        error = string.Empty;
+        return true;
+    }
+
+    private bool EnsureDurableHistory()
+    {
+        if (_durableHistory is not null)
+            return true;
+        Console.WriteLine(
+            "Authenticated durable history is unavailable for the selected evidence store.");
+        return false;
+    }
+
+    private static bool IsUnfiltered(DurableHistoryQuery query) =>
+        query.EvidenceId is null && query.TaskId is null &&
+        query.RunId is null && query.CandidateId is null;
+
+    private static bool TryParseLookup(
+        string argument,
+        bool allowLegacyTask,
+        out JarvisLookupOptions options,
+        out string error)
+    {
+        var tokens = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string? taskId = null;
+        Guid? evidenceId = null;
+        Guid? runId = null;
+        Guid? candidateId = null;
+        var limit = 50;
+        var json = false;
+        for (var index = 0; index < tokens.Length; index++)
+        {
+            var token = tokens[index];
+            if (token == "--json")
+            {
+                json = true;
+                continue;
+            }
+            if (token == "--format" && index + 1 < tokens.Length)
+            {
+                var format = tokens[++index];
+                if (format is not ("json" or "text"))
+                {
+                    options = new JarvisLookupOptions();
+                    error = "Format must be text or json.";
+                    return false;
+                }
+                json = format == "json";
+                continue;
+            }
+            if (token == "--task" && index + 1 < tokens.Length)
+            {
+                taskId = tokens[++index];
+                continue;
+            }
+            if (token == "--limit" && index + 1 < tokens.Length &&
+                int.TryParse(tokens[++index], out var parsedLimit) && parsedLimit is >= 1 and <= 500)
+            {
+                limit = parsedLimit;
+                continue;
+            }
+            if ((token is "--evidence" or "--run" or "--candidate") &&
+                index + 1 < tokens.Length && Guid.TryParse(tokens[++index], out var parsedId))
+            {
+                if (token == "--evidence")
+                    evidenceId = parsedId;
+                else if (token == "--run")
+                    runId = parsedId;
+                else
+                    candidateId = parsedId;
+                continue;
+            }
+            if (allowLegacyTask && !token.StartsWith("--", StringComparison.Ordinal) &&
+                taskId is null)
+            {
+                taskId = token;
+                continue;
+            }
+            options = new JarvisLookupOptions();
+            error = $"Invalid argument '{token}'.";
+            return false;
+        }
+        if (evidenceId.HasValue &&
+            (taskId is not null || runId.HasValue || candidateId.HasValue))
+        {
+            options = new JarvisLookupOptions();
+            error = "--evidence cannot be combined with other execution identifiers.";
+            return false;
+        }
+        options = new JarvisLookupOptions
+        {
+            Json = json,
+            Query = new DurableHistoryQuery
+            {
+                EvidenceId = evidenceId,
+                TaskId = taskId,
+                RunId = runId,
+                CandidateId = candidateId,
+                Limit = limit
+            }
+        };
+        error = string.Empty;
+        return true;
+    }
+
+    private sealed class JarvisLookupOptions
+    {
+        public bool Json { get; init; }
+        public DurableHistoryQuery Query { get; init; } = new();
+    }
+
+    private sealed class JarvisReviewOptions
+    {
+        public Guid EvidenceId { get; init; }
+        public int ValidMinutes { get; init; } = 15;
+        public string? PolicyReference { get; init; }
     }
 }

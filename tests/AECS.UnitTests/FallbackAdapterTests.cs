@@ -82,7 +82,8 @@ public class FallbackAdapterTests
             Success = false,
             StdErr = "Connection refused",
             Duration = TimeSpan.FromSeconds(2),
-            ExitReason = "ConnectionError"
+            ExitReason = "ConnectionError",
+            UsageAccounting = Accounting("local", localCost: 0.01m)
         };
 
         var cloudResult = new AgentRunResult
@@ -90,7 +91,8 @@ public class FallbackAdapterTests
             Success = true,
             FilesChanged = ["src/Fixed.cs"],
             Duration = TimeSpan.FromSeconds(5),
-            ExitReason = "Completed"
+            ExitReason = "Completed",
+            UsageAccounting = Accounting("cloud", rateCardCost: 0.02m)
         };
 
         var local = new MockAgentAdapter { PresetResult = localResult };
@@ -102,6 +104,9 @@ public class FallbackAdapterTests
         result.Success.Should().BeTrue();
         result.FilesChanged.Should().Contain("src/Fixed.cs");
         result.ExitReason.Should().Be("CompletedViaFallback");
+        result.UsageAccounting!.Components.Should().HaveCount(2);
+        result.UsageAccounting.AccountedCostUsd.Should().Be(0.03m);
+        result.UsageAccounting.AccountedCostBasis.Should().Be("mixed-estimates");
     }
 
     [Fact]
@@ -112,7 +117,8 @@ public class FallbackAdapterTests
             Success = false,
             StdErr = "Timed out",
             Duration = TimeSpan.FromSeconds(120),
-            ExitReason = "Cancelled"
+            ExitReason = "Timeout",
+            FailureKind = AgentFailureKind.Timeout
         };
 
         var cloudResult = new AgentRunResult
@@ -132,6 +138,110 @@ public class FallbackAdapterTests
         result.Success.Should().BeTrue();
         result.ExitReason.Should().Be("CompletedViaFallback");
         result.Duration.Should().Be(TimeSpan.FromSeconds(128)); // 120 + 8
+    }
+
+    [Fact]
+    public async Task LocalRateLimit_FallsBackToCloud()
+    {
+        var local = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = false,
+                ExitCode = 429,
+                ExitReason = "RateLimited"
+            }
+        };
+        var cloud = new CountingAdapter(new AgentRunResult
+        {
+            Success = true,
+            ExitReason = "Completed",
+            FilesChanged = ["src/Cloud.cs"]
+        });
+
+        var result = await new FallbackAdapter(local, cloud).ExecuteAsync(
+            CreateRequest(),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.ExitReason.Should().Be("CompletedViaFallback");
+        cloud.ExecutionCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RuntimePolicyDeniesRisk_CloudIsNotCalledAndFailureIsExplicit()
+    {
+        var local = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = false,
+                ExitReason = "ConnectionError",
+                FailureKind = AgentFailureKind.Transient
+            }
+        };
+        var cloud = new CountingAdapter(new AgentRunResult
+        {
+            Success = true,
+            ExitReason = "Completed"
+        });
+        var fallback = new FallbackAdapter(
+            local,
+            cloud,
+            authorizeFallback: request => request.Risk == AECS.Domain.Enums.RiskLevel.R0);
+        var request = CreateRequest();
+        request = new AgentExecutionRequest
+        {
+            TaskId = request.TaskId,
+            Objective = request.Objective,
+            RepoPath = request.RepoPath,
+            Scope = request.Scope,
+            Budget = request.Budget,
+            Model = request.Model,
+            Risk = AECS.Domain.Enums.RiskLevel.R3
+        };
+
+        var result = await fallback.ExecuteAsync(request, CancellationToken.None);
+        var profile = fallback.GetContextProfile(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureKind.Should().Be(AgentFailureKind.PolicyViolation);
+        result.ExitReason.Should().Be("FallbackPolicyBlocked");
+        cloud.ExecutionCount.Should().Be(0);
+        profile.Adapter.Should().Be(nameof(MockAgentAdapter));
+    }
+
+    [Fact]
+    public async Task MissingPrimaryAccounting_DoesNotBecomeZeroDuringFallback()
+    {
+        var local = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = false,
+                ExitReason = "ConnectionError",
+                FailureKind = AgentFailureKind.Transient
+            }
+        };
+        var cloud = new MockAgentAdapter
+        {
+            PresetResult = new AgentRunResult
+            {
+                Success = true,
+                ExitReason = "Completed",
+                FilesChanged = ["src/Fixed.cs"],
+                UsageAccounting = Accounting("cloud", rateCardCost: 0.02m)
+            }
+        };
+
+        var result = await new FallbackAdapter(local, cloud).ExecuteAsync(
+            CreateRequest(),
+            CancellationToken.None);
+
+        result.UsageAccounting.Should().NotBeNull();
+        result.UsageAccounting!.CostComplete.Should().BeFalse();
+        result.UsageAccounting.RateCardEstimatedCostUsd.Should().Be(0.02m);
+        result.UsageAccounting.AccountedCostUsd.Should().BeNull();
     }
 
     [Fact]
@@ -191,5 +301,30 @@ public class FallbackAdapterTests
         // Custom condition triggered fallback even though local had files
         result.FilesChanged.Should().Contain("src/Cloud.cs");
         result.ExitReason.Should().Be("CompletedViaFallback");
+    }
+
+    private static AgentUsageAccounting Accounting(
+        string model,
+        decimal? rateCardCost = null,
+        decimal? localCost = null) => new()
+        {
+            Adapter = model == "local" ? nameof(OllamaAdapter) : nameof(CloudAdapter),
+            Model = model,
+            RateCardEstimatedCostUsd = rateCardCost,
+            LocalResourceEstimatedCostUsd = localCost,
+            CostComplete = true
+        };
+
+    private sealed class CountingAdapter(AgentRunResult result) : IAgentAdapter
+    {
+        public int ExecutionCount { get; private set; }
+
+        public Task<AgentRunResult> ExecuteAsync(
+            AgentExecutionRequest request,
+            CancellationToken cancellationToken)
+        {
+            ExecutionCount++;
+            return Task.FromResult(result);
+        }
     }
 }

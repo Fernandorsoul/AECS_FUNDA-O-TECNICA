@@ -1,0 +1,52 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: AGRO-002
+  objective: Add CalculateTotal to SaleService to sum sale items and apply a discount percentage
+  acceptance:
+    - CalculateTotal accepts a list of SaleDto and a discount percentage
+    - CalculateTotal returns the total after discount
+    - CalculateTotal returns zero for an empty list
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      reference: FullyQualifiedName~AgronomoPlus.Tests.Handlers.Sale
+      test_path: Backend/AgronomoPlus.Tests/Handlers/Sale/SaleServiceTests.cs
+      behavioral: true
+    - id: AC-002
+      type: test
+      reference: FullyQualifiedName~AgronomoPlus.Tests.Handlers.Sale
+      test_path: Backend/AgronomoPlus.Tests/Handlers/Sale/SaleServiceTests.cs
+      behavioral: true
+    - id: AC-003
+      type: test
+      reference: FullyQualifiedName~AgronomoPlus.Tests.Handlers.Sale
+      test_path: Backend/AgronomoPlus.Tests/Handlers/Sale/SaleServiceTests.cs
+      behavioral: true
+  scope:
+    allowed:
+      - Backend/AgronomoPlus.Application/Modules/Sale/**
+      - Backend/AgronomoPlus.Domain/Models/Sale.cs
+      - Backend/AgronomoPlus.Tests/Handlers/Sale/**
+    forbidden:
+      - Backend/AgronomoPlus.Infrastructure/**
+      - Backend/AgronomoPlus.Api/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  budget:
+    tokens: 80000
+    usd: 0.30
+    retries: 2
+    wall_clock_seconds: 300
+    max_files_changed: 5
+  execution:
+    runtime: host
+    working_directory: Backend
+    target: AgronomoPlus.Tests/AgronomoPlus.Tests.csproj
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+  approval:
+    production: none

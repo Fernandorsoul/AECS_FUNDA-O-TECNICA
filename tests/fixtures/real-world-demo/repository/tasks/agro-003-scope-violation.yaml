@@ -1,0 +1,50 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: AGRO-003
+  objective: Extend PersonService.UpdateAsync and KeycloakAdminService to synchronize Keycloak user updates without changing Infrastructure or API layers
+  acceptance:
+    - PersonService.UpdateAsync requests the Keycloak user update
+    - KeycloakAdminService supports user updates
+    - Existing tests still pass
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      reference: FullyQualifiedName~AgronomoPlus.Tests.Services.PersonServiceTests
+      test_path: Backend/AgronomoPlus.Tests/Services/PersonServiceTests.cs
+      behavioral: true
+    - id: AC-002
+      type: test
+      reference: FullyQualifiedName~AgronomoPlus.Tests.Services.PersonServiceTests
+      test_path: Backend/AgronomoPlus.Tests/Services/PersonServiceTests.cs
+      behavioral: true
+    - id: AC-003
+      type: verifier
+      reference: Tests
+  scope:
+    allowed:
+      - Backend/AgronomoPlus.Application/Services/PersonService.cs
+      - Backend/AgronomoPlus.Application/Services/KeycloakAdminService.cs
+      - Backend/AgronomoPlus.Tests/Services/PersonServiceTests.cs
+    forbidden:
+      - Backend/AgronomoPlus.Infrastructure/**
+      - Backend/AgronomoPlus.Api/**
+  constraints:
+    security_risk: high
+    database_migration: false
+    external_dependency: true
+  budget:
+    tokens: 80000
+    usd: 0.30
+    retries: 2
+    wall_clock_seconds: 300
+    max_files_changed: 5
+  execution:
+    runtime: host
+    working_directory: Backend
+    target: AgronomoPlus.Tests/AgronomoPlus.Tests.csproj
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+  approval:
+    production: none

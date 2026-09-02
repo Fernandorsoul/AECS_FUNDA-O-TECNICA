@@ -3,257 +3,109 @@ using FluentAssertions;
 
 namespace AECS.UnitTests;
 
-public class EB002PatternVerifierTests
+public sealed class EB002PatternVerifierTests
 {
     [Fact]
-    public void Verify_ServiceWithoutInterface_Violation()
+    public void NewServiceWithoutResolvedInterface_IsReported()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var ns = Namespace("app-ns", "AECS.Application.Services");
+        var service = Type("service", "OrderService", "AECS.Application.Services.OrderService", ns.Id);
+        var input = SemanticGraphFixture.Input(
+            [ns],
+            [ns, service],
+            changedFiles: ["src/App/Changed.cs"]);
 
-        try
-        {
-            var appDir = Path.Combine(tempDir, "AECS.Application", "Services");
-            Directory.CreateDirectory(appDir);
-            File.WriteAllText(Path.Combine(appDir, "CustomerService.cs"), """
-                namespace AECS.Application.Services;
-
-                public class CustomerService
-                {
-                    public void Create() { }
-                }
-                """);
-
-            var verifier = new EB002PatternVerifier();
-            var result = verifier.Verify(tempDir);
-
-            result.HasViolations.Should().BeTrue();
-            result.Violations.Should().Contain(v => v.RuleId == "EB002-SERVICE-INTERFACE");
-            result.Violations.Should().Contain(v => v.ExpectedPattern == "ICustomerService");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
+        new EB002PatternVerifier().Verify(input).Violations.Should()
+            .ContainSingle(finding => finding.RuleId == "EB002-SERVICE-INTERFACE");
     }
 
     [Fact]
-    public void Verify_ServiceWithInterface_NoViolation()
+    public void ServiceWithActualImplementsEdge_Passes()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var ns = Namespace("app-ns", "AECS.Application.Services");
+        var service = Type("service", "OrderService", "AECS.Application.Services.OrderService", ns.Id);
+        var contract = SemanticGraphFixture.Node(
+            "contract", "type", "IOrderService", "AECS.Application.Services.IOrderService",
+            containing: ns.Id, typeKind: "Interface",
+            documentationId: "T:AECS.Application.Services.IOrderService");
+        var input = SemanticGraphFixture.Input(
+            [ns],
+            [ns, service, contract],
+            candidateEdges: [SemanticGraphFixture.Edge("implements", service.Id, contract.Id)],
+            changedFiles: ["src/App/Changed.cs"]);
 
-        try
-        {
-            var appDir = Path.Combine(tempDir, "AECS.Application", "Services");
-            Directory.CreateDirectory(appDir);
-            File.WriteAllText(Path.Combine(appDir, "ICustomerService.cs"), """
-                namespace AECS.Application.Services;
-
-                public interface ICustomerService
-                {
-                    void Create();
-                }
-                """);
-            File.WriteAllText(Path.Combine(appDir, "CustomerService.cs"), """
-                namespace AECS.Application.Services;
-
-                public class CustomerService : ICustomerService
-                {
-                    public void Create() { }
-                }
-                """);
-
-            var verifier = new EB002PatternVerifier();
-            var result = verifier.Verify(tempDir);
-
-            result.Violations.Should().NotContain(v => v.RuleId == "EB002-SERVICE-INTERFACE");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
+        new EB002PatternVerifier().Verify(input).Violations.Should().BeEmpty();
     }
 
     [Fact]
-    public void Verify_RepoWithoutInterface_Violation()
+    public void NewlyAsyncMethodWithoutSuffix_IsReported()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var type = Type("service", "OrderService", "OrderService", "");
+        var baseline = SemanticGraphFixture.Node(
+            "method", "member", "Load", "OrderService.Load()",
+            containing: type.Id, memberKind: "Method", modifiers: []);
+        var candidate = SemanticGraphFixture.Node(
+            "method", "member", "Load", "OrderService.Load()",
+            containing: type.Id, memberKind: "Method", modifiers: ["async"]);
+        var input = SemanticGraphFixture.Input(
+            [type, baseline],
+            [type, candidate]);
 
-        try
-        {
-            var infraDir = Path.Combine(tempDir, "AECS.Infrastructure", "Repositories");
-            Directory.CreateDirectory(infraDir);
-            File.WriteAllText(Path.Combine(infraDir, "CustomerRepository.cs"), """
-                namespace AECS.Infrastructure.Repositories;
-
-                public class CustomerRepository
-                {
-                    public void GetAll() { }
-                }
-                """);
-
-            var verifier = new EB002PatternVerifier();
-            var result = verifier.Verify(tempDir);
-
-            result.HasViolations.Should().BeTrue();
-            result.Violations.Should().Contain(v => v.RuleId == "EB002-REPO-INTERFACE");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
+        new EB002PatternVerifier().Verify(input).Violations.Should()
+            .ContainSingle(finding => finding.RuleId == "EB002-ASYNC-NAMING");
     }
 
     [Fact]
-    public void Verify_AsyncMethodWithoutSuffix_Violation()
+    public void ControllerConstructionUsesResolvedConstructsEdge()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var ns = Namespace("controller-ns", "AECS.Api.Controllers");
+        var controller = Type("controller", "OrdersController", "AECS.Api.Controllers.OrdersController", ns.Id);
+        var action = SemanticGraphFixture.Node(
+            "action", "member", "Get", "OrdersController.Get()",
+            containing: controller.Id, memberKind: "Method");
+        var service = SemanticGraphFixture.Node(
+            "service", "type", "OrderService", "OrderService",
+            file: null, typeKind: "Class", external: true);
+        var input = SemanticGraphFixture.Input(
+            [ns, controller, action, service],
+            [ns, controller, action, service],
+            candidateEdges: [SemanticGraphFixture.Edge("constructs", action.Id, service.Id)]);
 
-        try
-        {
-            var appDir = Path.Combine(tempDir, "AECS.Application", "Services");
-            Directory.CreateDirectory(appDir);
-            File.WriteAllText(Path.Combine(appDir, "MyService.cs"), """
-                using System.Threading.Tasks;
-
-                namespace AECS.Application.Services;
-
-                public class MyService
-                {
-                    public async Task DoWork()
-                    {
-                        await Task.Delay(1);
-                    }
-                }
-                """);
-
-            var verifier = new EB002PatternVerifier();
-            var result = verifier.Verify(tempDir);
-
-            result.HasViolations.Should().BeTrue();
-            result.Violations.Should().Contain(v => v.RuleId == "EB002-ASYNC-NAMING");
-            result.Violations.Should().Contain(v => v.ActualPattern == "DoWork");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
+        new EB002PatternVerifier().Verify(input).Violations.Should()
+            .ContainSingle(finding =>
+                finding.RuleId == "EB002-CONTROLLER-DI" &&
+                finding.Severity == RuleSeverity.Error);
     }
 
     [Fact]
-    public void Verify_AsyncMethodWithSuffix_NoViolation()
+    public void ServiceTextWithoutConstructionEdge_DoesNotTriggerControllerRule()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var ns = Namespace("controller-ns", "AECS.Api.Controllers");
+        var controller = Type("controller", "OrdersController", "AECS.Api.Controllers.OrdersController", ns.Id);
+        var action = SemanticGraphFixture.Node(
+            "action", "member", "GetOrderServiceText", "OrdersController.GetOrderServiceText()",
+            containing: controller.Id, memberKind: "Method");
+        var input = SemanticGraphFixture.Input(
+            [ns, controller, action],
+            [ns, controller, action]);
 
-        try
-        {
-            var appDir = Path.Combine(tempDir, "AECS.Application", "Services");
-            Directory.CreateDirectory(appDir);
-            File.WriteAllText(Path.Combine(appDir, "MyService.cs"), """
-                using System.Threading.Tasks;
-
-                namespace AECS.Application.Services;
-
-                public class MyService
-                {
-                    public async Task DoWorkAsync()
-                    {
-                        await Task.Delay(1);
-                    }
-                }
-                """);
-
-            var verifier = new EB002PatternVerifier();
-            var result = verifier.Verify(tempDir);
-
-            result.Violations.Should().NotContain(v => v.RuleId == "EB002-ASYNC-NAMING");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
+        new EB002PatternVerifier().Verify(input).Violations.Should()
+            .NotContain(finding => finding.RuleId == "EB002-CONTROLLER-DI");
     }
 
-    [Fact]
-    public void Verify_ControllerDirectInstantiation_Violation()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+    private static AECS.Domain.Models.CSharpSymbolGraphNode Namespace(string id, string name) =>
+        SemanticGraphFixture.Node(id, "namespace", name.Split('.').Last(), name, file: null);
 
-        try
-        {
-            var apiDir = Path.Combine(tempDir, "AECS.Api", "Controllers");
-            Directory.CreateDirectory(apiDir);
-            File.WriteAllText(Path.Combine(apiDir, "CustomerController.cs"), """
-                namespace AECS.Api.Controllers;
-
-                public class CustomerController
-                {
-                    public void Create()
-                    {
-                        var service = new CustomerService();
-                    }
-                }
-                """);
-
-            var verifier = new EB002PatternVerifier();
-            var result = verifier.Verify(tempDir);
-
-            result.HasViolations.Should().BeTrue();
-            result.Violations.Should().Contain(v => v.RuleId == "EB002-CONTROLLER-DI");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
-    }
-
-    [Fact]
-    public void Verify_CustomRules_Applied()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"aecs-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-
-        try
-        {
-            var appDir = Path.Combine(tempDir, "MyApp", "Handlers");
-            Directory.CreateDirectory(appDir);
-            File.WriteAllText(Path.Combine(appDir, "CreateOrderHandler.cs"), """
-                namespace MyApp.Handlers;
-
-                public class CreateOrderHandler
-                {
-                    public void Handle() { }
-                }
-                """);
-
-            var customRules = new List<PatternRule>
-            {
-                new()
-                {
-                    Id = "CUSTOM-HANDLER",
-                    Name = "Handlers must implement interface",
-                    Type = PatternType.InterfaceImplementation,
-                    Pattern = @"class\s+(\w+Handler)\b",
-                    ExpectedPattern = @"interface\s+I\1",
-                    Scope = "Handlers",
-                    Severity = RuleSeverity.Warning
-                }
-            };
-
-            var verifier = new EB002PatternVerifier(customRules);
-            var result = verifier.Verify(tempDir);
-
-            result.HasViolations.Should().BeTrue();
-            result.Violations.Should().Contain(v => v.RuleId == "CUSTOM-HANDLER");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
-    }
+    private static AECS.Domain.Models.CSharpSymbolGraphNode Type(
+        string id,
+        string name,
+        string display,
+        string containing) => SemanticGraphFixture.Node(
+            id,
+            "type",
+            name,
+            display,
+            containing: containing,
+            typeKind: "Class",
+            documentationId: $"T:{display}");
 }
