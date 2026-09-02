@@ -140,7 +140,7 @@ jobs:
           test -s "${output_root}/cost-records.csv"
           test -s "${output_root}/cost-efficiency.csv"
           test "$(find "${output_root}/runs" -name '*.json' | wc -l)" -eq 4
-          grep -q '"schemaVersion": "aecs.experiment-report/v4"' "${output_root}/report.json"
+          grep -q '"schemaVersion": "aecs.experiment-report/v5"' "${output_root}/report.json"
 
           dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
             --configuration Release --no-build -- \
