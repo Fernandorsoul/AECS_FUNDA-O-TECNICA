@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: R4-001
   objective: Create a Docker Compose configuration for the SampleProject with PostgreSQL database, API service, and health checks
@@ -29,6 +30,5 @@ task:
     build: optional
     unit_tests: optional
     scope: required
-    budget: required
   approval:
     production: human

@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: R2-002
   objective: Add a static method IsValidPhone to CustomerService that returns true if phone has 10 or 11 digits
@@ -24,6 +25,5 @@ task:
     build: required
     unit_tests: required
     scope: required
-    budget: required
   approval:
     production: none

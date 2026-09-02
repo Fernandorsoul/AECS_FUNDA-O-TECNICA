@@ -370,6 +370,17 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 "Execution evidence is incomplete and cannot be trusted.");
         }
 
+        try
+        {
+            TaskContractIntegrity.ValidateForEvidence(evidence.TaskContract);
+        }
+        catch (Exception exception)
+        {
+            throw new EvidenceIntegrityException(
+                "Execution evidence contains an invalid TaskContract version or fingerprint.",
+                exception);
+        }
+
         var securityScans = evidence.BaselineVerificationResults
             .Concat(evidence.VerificationResults)
             .Where(result => result.SecurityScan is not null)

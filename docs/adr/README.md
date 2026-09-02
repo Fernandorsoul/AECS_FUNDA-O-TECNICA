@@ -22,6 +22,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-016](ADR-016-versioned-historical-decision-registry.md) | Accepted | Alimentar EB005 por decisões históricas versionadas e revisadas |
 | [ADR-017](ADR-017-reproducible-experiment-datasets.md) | Accepted | Executar experimentos como datasets versionados e runs retomáveis |
 | [ADR-018](ADR-018-preregistered-context-ab.md) | Accepted | Pré-registrar o A/B pareado do Context Compiler e concluir H1 por regra explícita |
+| [ADR-019](ADR-019-versioned-fail-closed-task-contract.md) | Accepted | Versionar o TaskContract, rejeitar entradas ambíguas e selar o contrato efetivo |
 
 ## Convenção para novos ADRs
 

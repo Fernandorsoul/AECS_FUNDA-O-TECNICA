@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: R2-001
   objective: Add a CalculateDiscount method to CustomerService that applies a percentage discount to a price, with validation that discount is between 0 and 100
@@ -28,6 +29,5 @@ task:
     build: required
     unit_tests: required
     scope: required
-    budget: required
   approval:
     production: none

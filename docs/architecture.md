@@ -38,7 +38,7 @@ flowchart TD
 
 O pipeline executa as seguintes etapas:
 
-1. `TaskContractParser` converte o YAML, e `RiskClassifier` pode elevar o risco declarado.
+1. `TaskContractParser` valida o schema estrito `aecs.task-contract/v1`, rejeita campos e valores desconhecidos, e `RiskClassifier` pode elevar o risco declarado; o contrato efetivo recebe então um fingerprint SHA-256 canônico.
 2. `ExecutionBudgetScope` inicia um wall clock compartilhado por preflight, agente, retries e verificações.
 3. `GitWorkspaceManager` resolve a raiz Git e captura `HEAD`, branch e status. Uma working tree suja é recusada; em seguida o Adaptive Controller calcula somente uma recomendação shadow a partir de evidências autenticadas, sem substituir o plano fixo.
 4. `RepositorySnapshotBuilder` lê exclusivamente a árvore Git do commit no worktree detached e produz o inventário versionado e endereçado por conteúdo da baseline.
@@ -60,6 +60,7 @@ O pipeline executa as seguintes etapas:
 | Caminhos na resposta do agente | `FileApplicator` | rejeita caminho absoluto, traversal, `.git`, symlink/junction e destino duplicado; a validação é all-or-nothing antes da escrita |
 | Arquivos alterados | Git no worktree | `CandidateChangeSet.ChangedFiles` vem de `git diff --cached --name-status`, não de `AgentRunResult.FilesChanged` |
 | Conteúdo do candidato | diff Git persistido | o SHA-256 liga a evidência ao patch exato |
+| Política efetiva da tarefa | TaskContract versionado | schema e fingerprint canônico são validados antes de assinar, consultar, promover ou reproduzir a evidência; somente evidência histórica autenticada pode usar `legacy-v0` |
 | Estrutura da baseline | árvore Git do commit isolado | o snapshot usa caminhos relativos e IDs de blobs, sem confiar no filesystem não versionado |
 | Estado do original | commit, branch e status capturados | é revalidado após preflight, antes de publicar e antes de qualquer promoção |
 | Resultado de comandos | processo real | argumentos, working directory, duração, saída, exit code, timeout e cancelamento são preservados |
@@ -171,7 +172,7 @@ No backend JSON, o diretório padrão é `%LOCALAPPDATA%/AECS/evidence` no Windo
 
 Cada documento preserva:
 
-- contrato, risco efetivo, execução do agente e cada tentativa;
+- contrato, schema, fingerprint canônico, risco efetivo, execução do agente e cada tentativa;
 - consumo agregado de tokens, custo, tempo e motivo de exaustão;
 - baseline, comandos e verificações de preflight;
 - `RepositorySnapshot` da baseline, configuração de descoberta e proveniência das ferramentas;

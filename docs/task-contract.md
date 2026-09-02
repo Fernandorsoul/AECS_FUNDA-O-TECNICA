@@ -5,6 +5,7 @@ O `TaskContract` é a unidade de trabalho do AECS. Ele define o resultado espera
 ## Exemplo completo
 
 ```yaml
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-001
   objective: Fix NullReferenceException in CustomerMapper when input is null
@@ -131,7 +132,9 @@ task:
     production: none
 ```
 
-O parser aceita a raiz `task` ou `Task` e propriedades em snake_case ou PascalCase. Campos desconhecidos são ignorados; por isso, valide alterações de schema com testes para evitar erros de digitação silenciosos.
+Todo contrato novo deve declarar `schema_version: aecs.task-contract/v1` na raiz. O parser aceita `task`/`Task` e propriedades em snake_case ou PascalCase, mas rejeita campos desconhecidos, aliases duplicados e versões futuras com o caminho exato do campo inválido. Não existe upgrade implícito para YAML sem versão.
+
+Depois do parsing e da classificação determinística de risco, o pipeline sela o contrato efetivo com SHA-256 canônico. `schemaVersion` e `contractFingerprint` ficam dentro da evidência autenticada e são validados antes de consulta, promoção ou replay. Evidências assinadas anteriores ao schema continuam legíveis como `aecs.task-contract/legacy-v0`; elas preservam o payload original e não recebem fingerprint retroativo.
 
 ## Campos
 
@@ -139,12 +142,12 @@ O parser aceita a raiz `task` ou `Task` e propriedades em snake_case ou PascalCa
 
 | Campo | Tipo | Padrão | Semântica |
 | --- | --- | --- | --- |
-| `id` | string | vazio | Identificador usado em relatórios e histórico |
-| `objective` | string | vazio | Instrução principal enviada ao agente e usada na classificação de risco |
+| `id` | string | obrigatório, 1–128 caracteres | Identificador usado em relatórios e histórico |
+| `objective` | string | obrigatório, 1–4.000 caracteres | Instrução principal enviada ao agente e usada na classificação de risco |
 | `acceptance` | lista de strings | vazia | Resultados observáveis que devem orientar geração e verificação |
 | `acceptance_evidence` | lista de associações | vazia | Liga cada critério a um verificador ou teste executável |
 
-O parser ainda não rejeita `id` ou `objective` vazios. Trate ambos como obrigatórios ao escrever novos contratos.
+Valores ausentes, vazios ou acima do limite são rejeitados antes da criação de worktrees.
 
 Cada item de `acceptance` recebe um identificador determinístico na ordem declarada (`AC-001`, `AC-002`, ...). Uma associação de `acceptance_evidence` pode selecionar o critério por `id` ou pelo texto exato em `criterion`:
 
@@ -182,7 +185,7 @@ Os blocos são aplicados antes do gate de escopo, mas apenas no worktree descart
 
 | Campo | Valores reconhecidos | Padrão |
 | --- | --- | --- |
-| `constraints.security_risk` | `low`, `r0`, `r1`, `medium`, `r2`, `high`, `r3` | `low` |
+| `constraints.security_risk` | `low`, `r0`, `r1`, `medium`, `r2`, `high`, `r3`, `r4` | `low` |
 | `constraints.database_migration` | boolean | `false` |
 | `constraints.external_dependency` | boolean | `false` |
 
@@ -194,7 +197,7 @@ O risco declarado é apenas uma entrada. `RiskClassifier` reclassifica o contrat
 - R3: autenticação, autorização, pagamentos, segredos, criptografia, migração declarada ou dependência externa;
 - R4: infraestrutura, Docker, Kubernetes, deploy, CI/CD, produção, rede ou schema/migration no objetivo.
 
-Embora seja aceito como texto, `security_risk: r0` é convertido inicialmente em R1; R0 é inferido a partir do objetivo. O parser também ainda não converte `security_risk: r4` diretamente em R4. Para tarefas críticas, descreva claramente a natureza de infraestrutura no objetivo e mantenha `approval.production: human`.
+R0–R4 são preservados exatamente pelo parser; os aliases `low`, `medium` e `high` correspondem a R1, R2 e R3. Valor desconhecido é recusado. `RiskClassifier` pode elevar o risco declarado, mas nunca reduzi-lo. Para tarefas críticas, mantenha também `approval.production: human`.
 
 ### Orçamento
 
@@ -321,9 +324,9 @@ O ranqueamento começa pelos sinais do objetivo, critérios, escopo, caminhos e 
 | `verification.critical_semantic_failures` | `required` | Falhas semânticas de severidade crítica bloqueiam a decisão |
 | `verification.required_semantic_verifiers` | lista vazia | Nomes de verificadores EB que devem produzir exatamente um resultado `Pass` |
 
-Somente o texto `required`, sem diferenciar maiúsculas de minúsculas, ativa esses campos. Qualquer outro valor é tratado como opcional.
+Os únicos modos aceitos são `required`, `optional` e `disabled`, sem diferenciar maiúsculas de minúsculas. Valor desconhecido é rejeitado; não existe downgrade silencioso para opcional.
 
-A verificação de orçamento permanece habilitada pelo padrão do modelo. Embora alguns exemplos tragam `verification.budget`, o parser atual ignora esse campo e mantém `Budget = true`.
+A verificação de orçamento permanece sempre habilitada pelo modelo. `verification.budget` não pertence ao schema v1 e agora é rejeitado como campo desconhecido.
 
 `AgentSuccess`, `Application`, `NonEmptyChange`, `Scope` e `Budget` são sempre obrigatórios, mesmo que um campo opcional tente enfraquecê-los. Build e testes só executam depois desses pré-requisitos; uma falha estrutural deixa os comandos posteriores em `Skip`, que não é aceito como sucesso.
 

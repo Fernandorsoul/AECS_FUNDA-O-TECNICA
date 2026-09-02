@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: H1-INVOICE
   objective: Replace the pending InvoicePolicy implementation with the production rate declared by its contract
