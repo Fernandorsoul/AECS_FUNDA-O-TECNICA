@@ -33,3 +33,12 @@ an HTTPS endpoint outside loopback, an available credential and a risk allowlist
 configuration never weakens the TaskContract budget, capabilities or sandbox policy.
 
 The current model routing also evolved from the initial examples: R0/R1 select `qwen2.5-coder:7b`, while R2–R4 select `qwen2.5-coder:14b`. These are implementation details and may continue to evolve without replacing the architectural decision to prefer a local runtime.
+
+## Validation note — 2026-09-02
+
+The routing values above describe code behavior, not validated capacity on the RX 570 host. A
+pre-registered [local capacity gate](../validation/2026-09-02-local-model-capacity-gate.md) rejected
+`qwen2.5-coder:3b` with 0/6 verified changes and less than 1 GiB of free physical memory. The
+fail-closed resource rule prevented the larger 7B stage from running. No candidate was approved and
+the hard-coded 7B/14B routing remains unvalidated for this hardware; changing it requires a separate
+decision backed by new evidence.

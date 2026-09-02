@@ -3,6 +3,7 @@ using AECS.Application.Experiments;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 using FluentAssertions;
+using System.Text.Json;
 
 namespace AECS.UnitTests;
 
@@ -37,6 +38,65 @@ public sealed class ContextAbExperimentTests
             variant.Seed == 4200 &&
             variant.Parameters["baseUrl"] == "http://127.0.0.1:11434" &&
             variant.Parameters["contextWindowTokens"] == "8192");
+    }
+
+    [Theory]
+    [InlineData("dataset.local-capacity-3b.json", "qwen2.5-coder:3b")]
+    [InlineData("dataset.local-capacity-7b.json", "qwen2.5-coder:7b")]
+    public void LocalModelCapacityDatasets_FixOneModelAndGraphContext(
+        string fileName,
+        string model)
+    {
+        var repository = FindRepositoryRoot();
+        var dataset = ExperimentDatasetLoader.Load(Path.Combine(
+            repository,
+            "experiments",
+            "context-compiler-h1",
+            fileName));
+
+        dataset.Manifest.SchemaVersion.Should().Be(ExperimentDatasetSchema.Version);
+        dataset.Manifest.Protocol.Should().BeNull();
+        dataset.Manifest.Version.Should().Be("1.0.0");
+        dataset.Manifest.Repetitions.Should().Be(2);
+        dataset.Manifest.Tasks.Should().HaveCount(3);
+        dataset.Manifest.Variants.Should().ContainSingle().Which.Should().Match<ExperimentVariantDefinition>(
+            variant => variant.Provider == ExperimentProvider.Local &&
+                variant.Model == model &&
+                variant.ContextStrategy == ContextStrategyIds.GraphRanked &&
+                variant.RequiresRealProvider &&
+                variant.Seed == 5200 &&
+                variant.Parameters["baseUrl"] == "http://127.0.0.1:11434" &&
+                variant.Parameters["contextWindowTokens"] == "8192");
+    }
+
+    [Fact]
+    public void LocalModelCapacityGate_IsSequentialAndFailClosed()
+    {
+        var repository = FindRepositoryRoot();
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            repository,
+            "experiments",
+            "context-compiler-h1",
+            "local-model-capacity-gate.json")));
+        var root = document.RootElement;
+        var candidates = root.GetProperty("candidates").EnumerateArray().ToArray();
+        var gate = root.GetProperty("gate");
+
+        root.GetProperty("schemaVersion").GetString().Should()
+            .Be("aecs.local-model-capacity-gate/v1");
+        root.GetProperty("selectionPolicy").GetString().Should().Be("first-passing-candidate");
+        root.GetProperty("failurePolicy").GetProperty("operationalFailure").GetString().Should()
+            .Be("stop-and-diagnose");
+        candidates.Select(candidate => candidate.GetProperty("model").GetString()).Should()
+            .Equal("qwen2.5-coder:3b", "qwen2.5-coder:7b");
+        candidates.Select(candidate => candidate.GetProperty("order").GetInt32()).Should()
+            .Equal(1, 2);
+        gate.GetProperty("requiredRuns").GetInt32().Should().Be(6);
+        gate.GetProperty("minimumVerifiedChanges").GetInt32().Should().Be(3);
+        gate.GetProperty("minimumVerifiedChangesPerTask").GetInt32().Should().Be(1);
+        gate.GetProperty("maximumScopeViolations").GetInt32().Should().Be(0);
+        gate.GetProperty("minimumFreePhysicalMemoryBytes").GetInt64().Should().Be(1L << 30);
+        gate.GetProperty("requireIdempotentResume").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

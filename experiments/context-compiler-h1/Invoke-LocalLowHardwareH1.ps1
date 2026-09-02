@@ -3,6 +3,8 @@ param(
     [ValidateSet("pilot", "full")]
     [string] $Mode = "pilot",
 
+    [string] $DatasetFile,
+
     [Parameter(Mandatory)]
     [string] $ArtifactRoot,
 
@@ -28,12 +30,34 @@ $keyRoot = Join-Path $artifactPath "keys"
 $telemetryPath = Join-Path $artifactPath "host-telemetry.json"
 $stdoutPath = Join-Path $artifactPath "experiment.stdout.log"
 $stderrPath = Join-Path $artifactPath "experiment.stderr.log"
-$datasetName = if ($Mode -eq "full") {
-    "dataset.local-low-hardware.json"
+$datasetName = if ([string]::IsNullOrWhiteSpace($DatasetFile)) {
+    if ($Mode -eq "full") {
+        "dataset.local-low-hardware.json"
+    } else {
+        "dataset.local-low-hardware-pilot.json"
+    }
 } else {
-    "dataset.local-low-hardware-pilot.json"
+    if ([IO.Path]::GetFileName($DatasetFile) -ne $DatasetFile -or
+        [IO.Path]::GetExtension($DatasetFile) -ne ".json") {
+        throw "DatasetFile must be a JSON filename in the experiment directory."
+    }
+    $DatasetFile
 }
-$expectedRuns = if ($Mode -eq "full") { 60 } else { 4 }
+$sourceDatasetPath = Join-Path $scriptDirectory $datasetName
+if (-not (Test-Path -LiteralPath $sourceDatasetPath -PathType Leaf)) {
+    throw "Dataset was not found: $sourceDatasetPath"
+}
+$manifest = Get-Content -LiteralPath $sourceDatasetPath -Raw | ConvertFrom-Json
+$modelNames = @($manifest.variants.model | Sort-Object -Unique)
+$contextWindows = @($manifest.variants.parameters.contextWindowTokens | Sort-Object -Unique)
+if ($modelNames.Count -ne 1 -or $contextWindows.Count -ne 1) {
+    throw "Local hardware runs require one shared model and context window."
+}
+$modelName = $modelNames[0]
+$expectedContextWindow = [int]$contextWindows[0]
+$expectedRuns = [int]$manifest.repetitions *
+    @($manifest.tasks).Count *
+    @($manifest.variants).Count
 
 New-Item -ItemType Directory -Path $artifactPath | Out-Null
 Copy-Item -LiteralPath $scriptDirectory -Destination $experimentRoot -Recurse
@@ -74,10 +98,10 @@ $quotedArguments = $arguments | ForEach-Object {
 
 $model = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get |
     Select-Object -ExpandProperty models |
-    Where-Object { $_.name -eq "qwen2.5-coder:1.5b" } |
+    Where-Object { $_.name -eq $modelName } |
     Select-Object -First 1
 if ($null -eq $model) {
-    throw "The preregistered qwen2.5-coder:1.5b model is not installed in Ollama."
+    throw "The preregistered $modelName model is not installed in Ollama."
 }
 
 $hostInfo = Get-CimInstance Win32_ComputerSystem
@@ -156,12 +180,13 @@ $report = if (Test-Path -LiteralPath $reportPath) {
 }
 $ollamaProcesses = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/ps" -Method Get
 $loadedModel = $ollamaProcesses.models |
-    Where-Object { $_.name -eq "qwen2.5-coder:1.5b" } |
+    Where-Object { $_.name -eq $modelName } |
     Select-Object -First 1
 
 $telemetry = [ordered]@{
     schemaVersion = "aecs.local-hardware-telemetry/v1"
     mode = $Mode
+    datasetId = $manifest.id
     sourceRevision = (git -C $repositoryRoot rev-parse HEAD)
     datasetPath = $datasetPath
     startedAtUtc = $startedAt.ToString("O")
@@ -209,8 +234,8 @@ $evidenceCount = @(Get-ChildItem -LiteralPath $evidenceRoot -Filter "*.json" -Fi
 if ($checkpointCount -ne $expectedRuns -or $evidenceCount -ne $expectedRuns) {
     throw "Expected $expectedRuns persisted runs and evidence files; got $checkpointCount and $evidenceCount."
 }
-if ($null -eq $loadedModel -or $loadedModel.context_length -ne 8192) {
-    throw "Ollama did not report the preregistered 8192-token context window."
+if ($null -eq $loadedModel -or $loadedModel.context_length -ne $expectedContextWindow) {
+    throw "Ollama did not report the preregistered $expectedContextWindow-token context window."
 }
 if (($report.succeeded -and $processExitCode -ne 0) -or (-not $report.succeeded -and $processExitCode -ne 1)) {
     throw "CLI exit code $processExitCode does not match experiment success=$($report.succeeded)."
@@ -218,6 +243,8 @@ if (($report.succeeded -and $processExitCode -ne 0) -or (-not $report.succeeded 
 
 [pscustomobject]@{
     artifactRoot = $artifactPath
+    datasetId = $report.datasetId
+    model = $modelName
     report = $reportPath
     telemetry = $telemetryPath
     runs = $report.results.Count
