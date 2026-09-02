@@ -84,6 +84,7 @@ public class OllamaAdapter : IAgentAdapter
                 Stream = false,
                 Options = new OllamaOptions
                 {
+                    NumCtx = _contextWindowTokens,
                     NumPredict = maximumOutputTokens,
                     Seed = _seed
                 }
@@ -391,6 +392,9 @@ internal class OllamaRequest
 
 internal class OllamaOptions
 {
+    [JsonPropertyName("num_ctx")]
+    public int NumCtx { get; set; }
+
     [JsonPropertyName("num_predict")]
     public int NumPredict { get; set; }
 

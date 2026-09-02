@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "aecs.experiment-dataset/v2",
+  "id": "context-compiler-h1-local-low-hardware",
+  "version": "1.0.0",
+  "repository": {
+    "path": "repository",
+    "baseline": "HEAD"
+  },
+  "repetitions": 10,
+  "referenceVariantId": "naive-local",
+  "protocol": {
+    "design": "paired-context-ab",
+    "hypothesisId": "H1",
+    "hypothesis": "Graph-selected context improves verified code changes per estimated local compute cost compared with naive ordinal context on the registered low-hardware host.",
+    "primaryMetric": "vcc-per-estimated-cost",
+    "minimumPairedSamples": 30,
+    "confidenceLevel": 0.95,
+    "deathCriteria": {
+      "minimumRelativeImprovement": 0.05,
+      "maximumCandidateFailureRate": 0.20,
+      "maximumCandidateScopeViolationRate": 0.00
+    }
+  },
+  "tasks": [
+    {
+      "id": "H1-RETENTION",
+      "contractPath": "tasks/retention.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "H1-INVOICE",
+      "contractPath": "tasks/invoice.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "H1-QUEUE",
+      "contractPath": "tasks/queue.yaml",
+      "expectedDecision": "Verified"
+    }
+  ],
+  "variants": [
+    {
+      "id": "naive-local",
+      "provider": "Local",
+      "model": "qwen2.5-coder:1.5b",
+      "contextStrategy": "naive-path-order",
+      "context": {
+        "maxTokens": 1600,
+        "maxCharacters": 4000,
+        "maxFileCharacters": 400,
+        "maxFileTokens": 200,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 4200,
+      "parameters": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "contextWindowTokens": "8192"
+      }
+    },
+    {
+      "id": "compiled-local",
+      "provider": "Local",
+      "model": "qwen2.5-coder:1.5b",
+      "contextStrategy": "graph-ranked",
+      "context": {
+        "maxTokens": 1600,
+        "maxCharacters": 4000,
+        "maxFileCharacters": 400,
+        "maxFileTokens": 200,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 4200,
+      "parameters": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "contextWindowTokens": "8192"
+      }
+    }
+  ]
+}
