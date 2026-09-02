@@ -1,6 +1,6 @@
 # Arquitetura executável do AECS
 
-Este documento descreve o comportamento conectado à CLI no estado atual do repositório. A visão de longo prazo permanece no [Documento de Fundação Técnica](../AECS_Fundacao_Tecnica_v0.1.md), e as decisões estáveis ficam nos [ADRs](adr/README.md).
+Este documento descreve o comportamento conectado à CLI no estado atual do repositório. A visão de longo prazo permanece no [Documento de Fundação Técnica](../AECS_Fundacao_Tecnica_v0.1.md), as decisões estáveis ficam nos [ADRs](adr/README.md) e a distinção entre TFM, runtime e SDK está na [matriz de suporte .NET](dotnet-support.md).
 
 ## Princípio central
 

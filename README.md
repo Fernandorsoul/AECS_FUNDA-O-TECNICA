@@ -2,7 +2,7 @@
 
 O AECS é um protótipo de **plano de controle para engenharia de software com agentes de IA**. Ele transforma uma solicitação em um contrato explícito, avalia a execução contra limites de escopo e orçamento, verifica o resultado com ferramentas determinísticas e só então classifica a mudança como verificada, rejeitada ou pendente de revisão humana.
 
-> **Status:** protótipo experimental com projetos `net8.0` e SDK .NET 9 fixado em `global.json`. A execução exige uma working tree limpa, avalia candidatos em worktrees Git descartáveis e executa comandos do repositório em sandbox Docker por padrão; o checkout original não recebe a mudança automaticamente.
+> **Status:** protótipo experimental com projetos `net8.0` e SDK .NET 9 selecionado por `global.json`. Essa matriz é transitória e está documentada em [Suporte .NET](docs/dotnet-support.md). A execução exige uma working tree limpa, avalia candidatos em worktrees Git descartáveis e executa comandos do repositório em sandbox Docker por padrão; o checkout original não recebe a mudança automaticamente.
 
 ## Por que este projeto existe
 
@@ -57,13 +57,17 @@ Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes j
 
 ## Pré-requisitos
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0), selecionado por `global.json`;
+- [.NET 9 SDK estável](https://dotnet.microsoft.com/download/dotnet/9.0), selecionado por `global.json` sem aceitar previews;
 - [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0), necessário para executar os projetos AECS `net8.0`;
 - Git, recomendado para revisar e descartar mudanças produzidas pelo agente;
 - [Ollama](https://ollama.com/), opcional para execução com modelo local;
 - Docker, obrigatório para a execução staged padrão e opcional apenas quando um contrato confiável usa o override de desenvolvimento no host.
 
 O PostgreSQL é opcional: `json` permanece o backend padrão local, enquanto `postgres` pode ser selecionado explicitamente em todos os fluxos da CLI. O CI provisiona PostgreSQL 16 para os testes reais do store.
+
+A distinção entre TFM do produto, runtime, SDK do controlador, imagem staged e fixture E2E está na
+[matriz de suporte .NET](docs/dotnet-support.md). .NET 8 e .NET 9 encerram suporte em 2026-11-10;
+a migração técnica para .NET 10 LTS precisa ocorrer antes dessa data.
 
 ## Início rápido
 
@@ -75,8 +79,8 @@ dotnet build AECS.slnx
 dotnet test AECS.slnx
 ```
 
-O CI executa separadamente a suíte E2E reproduzível do AgronomoPlus. Ela usa um fixture
-versionado `net9.0`, cria repositórios Git temporários e cobre candidato válido, violação
+O CI executa separadamente a suíte E2E reproduzível do AgronomoPlus. Ela usa um projeto de fixture
+`net9.0` — não o TFM do produto —, cria repositórios Git temporários e cobre candidato válido, violação
 adversarial de escopo e promoção do diff verificado. O relatório e as evidências JSON são
 publicados como artifact:
 

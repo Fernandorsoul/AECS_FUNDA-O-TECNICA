@@ -1,5 +1,9 @@
 Use este como **prompt mestre inicial** no Codex, Claude Code ou outro coding agent. Ele força o agente a começar pequeno, preservar a tese e evitar overengineering.
 
+> **ARQUIVO HISTÓRICO:** este prompt antecede a implementação atual e não deve ser usado como
+> inventário operacional. As referências a .NET 10 são intenção original; a configuração vigente
+> está em `docs/dotnet-support.md` e no ADR-020.
+
 > **NOTA:** Se o projeto já possui código implementado (Domain Models, State Machine, ADRs, etc.), NÃO use este prompt. Use `inicio.llm.milestone2.txt` (ou o milestone correspondente) para continuar de onde parou.
 
 Você é o principal engenheiro responsável por iniciar o desenvolvimento do **AECS — Agentic Engineering Control System**.
