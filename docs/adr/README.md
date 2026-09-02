@@ -27,6 +27,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-021](ADR-021-semantic-file-relations-and-context-preflight.md) | Accepted | Restringir relações semânticas entre arquivos e validar o contexto experimental antes do provider |
 | [ADR-022](ADR-022-zero-reference-experiment-policy.md) | Accepted | Pré-registrar a política experimental quando a referência tem zero VCC |
 | [ADR-023](ADR-023-paired-adaptive-offline-gate.md) | Accepted | Avaliar recomendações adaptativas em braços pareados, isolados e temporalmente íntegros antes da ativação |
+| [ADR-024](ADR-024-multi-baseline-real-corpus.md) | Accepted | Representar corpus real com checkout, baseline derivada e oráculo test-only por tarefa |
 
 ## Convenção para novos ADRs
 

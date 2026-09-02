@@ -459,6 +459,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Evidence Graph](docs/evidence-graph.md) — consultas, IDs/arestas estáveis, autorização e exportação JSON/DOT;
 - [Adaptive Controller em shadow mode](docs/adaptive-shadow-controller.md) — histórico autenticado, fallbacks, invariantes e relatório offline;
 - [Gate causal offline do Adaptive Controller](docs/adaptive-offline-gate.md) — pré-registro, cutoff temporal, braços pareados, checkpoints e decisão H2;
+- [Adaptação de corpus real](docs/adaptive-real-corpus.md) — checkouts externos, baseline/oráculo por tarefa e proteção contra gold leakage;
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;

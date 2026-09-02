@@ -27,6 +27,12 @@ public sealed class AdaptiveOfflineArmExecutionRequest
     public string PairKey { get; init; } = string.Empty;
     public string RepositoryPath { get; init; } = string.Empty;
     public string BaselineCommit { get; init; } = string.Empty;
+    public string RepositoryId { get; init; } = string.Empty;
+    public string SourceUri { get; init; } = string.Empty;
+    public string LicenseSpdx { get; init; } = string.Empty;
+    public string UpstreamCommit { get; init; } = string.Empty;
+    public string OracleDiffHash { get; init; } = string.Empty;
+    public string ContainerImage { get; init; } = string.Empty;
     public AdaptiveOfflineProviderDefinition Provider { get; init; } = new();
     public AdaptiveOfflineTaskDefinition Task { get; init; } = new();
     public int Repetition { get; init; }
@@ -124,6 +130,13 @@ public sealed class AdaptiveOfflinePairResult
     public string DatasetId { get; init; } = string.Empty;
     public string DatasetHash { get; init; } = string.Empty;
     public string TaskId { get; init; } = string.Empty;
+    public string RepositoryId { get; init; } = string.Empty;
+    public string SourceUri { get; init; } = string.Empty;
+    public string LicenseSpdx { get; init; } = string.Empty;
+    public string UpstreamCommit { get; init; } = string.Empty;
+    public string BaselineCommit { get; init; } = string.Empty;
+    public string OracleDiffHash { get; init; } = string.Empty;
+    public string ContainerImage { get; init; } = string.Empty;
     public int Repetition { get; init; }
     public int EffectiveSeed { get; init; }
     public Guid RecommendationEvidenceId { get; init; }
@@ -158,6 +171,7 @@ public sealed class AdaptiveOfflineAnalysis
 public sealed class AdaptiveOfflineReport
 {
     public string SchemaVersion { get; init; } = AdaptiveOfflineSchema.ReportVersion;
+    public string DatasetSchemaVersion { get; init; } = AdaptiveOfflineSchema.DatasetVersion;
     public string DatasetId { get; init; } = string.Empty;
     public string DatasetVersion { get; init; } = string.Empty;
     public string DatasetHash { get; init; } = string.Empty;
@@ -172,15 +186,18 @@ public sealed class AdaptiveOfflineRunner
     private readonly AdaptiveOfflinePreflight _preflight;
     private readonly IAdaptiveOfflineArmExecutor _executor;
     private readonly TaskContractParser _parser = new();
+    private readonly AdaptiveOfflineTaskBaselineVerifier? _baselineVerifier;
 
     public AdaptiveOfflineRunner(
         AdaptiveOfflinePreflight preflight,
-        IAdaptiveOfflineArmExecutor executor)
+        IAdaptiveOfflineArmExecutor executor,
+        AdaptiveOfflineTaskBaselineVerifier? baselineVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(preflight);
         ArgumentNullException.ThrowIfNull(executor);
         _preflight = preflight;
         _executor = executor;
+        _baselineVerifier = baselineVerifier;
     }
 
     public async Task<AdaptiveOfflineReport> RunAsync(
@@ -194,8 +211,13 @@ public sealed class AdaptiveOfflineRunner
         ArgumentException.ThrowIfNullOrWhiteSpace(baselineCommit);
         ArgumentNullException.ThrowIfNull(artifacts);
         AdaptiveOfflineDatasetContract.Validate(dataset.Manifest);
+        if (dataset.IsMultiBaseline)
+        {
+            throw new InvalidOperationException(
+                "Adaptive offline dataset v2 must use per-task baseline execution.");
+        }
         if (!AdaptiveOfflineDatasetContract.BaselineMatches(
-                dataset.Manifest.Repository.Baseline,
+                dataset.Manifest.Repository!.Baseline,
                 baselineCommit))
         {
             throw new InvalidOperationException(
@@ -208,6 +230,57 @@ public sealed class AdaptiveOfflineRunner
         var datasetHash = AdaptiveOfflineDatasetFingerprint.Create(
             dataset.Manifest,
             baselineCommit);
+        return await RunCoreAsync(
+            dataset,
+            baselineCommit,
+            datasetHash,
+            artifacts,
+            resume,
+            cancellationToken);
+    }
+
+    public async Task<AdaptiveOfflineReport> RunAsync(
+        LoadedAdaptiveOfflineDataset dataset,
+        AdaptiveOfflineArtifactStore artifacts,
+        bool resume,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+        ArgumentNullException.ThrowIfNull(artifacts);
+        AdaptiveOfflineDatasetContract.Validate(dataset.Manifest);
+        if (!dataset.IsMultiBaseline)
+        {
+            throw new InvalidOperationException(
+                "Adaptive offline dataset v1 requires its resolved repository baseline.");
+        }
+        if (_baselineVerifier is null)
+        {
+            throw new InvalidOperationException(
+                "Adaptive offline dataset v2 requires a task baseline verifier.");
+        }
+        foreach (var repositoryPath in dataset.RepositoryPaths.Values)
+        {
+            AdaptiveOfflineArtifactStore.EnsureOutsideRepository(
+                artifacts.OutputDirectory,
+                repositoryPath);
+        }
+        return await RunCoreAsync(
+            dataset,
+            string.Empty,
+            AdaptiveOfflineDatasetFingerprint.Create(dataset.Manifest),
+            artifacts,
+            resume,
+            cancellationToken);
+    }
+
+    private async Task<AdaptiveOfflineReport> RunCoreAsync(
+        LoadedAdaptiveOfflineDataset dataset,
+        string reportBaselineCommit,
+        string datasetHash,
+        AdaptiveOfflineArtifactStore artifacts,
+        bool resume,
+        CancellationToken cancellationToken)
+    {
         await artifacts.InitializeAsync(datasetHash, resume, cancellationToken);
         var pairs = new List<AdaptiveOfflinePairResult>();
 
@@ -220,11 +293,27 @@ public sealed class AdaptiveOfflineRunner
                     datasetHash,
                     task.Id,
                     repetition);
+                if (dataset.IsMultiBaseline &&
+                    !AdaptiveOfflineDatasetFingerprint.FileHash(dataset.ContractPath(task)).Equals(
+                        task.ContractHash,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Adaptive offline task contract '{task.Id}' changed after preregistration.");
+                }
                 var checkpoint = resume
                     ? await artifacts.LoadAsync(pairKey, datasetHash, cancellationToken)
                     : null;
                 if (checkpoint is not null)
                 {
+                    if (dataset.IsMultiBaseline)
+                    {
+                        var verified = await _baselineVerifier!.VerifyAsync(
+                            dataset,
+                            task,
+                            cancellationToken);
+                        ValidateCheckpointBaseline(checkpoint, verified);
+                    }
                     pairs.Add(checkpoint);
                     continue;
                 }
@@ -232,7 +321,7 @@ public sealed class AdaptiveOfflineRunner
                 var pair = await ExecutePairAsync(
                     dataset,
                     datasetHash,
-                    baselineCommit,
+                    reportBaselineCommit,
                     task,
                     repetition,
                     pairKey,
@@ -240,14 +329,37 @@ public sealed class AdaptiveOfflineRunner
                 await artifacts.SaveAsync(pair, cancellationToken);
                 pairs.Add(pair);
                 await artifacts.SaveReportAsync(
-                    BuildReport(dataset, datasetHash, baselineCommit, pairs),
+                    BuildReport(dataset, datasetHash, reportBaselineCommit, pairs),
                     cancellationToken);
             }
         }
 
-        var report = BuildReport(dataset, datasetHash, baselineCommit, pairs);
+        var report = BuildReport(dataset, datasetHash, reportBaselineCommit, pairs);
         await artifacts.SaveReportAsync(report, cancellationToken);
         return report;
+    }
+
+    private static void ValidateCheckpointBaseline(
+        AdaptiveOfflinePairResult checkpoint,
+        AdaptiveOfflineTaskBaseline verified)
+    {
+        if (!checkpoint.RepositoryId.Equals(verified.RepositoryId, StringComparison.Ordinal) ||
+            !checkpoint.SourceUri.Equals(verified.SourceUri, StringComparison.Ordinal) ||
+            !checkpoint.LicenseSpdx.Equals(verified.LicenseSpdx, StringComparison.Ordinal) ||
+            !checkpoint.UpstreamCommit.Equals(
+                verified.UpstreamCommit,
+                StringComparison.OrdinalIgnoreCase) ||
+            !checkpoint.BaselineCommit.Equals(
+                verified.BaselineCommit,
+                StringComparison.OrdinalIgnoreCase) ||
+            !checkpoint.OracleDiffHash.Equals(
+                verified.OracleDiffHash,
+                StringComparison.Ordinal) ||
+            !checkpoint.ContainerImage.Equals(verified.ContainerImage, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Adaptive offline checkpoint '{checkpoint.PairKey}' no longer matches its task baseline.");
+        }
     }
 
     private async Task<AdaptiveOfflinePairResult> ExecutePairAsync(
@@ -259,6 +371,33 @@ public sealed class AdaptiveOfflineRunner
         string pairKey,
         CancellationToken cancellationToken)
     {
+        AdaptiveOfflineTaskBaseline? verifiedBaseline = null;
+        if (dataset.IsMultiBaseline)
+        {
+            try
+            {
+                verifiedBaseline = await _baselineVerifier!.VerifyAsync(
+                    dataset,
+                    task,
+                    cancellationToken);
+                baselineCommit = verifiedBaseline.BaselineCommit;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return FailedPair(
+                    dataset,
+                    datasetHash,
+                    task,
+                    repetition,
+                    pairKey,
+                    $"Task baseline failed before provider execution: {ex.Message}");
+            }
+        }
+
         AdaptiveOfflinePreparedPair prepared;
         try
         {
@@ -274,7 +413,7 @@ public sealed class AdaptiveOfflineRunner
         }
         catch (Exception ex)
         {
-            return FailedPair(dataset.Manifest.Id, datasetHash, task, repetition, pairKey,
+            return FailedPair(dataset, datasetHash, task, repetition, pairKey,
                 $"Preflight failed before provider execution: {ex.Message}");
         }
 
@@ -319,6 +458,14 @@ public sealed class AdaptiveOfflineRunner
             RecommendationEvidenceId = prepared.RecommendationEvidenceId,
             RecommendationEvidenceHash = prepared.RecommendationEvidenceHash,
             SourceEvidenceIds = prepared.SourceEvidenceIds,
+            RepositoryId = verifiedBaseline?.RepositoryId ?? string.Empty,
+            SourceUri = verifiedBaseline?.SourceUri ?? dataset.Manifest.Repository!.SourceUri,
+            LicenseSpdx = verifiedBaseline?.LicenseSpdx ??
+                dataset.Manifest.Repository!.LicenseSpdx,
+            UpstreamCommit = verifiedBaseline?.UpstreamCommit ?? string.Empty,
+            BaselineCommit = baselineCommit,
+            OracleDiffHash = verifiedBaseline?.OracleDiffHash ?? string.Empty,
+            ContainerImage = verifiedBaseline?.ContainerImage ?? string.Empty,
             Fixed = fixedResult,
             Recommended = recommendedResult
         };
@@ -364,8 +511,21 @@ public sealed class AdaptiveOfflineRunner
         {
             failures.Add("execution used a different baseline");
         }
+        if (!Path.GetFullPath(execution.Baseline.RepositoryPath).Equals(
+                Path.GetFullPath(request.RepositoryPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add("execution used a different repository checkout");
+        }
         if (!execution.Model.Equals(request.Plan.Model, StringComparison.Ordinal))
             failures.Add("execution used a different model");
+        if (!string.IsNullOrEmpty(request.ContainerImage) &&
+            (execution.Contract.Execution.EffectiveRuntime !=
+                RepositoryExecutionProfile.DockerRuntime ||
+             execution.Contract.Execution.Sandbox?.Image != request.ContainerImage))
+        {
+            failures.Add("execution used a different oracle container image");
+        }
         var expectedAdapter = request.Provider.Kind == AdaptiveOfflineProvider.Local
             ? "OllamaAdapter"
             : "CloudAdapter";
@@ -455,14 +615,24 @@ public sealed class AdaptiveOfflineRunner
         string pairKey)
     {
         var fixedArm = arm == AdaptiveOfflineArm.Fixed;
+        var repository = dataset.IsMultiBaseline
+            ? dataset.Manifest.Repositories!.Single(entry =>
+                entry.Id.Equals(prepared.Definition.RepositoryId, StringComparison.Ordinal))
+            : null;
         return new AdaptiveOfflineArmExecutionRequest
         {
             Arm = arm,
             DatasetId = dataset.Manifest.Id,
             DatasetHash = datasetHash,
             PairKey = pairKey,
-            RepositoryPath = dataset.RepositoryPath,
+            RepositoryPath = dataset.RepositoryPathFor(prepared.Definition),
             BaselineCommit = baselineCommit,
+            RepositoryId = repository?.Id ?? string.Empty,
+            SourceUri = repository?.SourceUri ?? dataset.Manifest.Repository!.SourceUri,
+            LicenseSpdx = repository?.LicenseSpdx ?? dataset.Manifest.Repository!.LicenseSpdx,
+            UpstreamCommit = prepared.Definition.UpstreamCommit ?? string.Empty,
+            OracleDiffHash = prepared.Definition.Oracle?.DiffHash ?? string.Empty,
+            ContainerImage = prepared.Definition.Oracle?.ContainerImage ?? string.Empty,
             Provider = dataset.Manifest.Provider,
             Task = prepared.Definition,
             Repetition = repetition,
@@ -476,7 +646,7 @@ public sealed class AdaptiveOfflineRunner
     }
 
     private static AdaptiveOfflinePairResult FailedPair(
-        string datasetId,
+        LoadedAdaptiveOfflineDataset dataset,
         string datasetHash,
         AdaptiveOfflineTaskDefinition task,
         int repetition,
@@ -486,9 +656,22 @@ public sealed class AdaptiveOfflineRunner
             PairKey = pairKey,
             Status = AdaptiveOfflineResultStatus.Failed,
             Failure = failure,
-            DatasetId = datasetId,
+            DatasetId = dataset.Manifest.Id,
             DatasetHash = datasetHash,
             TaskId = task.Id,
+            RepositoryId = task.RepositoryId ?? string.Empty,
+            SourceUri = dataset.IsMultiBaseline
+                ? dataset.Manifest.Repositories!.Single(repository =>
+                    repository.Id.Equals(task.RepositoryId, StringComparison.Ordinal)).SourceUri
+                : dataset.Manifest.Repository!.SourceUri,
+            LicenseSpdx = dataset.IsMultiBaseline
+                ? dataset.Manifest.Repositories!.Single(repository =>
+                    repository.Id.Equals(task.RepositoryId, StringComparison.Ordinal)).LicenseSpdx
+                : dataset.Manifest.Repository!.LicenseSpdx,
+            UpstreamCommit = task.UpstreamCommit ?? string.Empty,
+            BaselineCommit = dataset.ExpectedBaseline(task),
+            OracleDiffHash = task.Oracle?.DiffHash ?? string.Empty,
+            ContainerImage = task.Oracle?.ContainerImage ?? string.Empty,
             Repetition = repetition,
             EffectiveSeed = checked(task.Seed + repetition - 1),
             RecommendationEvidenceId = task.RecommendationEvidenceId,
@@ -513,6 +696,10 @@ public sealed class AdaptiveOfflineRunner
         string baselineCommit,
         List<AdaptiveOfflinePairResult> pairs) => new()
         {
+            SchemaVersion = dataset.IsMultiBaseline
+                ? AdaptiveOfflineSchema.MultiBaselineReportVersion
+                : AdaptiveOfflineSchema.ReportVersion,
+            DatasetSchemaVersion = dataset.Manifest.SchemaVersion,
             DatasetId = dataset.Manifest.Id,
             DatasetVersion = dataset.Manifest.Version,
             DatasetHash = datasetHash,
