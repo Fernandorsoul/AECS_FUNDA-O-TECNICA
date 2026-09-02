@@ -1,7 +1,7 @@
 {
-  "schemaVersion": "aecs.experiment-dataset/v2",
+  "schemaVersion": "aecs.experiment-dataset/v3",
   "id": "context-compiler-h1-local-low-hardware-pilot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "repository": {
     "path": "repository",
     "baseline": "HEAD"
@@ -25,7 +25,11 @@
     {
       "id": "H1-RETENTION",
       "contractPath": "tasks/retention.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/RetentionPolicy.cs",
+        "src/Contracts/RetentionContract.cs"
+      ]
     }
   ],
   "variants": [

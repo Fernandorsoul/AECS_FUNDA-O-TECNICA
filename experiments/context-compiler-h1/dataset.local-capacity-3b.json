@@ -1,7 +1,7 @@
 {
   "schemaVersion": "aecs.experiment-dataset/v1",
   "id": "local-model-capacity-qwen25-coder-3b",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "repository": {
     "path": "repository",
     "baseline": "HEAD"
@@ -12,17 +12,29 @@
     {
       "id": "H1-RETENTION",
       "contractPath": "tasks/retention.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/RetentionPolicy.cs",
+        "src/Contracts/RetentionContract.cs"
+      ]
     },
     {
       "id": "H1-INVOICE",
       "contractPath": "tasks/invoice.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/InvoicePolicy.cs",
+        "src/Contracts/InvoiceContract.cs"
+      ]
     },
     {
       "id": "H1-QUEUE",
       "contractPath": "tasks/queue.yaml",
-      "expectedDecision": "Verified"
+      "expectedDecision": "Verified",
+      "requiredContextPaths": [
+        "src/Policies/QueuePolicy.cs",
+        "src/Contracts/QueueContract.cs"
+      ]
     }
   ],
   "variants": [

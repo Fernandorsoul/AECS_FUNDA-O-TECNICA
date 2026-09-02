@@ -1,5 +1,20 @@
 # Replicação H1 local em hardware baixo — 2026-09-02
 
+## Errata — issue #80
+
+Uma auditoria posterior das 60 evidências autenticadas encontrou contaminação no contexto efetivo.
+A projeção `graph-ranked-token-budget/v1` transformava arestas estruturais de namespace em relações
+entre arquivos e classificava nós multi-arquivo como `partial`. Nos 30 runs da candidata, somente
+`src/AaaDecoys/AccountArchive.cs` e `src/AaaDecoys/AddressBook.cs` entraram no prompt; `Policy` e
+`Contract` foram omitidos pelo orçamento. A referência ordinal incluiu três decoys e também nenhum
+arquivo relevante.
+
+Assim, os números e artefatos abaixo permanecem autênticos, mas medem o pipeline governado sob
+contexto inválido, não a eficácia do Context Compiler. A atribuição de baixa qualidade ao modelo
+1.5B fica suspensa até nova execução com `graph-ranked-token-budget/v2`. A conclusão H1 anterior é
+superada por `NotEvaluated`; a #35 continua bloqueada. Rastreabilidade da correção:
+[issue #80](https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/issues/80).
+
 ## Resultado executivo
 
 O AECS executou o A/B pareado completo com um provider Ollama real no host de 16 GB: 60/60 runs

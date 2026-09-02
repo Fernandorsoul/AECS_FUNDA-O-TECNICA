@@ -5,6 +5,13 @@ using System.Text.Json.Serialization;
 
 namespace AECS.Application.Experiments;
 
+public sealed class ExperimentContextFile
+{
+    public string Path { get; init; } = string.Empty;
+    public string IncludedSha256 { get; init; } = string.Empty;
+    public int Rank { get; init; }
+}
+
 public class TaskExperimentResult
 {
     public string RunKey { get; init; } = string.Empty;
@@ -22,6 +29,7 @@ public class TaskExperimentResult
     public string ActualContextStrategy { get; init; } = string.Empty;
     public string ContextStrategyVersion { get; init; } = string.Empty;
     public string ContextManifestHash { get; init; } = string.Empty;
+    public List<ExperimentContextFile> IncludedContext { get; init; } = [];
     public int? Seed { get; init; }
     public Dictionary<string, string> Parameters { get; init; } =
         new(StringComparer.Ordinal);

@@ -5,6 +5,12 @@ usa somente a ordem ordinal dos caminhos; a candidata usa objetivo, símbolos e 
 grafo Roslyn. O orçamento restritivo impede que todos os arquivos caibam no prompt. Modelo,
 provider, seed, limites, parâmetros, tarefas e baseline são idênticos.
 
+Os datasets atuais usam `aecs.experiment-dataset/v3` e declaram `requiredContextPaths` por tarefa.
+Depois de compilar a variante graph-ranked, o pipeline exige esses arquivos antes de chamar o
+provider. A estratégia vigente é `graph-ranked-token-budget/v2`, que não projeta relações
+estruturais de namespace como dependências entre arquivos. Os datasets e resultados v1 publicados
+em 2026-09-02 são históricos e possuem errata vinculada à issue #80.
+
 O diretório `repository` é um template versionado. Copie todo o experimento para fora deste
 checkout, inicialize somente o repositório do dataset e mantenha os artefatos fora dele:
 

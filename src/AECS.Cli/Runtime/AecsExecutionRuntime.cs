@@ -157,7 +157,8 @@ public sealed class AecsExecutionRuntime : IDisposable
     public StagedExecutionPipeline CreatePipeline(
         RepositoryContextCompiler? contextCompiler = null,
         IExecutionController? executionController = null,
-        IAgentAdapter? agentOverride = null)
+        IAgentAdapter? agentOverride = null,
+        ICompiledContextGate? compiledContextGate = null)
     {
         var processRunner = new SystemProcessRunner();
         return new StagedExecutionPipeline(
@@ -166,7 +167,8 @@ public sealed class AecsExecutionRuntime : IDisposable
             EvidenceStore,
             contextCompiler,
             stagedProcessRunnerFactory: CreateStagedProcessRunnerFactory(processRunner),
-            executionController: executionController);
+            executionController: executionController,
+            compiledContextGate: compiledContextGate);
     }
 
     public IStagedProcessRunnerFactory CreateStagedProcessRunnerFactory(

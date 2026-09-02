@@ -1,5 +1,17 @@
 # Gate de capacidade de modelos locais — 2026-09-02
 
+## Errata — issue #80
+
+As seis evidências do estágio 3B foram produzidas com `graph-ranked-token-budget/v1`. Em todos os
+runs, os oito arquivos `AaaDecoys` ocuparam os ranks 1–8 e os arquivos `Policy`/`Contract` ficaram
+fora do prompt (`includedTokens = 0`). Portanto, a reprovação de qualidade do 3B não isola a
+capacidade do modelo e precisa ser repetida com a estratégia v2.
+
+A reprovação operacional permanece válida: a RAM física livre observada caiu abaixo do piso
+pré-registrado de 1 GiB. O bloqueio do estágio 7B e os artefatos históricos não são alterados.
+Rastreabilidade da correção:
+[issue #80](https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/issues/80).
+
 ## Resultado executivo
 
 Nenhum novo modelo foi aprovado para o hardware alvo. `qwen2.5-coder:3b` executou os seis runs

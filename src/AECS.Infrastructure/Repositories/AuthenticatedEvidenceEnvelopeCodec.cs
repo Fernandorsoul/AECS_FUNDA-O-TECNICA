@@ -1002,9 +1002,8 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 manifest.PromptOverheadTokens);
         var naiveStrategy = manifest.StrategyVersion ==
             ContextManifestSchema.NaiveStrategyVersion;
-        var invalid = manifest.StrategyVersion is not (
-                ContextManifestSchema.StrategyVersion or
-                ContextManifestSchema.NaiveStrategyVersion) ||
+        var invalid = !ContextManifestSchema.IsSupportedStrategyVersion(
+                manifest.StrategyVersion) ||
             !string.Equals(manifest.TaskId, evidence.TaskContract.Id, StringComparison.Ordinal) ||
             !string.Equals(manifest.BaselineCommit, evidence.Baseline.Commit, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(manifest.Source) ||

@@ -7,7 +7,8 @@ O modo legado `--repo/--tasks` continua disponível para execuções exploratór
 ## Manifesto do dataset
 
 O schema geral é `aecs.experiment-dataset/v1`; o contrato controlado de contexto A/B usa
-`aecs.experiment-dataset/v2`. A identidade efetiva do dataset é o hash SHA-256 do manifesto
+`aecs.experiment-dataset/v3`. Datasets A/B v2 permanecem legíveis como evidência histórica. A
+identidade efetiva do dataset é o hash SHA-256 do manifesto
 mais a baseline resolvida. `HEAD` é aceito como referência portátil, mas é convertido para o
 commit exato antes do primeiro run; uma mudança posterior do HEAD invalida a retomada.
 
@@ -60,13 +61,15 @@ Cada variante fixa:
 - seed inicial, quando o provider a aceita.
 
 Em v1, nomes históricos de estratégia continuam significando o compilador orientado ao grafo.
-Em v2, somente `naive-path-order` e `graph-ranked` são aceitos. A primeira variante ignora
+Em v2 e v3, somente `naive-path-order` e `graph-ranked` são aceitos. A primeira variante ignora
 objetivo, símbolos e relações e inclui arquivos exclusivamente pela ordem ordinal dos caminhos;
-a segunda usa o ranqueamento semântico normal.
+a segunda usa o ranqueamento semântico normal. Em v3, cada tarefa também declara
+`requiredContextPaths`. A variante graph-ranked é rejeitada depois da compilação do contexto e
+antes da chamada ao provider se qualquer caminho obrigatório estiver ausente.
 
 ## Protocolo A/B pré-registrado
 
-Um manifesto v2 exige exatamente duas variantes e o bloco `protocol`. O loader comprova antes
+Um manifesto v2 ou v3 exige exatamente duas variantes e o bloco `protocol`. O loader comprova antes
 da primeira chamada que provider, modelo, seed, parâmetros e todos os limites são idênticos.
 A referência deve ser `naive-path-order`, a candidata `graph-ranked`, e
 `tasks × repetitions` deve atingir `minimumPairedSamples`.
@@ -118,10 +121,10 @@ O output contém:
 
 - `session.json`: hash do dataset e início da sessão;
 - `runs/*.json`: checkpoints individuais, inclusive falhas e skips;
-- `report.json`: relatório normalizado `aecs.experiment-report/v3`, ambiente, análise, custo e comparações pareadas;
-- `results.csv`: uma linha por run, com modelo, contexto, seed, baseline, decisão e evidência;
+- `report.json`: relatório normalizado `aecs.experiment-report/v4`, ambiente, análise, custo, contexto efetivo e comparações pareadas;
+- `results.csv`: uma linha por run, com modelo, caminhos/hashes do contexto, seed, baseline, decisão e evidência;
 - `comparisons.csv`: uma linha por par e repetição, com deltas de VCC, first-pass, tokens,
-  custo estimado, latência, escopo e rework;
+  custo estimado, latência, escopo, rework e contraste material do contexto;
 - `analysis.csv`: uma linha por variante com amostra, taxas, custo e intervalos de confiança;
 - `cost-records.csv`: uso estimado/final, divergências, custo estimado/reconciliado e vínculo de
   evidência por run;

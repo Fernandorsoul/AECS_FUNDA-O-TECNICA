@@ -213,6 +213,49 @@ public sealed class AuthenticatedEvidenceStoreTests
     }
 
     [Fact]
+    public async Task Save_HistoricalGraphStrategyV1_RemainsVerifiable()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var draft = new ContextManifest
+        {
+            SchemaVersion = ContextManifestSchema.CurrentVersion,
+            StrategyVersion = ContextManifestSchema.LegacyGraphStrategyVersion,
+            TaskId = "TASK-EVIDENCE-001",
+            BaselineCommit = "0123456789abcdef",
+            Source = "isolated-git-worktree",
+            Strategy = "not-compiled",
+            SemanticIndex = "not-compiled",
+            Tokenizer = ConservativeTokenCounter.Id,
+            TokenizerVersion = ConservativeTokenCounter.Version
+        };
+        var hash = ContextManifestFingerprint.Create(draft);
+        var historical = new ContextManifest
+        {
+            SchemaVersion = draft.SchemaVersion,
+            StrategyVersion = draft.StrategyVersion,
+            Id = $"CTX-{hash[7..19]}",
+            TaskId = draft.TaskId,
+            BaselineCommit = draft.BaselineCommit,
+            Source = draft.Source,
+            Strategy = draft.Strategy,
+            SemanticIndex = draft.SemanticIndex,
+            Tokenizer = draft.Tokenizer,
+            TokenizerVersion = draft.TokenizerVersion,
+            ManifestHash = hash
+        };
+        var evidence = fixture.CreateEvidence(historical);
+
+        await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+        var loaded = await fixture.CreateRestartedStore().LoadAsync(
+            evidence.Id,
+            CancellationToken.None);
+
+        loaded.Should().NotBeNull();
+        loaded!.ContextManifest.StrategyVersion.Should()
+            .Be(ContextManifestSchema.LegacyGraphStrategyVersion);
+    }
+
+    [Fact]
     public async Task Save_IncompleteSemanticEvidence_IsRejectedBeforeSigning()
     {
         await using var fixture = AuthenticatedEvidenceFixture.Create();
