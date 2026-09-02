@@ -76,3 +76,24 @@ Ollama. O destino deve ser um caminho inexistente:
 Uma conclusão experimental rejeitada faz a CLI retornar código 1 mesmo quando toda a amostra foi
 coletada corretamente. O executor distingue esse resultado de falha operacional confrontando o
 código com `report.succeeded` e exigindo todos os runs e todas as evidências esperadas.
+
+## Gate de capacidade de modelos locais
+
+`local-model-capacity-gate.json` é um pré-registro operacional separado de H1. Ele usa somente
+`graph-ranked` e mede se existe um modelo local mínimo capaz de produzir mudanças verificadas no
+host registrado. Portanto, seus resultados não comparam estratégias nem podem confirmar H1.
+
+A escada testa `qwen2.5-coder:3b` e só avança para `qwen2.5-coder:7b` se o primeiro falhar em
+qualidade. Cada dataset executa as três tarefas em duas repetições. Um modelo passa apenas com 6/6
+runs completos, ao menos 3/6 mudanças verificadas, ao menos uma por tarefa, zero violações de
+escopo, seis evidências, janela de 8192 tokens, no mínimo 1 GiB de RAM física livre e retomada sem
+nova inferência. Falha operacional interrompe a escada para diagnóstico; ela não autoriza pular ao
+modelo seguinte.
+
+Depois de instalar o modelo do estágio, o mesmo executor aceita o dataset explícito:
+
+```powershell
+./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
+  -DatasetFile dataset.local-capacity-3b.json `
+  -ArtifactRoot "$env:LOCALAPPDATA/Temp/aecs-capacity-3b"
+```
