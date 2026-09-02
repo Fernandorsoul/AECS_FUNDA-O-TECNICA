@@ -15,6 +15,10 @@ contexto inválido, não a eficácia do Context Compiler. A atribuição de baix
 superada por `NotEvaluated`; a #35 continua bloqueada. Rastreabilidade da correção:
 [issue #80](https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/issues/80).
 
+A repetição válida com `graph-ranked-token-budget/v2` está documentada em
+[Reexecução H1 local com Context Compiler v2](2026-09-02-local-h1-context-v2.md) e substitui esta
+avaliação para a comparação de estratégias de contexto.
+
 ## Resultado executivo
 
 O AECS executou o A/B pareado completo com um provider Ollama real no host de 16 GB: 60/60 runs
