@@ -35,6 +35,8 @@ var command = args.Length > 0 ? args[0] : "jarvis";
 
 if (command == "experiment")
     return await RunExperiment(args[1..]);
+else if (command == "adaptive-experiment")
+    return await RunAdaptiveExperiment(args[1..]);
 else if (command == "jarvis")
     return await RunJarvis(args[1..]);
 else if (command == "vscode-server")
@@ -931,6 +933,136 @@ static async Task<int> RunExperiment(string[] args)
     return 0;
 }
 
+static async Task<int> RunAdaptiveExperiment(string[] args)
+{
+    const string usage =
+        "Usage: aecs adaptive-experiment --dataset <manifest.json> --output <directory> " +
+        "--include-real-providers [--resume] " + RuntimeCliOptions.Usage;
+    string? datasetPath = null;
+    string? outputDirectory = null;
+    var resume = false;
+    var includeRealProviders = false;
+    var invalidArgument = false;
+    var runtimeOptions = new RuntimeCliOptions();
+
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--dataset" && index + 1 < args.Length)
+            datasetPath = args[++index];
+        else if (args[index] == "--output" && index + 1 < args.Length)
+            outputDirectory = args[++index];
+        else if (args[index] == "--resume")
+            resume = true;
+        else if (args[index] == "--include-real-providers")
+            includeRealProviders = true;
+        else if (runtimeOptions.TryConsume(args, ref index))
+        {
+        }
+        else
+            invalidArgument = true;
+    }
+
+    if (invalidArgument || datasetPath is null || outputDirectory is null ||
+        !includeRealProviders || runtimeOptions.AgentMode == "mock")
+    {
+        Console.WriteLine(usage);
+        return 1;
+    }
+
+    if (!TryCreateRuntime(runtimeOptions, out var createdRuntime))
+        return 1;
+    using var runtime = createdRuntime;
+    PrintEffectiveRuntime(runtime.Configuration, runtimeOptions.ShowEffectiveConfiguration);
+    if (runtime.EvidenceStore is not IEvidenceGraphSource graphSource)
+    {
+        Console.WriteLine(
+            "ERROR: adaptive offline experiment requires an authenticated evidence graph source.");
+        return 1;
+    }
+
+    try
+    {
+        var dataset = AdaptiveOfflineDatasetLoader.Load(datasetPath);
+        var processRunner = new SystemProcessRunner();
+        var baseline = await new GitWorkspaceManager(processRunner).CaptureBaselineAsync(
+            dataset.RepositoryPath,
+            CancellationToken.None);
+        var artifacts = new AdaptiveOfflineArtifactStore(outputDirectory);
+        using var experimentHttpClient = new HttpClient();
+        var preflight = new AdaptiveOfflinePreflight(runtime.EvidenceStore, graphSource);
+        var executor = new DelegatingAdaptiveOfflineArmExecutor(
+            async (request, cancellationToken) =>
+            {
+                var provider = request.Provider.Kind == AdaptiveOfflineProvider.Local
+                    ? ExperimentProvider.Local
+                    : ExperimentProvider.Cloud;
+                var variant = new ExperimentVariantDefinition
+                {
+                    Id = request.Arm == AdaptiveOfflineArm.Fixed ? "fixed" : "recommended",
+                    Provider = provider,
+                    Model = request.Plan.Model,
+                    ContextStrategy = request.ContextStrategy,
+                    Context = ContextCompilationOptions.FromBudget(request.Plan.Budget),
+                    RequiresRealProvider = true,
+                    Seed = request.EffectiveSeed,
+                    Parameters = new Dictionary<string, string>(
+                        request.Provider.Parameters,
+                        StringComparer.Ordinal)
+                };
+                var definition = new ExperimentRunDefinition
+                {
+                    DatasetId = request.DatasetId,
+                    DatasetHash = request.DatasetHash,
+                    RunKey = request.PairKey,
+                    RepositoryPath = request.RepositoryPath,
+                    BaselineCommit = request.BaselineCommit,
+                    Task = new ExperimentTaskDefinition
+                    {
+                        Id = request.Task.Id,
+                        ExpectedDecision = request.Task.ExpectedDecision
+                    },
+                    Variant = variant,
+                    Repetition = request.Repetition,
+                    EffectiveSeed = request.EffectiveSeed
+                };
+                var agent = BuildExperimentAgent(
+                    definition,
+                    runtime,
+                    experimentHttpClient);
+                var pipeline = runtime.CreatePipeline(
+                    new RepositoryContextCompiler(
+                        defaultOptions: variant.Context,
+                        selectionStrategy: request.ContextStrategy),
+                    new AdaptiveOfflineExecutionController(request.Plan),
+                    agent);
+                return await pipeline.RunAsync(
+                    request.RepositoryPath,
+                    request.Contract,
+                    cancellationToken);
+            });
+        var runner = new AdaptiveOfflineRunner(preflight, executor);
+        var report = await runner.RunAsync(
+            dataset,
+            baseline.Commit,
+            artifacts,
+            resume,
+            CancellationToken.None);
+        Console.WriteLine("AECS ADAPTIVE OFFLINE REPORT");
+        Console.WriteLine($"Dataset: {report.DatasetId} v{report.DatasetVersion}");
+        Console.WriteLine($"Pairs: {report.Analysis.CompletedPairs}/{report.Analysis.PlannedPairs}");
+        Console.WriteLine($"Distinct tasks: {report.Analysis.DistinctCompletedTasks}");
+        Console.WriteLine($"Conclusion: {report.Analysis.Conclusion}");
+        Console.WriteLine($"Reason: {report.Analysis.ConclusionReason}");
+        Console.WriteLine($"JSON report: {artifacts.ReportPath}");
+        return report.Analysis.Conclusion == HypothesisConclusion.Maintain ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERROR: adaptive offline experiment failed closed: {ex.Message}");
+        return 1;
+    }
+}
+
 static async Task<int> RunSingle(string[] args)
 {
     string? repoPath = null;
@@ -963,6 +1095,10 @@ static async Task<int> RunSingle(string[] args)
             "       aecs experiment --dataset <manifest.json> --output <directory> " +
             "[--resume] [--include-real-providers] " +
             "[--cost-reconciliation <ledger.json>] " + RuntimeCliOptions.Usage);
+        Console.WriteLine(
+            "       aecs adaptive-experiment --dataset <manifest.json> " +
+            "--output <directory> --include-real-providers [--resume] " +
+            RuntimeCliOptions.Usage);
         Console.WriteLine(
             "       aecs promote --repo <path> --evidence <id> --diff-hash <sha256> " +
             "--actor <actor> --confirm " + EvidenceStoreSelection.Usage);

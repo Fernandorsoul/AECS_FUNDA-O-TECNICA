@@ -40,6 +40,8 @@ O protótipo já inclui:
 - limites de tokens, custo, duração, tentativas e arquivos alterados;
 - Adaptive Controller em shadow mode, alimentado somente por evidências autenticadas e sem
   alterar modelo, contexto, orçamento ou capabilities da execução fixa;
+- gate causal offline para comparar, em pares isolados e retomáveis, o plano fixo e recomendações
+  adaptativas pré-registradas sem ativá-las no fluxo operacional;
 - `RepositorySnapshot` versionado e endereçado por conteúdo, com inventário da baseline e relações entre soluções e projetos;
 - `CSharpSymbolGraph` versionado e endereçado por conteúdo, extraído por Roslyn/MSBuild com tipos, membros, herança, implementação e referências;
 - preflight da baseline e gates versionados independentes para unitários, integração e aceite, com modos required/optional/disabled e contagem TRX;
@@ -403,6 +405,7 @@ A referência de campos, schema estrito, fingerprint, capabilities preventivas, 
 | --- | --- | --- |
 | Tarefa única | `run --repo <path> --task-file <file> --evidence-store <json\|postgres>` | Executa e verifica um contrato |
 | Experimento | `experiment --dataset <manifest.json> --output <dir> --evidence-store <json\|postgres>` | Executa matriz versionada, retomável e pareada; `--repo/--tasks` mantém o modo legado |
+| Gate adaptativo | `adaptive-experiment --dataset <manifest.json> --output <dir> --include-real-providers` | Avalia planos fixo/recomendado em pares offline; nunca altera o comando `run` |
 | Jarvis | `jarvis --repo <path> --evidence-store <json\|postgres>` | Abre o REPL interativo |
 | Promoção | `promote --repo <path> --evidence <id> --diff-hash <hash> --actor <ator> --confirm` | Aplica e prepara no index um candidato elegível |
 | Exportação | `export-patch --evidence <id> --diff-hash <hash> --output <file> --actor <ator>` | Exporta o diff sem aplicá-lo |
@@ -455,6 +458,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Replay de evidências](docs/evidence-replay.md) — reconstrução agentless, comparações e classificação de divergências;
 - [Evidence Graph](docs/evidence-graph.md) — consultas, IDs/arestas estáveis, autorização e exportação JSON/DOT;
 - [Adaptive Controller em shadow mode](docs/adaptive-shadow-controller.md) — histórico autenticado, fallbacks, invariantes e relatório offline;
+- [Gate causal offline do Adaptive Controller](docs/adaptive-offline-gate.md) — pré-registro, cutoff temporal, braços pareados, checkpoints e decisão H2;
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;

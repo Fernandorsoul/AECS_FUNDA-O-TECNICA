@@ -26,6 +26,7 @@ Os ADRs documentam decisões estáveis, o contexto em que foram tomadas e suas c
 | [ADR-020](ADR-020-dotnet-support-matrix.md) | Accepted | Fixar a matriz .NET vigente e exigir migração para .NET 10 antes do fim do suporte |
 | [ADR-021](ADR-021-semantic-file-relations-and-context-preflight.md) | Accepted | Restringir relações semânticas entre arquivos e validar o contexto experimental antes do provider |
 | [ADR-022](ADR-022-zero-reference-experiment-policy.md) | Accepted | Pré-registrar a política experimental quando a referência tem zero VCC |
+| [ADR-023](ADR-023-paired-adaptive-offline-gate.md) | Accepted | Avaliar recomendações adaptativas em braços pareados, isolados e temporalmente íntegros antes da ativação |
 
 ## Convenção para novos ADRs
 
