@@ -23,6 +23,7 @@ if (Test-Path -LiteralPath $artifactPath) {
 
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory "../.."))
+$cliProject = Join-Path $repositoryRoot "src/AECS.Cli/AECS.Cli.csproj"
 $experimentRoot = Join-Path $artifactPath "experiment"
 $outputRoot = Join-Path $artifactPath "output"
 $evidenceRoot = Join-Path $artifactPath "evidence"
@@ -59,6 +60,11 @@ $expectedRuns = [int]$manifest.repetitions *
     @($manifest.tasks).Count *
     @($manifest.variants).Count
 
+& $DotnetPath build $cliProject --configuration Release --nologo
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not build the Release experiment runner."
+}
+
 New-Item -ItemType Directory -Path $artifactPath | Out-Null
 Copy-Item -LiteralPath $scriptDirectory -Destination $experimentRoot -Recurse
 New-Item -ItemType Directory -Path $outputRoot, $evidenceRoot, $keyRoot | Out-Null
@@ -75,8 +81,9 @@ if ($LASTEXITCODE -ne 0) {
 $datasetPath = Join-Path $experimentRoot $datasetName
 $arguments = @(
     "run",
+    "--configuration", "Release",
     "--no-build",
-    "--project", (Join-Path $repositoryRoot "src/AECS.Cli/AECS.Cli.csproj"),
+    "--project", $cliProject,
     "--",
     "experiment",
     "--dataset", $datasetPath,

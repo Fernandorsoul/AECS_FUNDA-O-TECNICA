@@ -104,6 +104,21 @@ public sealed class ContextAbExperimentTests
     }
 
     [Fact]
+    public void LocalHardwareExecutor_BuildsAndRunsTheSameReleaseConfiguration()
+    {
+        var repository = FindRepositoryRoot();
+        var script = File.ReadAllText(Path.Combine(
+            repository,
+            "experiments",
+            "context-compiler-h1",
+            "Invoke-LocalLowHardwareH1.ps1"));
+
+        script.Should().Contain("& $DotnetPath build $cliProject --configuration Release");
+        script.Should().Contain("\"--configuration\", \"Release\"");
+        script.Should().Contain("\"--no-build\"");
+    }
+
+    [Fact]
     public void RepositoryCompiler_ExecutesTheRequestedStrategyAndVersionsItsManifest()
     {
         var root = Directory.CreateTempSubdirectory("aecs-context-ab-");

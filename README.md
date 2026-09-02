@@ -79,10 +79,11 @@ dotnet build AECS.slnx
 dotnet test AECS.slnx
 ```
 
-O CI executa separadamente a suíte E2E reproduzível do AgronomoPlus. Ela usa um projeto de fixture
-`net9.0` — não o TFM do produto —, cria repositórios Git temporários e cobre candidato válido, violação
-adversarial de escopo e promoção do diff verificado. O relatório e as evidências JSON são
-publicados como artifact:
+O CI executa a suíte E2E reproduzível do AgronomoPlus em um job independente e paralelo ao feedback
+principal. Ela usa um projeto de fixture `net9.0` — não o TFM do produto —, cria repositórios Git
+temporários e cobre candidato válido, violação adversarial de escopo e promoção do mesmo diff
+verificado, sem repetir o pipeline válido. Um hang de cinco minutos produz diagnóstico próprio sem
+impedir os demais smokes. O relatório e as evidências JSON são publicados como artifact:
 
 ```powershell
 $env:AECS_E2E_REPORT_PATH = Join-Path $env:TEMP "aecs-real-world-e2e/report.json"

@@ -93,24 +93,6 @@ jobs:
           --nologo
           --filter "Category=PostgreSql"
 
-      - name: Reproducible AgronomoPlus E2E
-        env:
-          AECS_E2E_REPORT_PATH: ${{ runner.temp }}/aecs-real-world-e2e/report.json
-        run: >-
-          dotnet test tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj
-          --configuration Release
-          --no-build
-          --nologo
-          --filter "Category=RealWorldE2E"
-
-      - name: Publish AgronomoPlus E2E report and evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: aecs-real-world-e2e
-          path: ${{ runner.temp }}/aecs-real-world-e2e/
-          if-no-files-found: error
-
       - name: Context A/B benchmark guard
         shell: bash
         run: |
@@ -253,3 +235,55 @@ jobs:
           grep -q 'Policy enabled: False' <<< "$alert_output"
           grep -q 'no evidence was evaluated and no sink was called' <<< "$alert_output"
           test ! -d "${RUNNER_TEMP}/aecs-alerts-disabled/inbox"
+
+  real-world-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore E2E projects
+        run: >-
+          dotnet restore
+          tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj
+
+      - name: Build E2E projects
+        run: >-
+          dotnet build
+          tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj
+          --configuration Release
+          --no-restore
+          --nologo
+
+      - name: Reproducible AgronomoPlus E2E
+        env:
+          AECS_E2E_REPORT_PATH: ${{ runner.temp }}/aecs-real-world-e2e/report.json
+        run: >-
+          dotnet test tests/AECS.IntegrationTests/AECS.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --nologo
+          --filter "Category=RealWorldE2E"
+          --blame-hang
+          --blame-hang-timeout 5m
+          --blame-hang-dump-type mini
+          --results-directory "${RUNNER_TEMP}/aecs-real-world-e2e-diagnostics"
+
+      - name: Publish AgronomoPlus E2E report, evidence and hang diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aecs-real-world-e2e
+          path: |
+            ${{ runner.temp }}/aecs-real-world-e2e/
+            ${{ runner.temp }}/aecs-real-world-e2e-diagnostics/
+          if-no-files-found: warn
