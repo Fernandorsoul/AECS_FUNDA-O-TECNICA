@@ -461,6 +461,8 @@ public static class ExperimentCsvFormatter
         {
             Row(
                 "hypothesis_id", "conclusion", "conclusion_reason", "variant_id",
+                "zero_reference_policy", "policy_preregistered", "zero_reference_observed",
+                "effective_decision_metric", "minimum_improvement",
                 "context_strategy", "planned_runs", "observed_runs", "completed_runs",
                 "failed_runs", "skipped_runs", "vcc", "vcc_rate", "first_pass_vcc",
                 "first_pass_rate", "failure_rate", "scope_violations",
@@ -476,6 +478,14 @@ public static class ExperimentCsvFormatter
             report.Analysis.Conclusion.ToString(),
             report.Analysis.ConclusionReason,
             variant.VariantId,
+            report.Analysis.DecisionRule.ZeroReferencePolicy.ToString(),
+            report.Analysis.DecisionRule.PolicyPreregistered.ToString(
+                CultureInfo.InvariantCulture),
+            report.Analysis.DecisionRule.ZeroReferenceObserved.ToString(
+                CultureInfo.InvariantCulture),
+            report.Analysis.DecisionRule.EffectiveMetric,
+            report.Analysis.DecisionRule.MinimumImprovement.ToString(
+                "F6", CultureInfo.InvariantCulture),
             variant.ContextStrategy,
             variant.PlannedRuns.ToString(CultureInfo.InvariantCulture),
             variant.ObservedRuns.ToString(CultureInfo.InvariantCulture),

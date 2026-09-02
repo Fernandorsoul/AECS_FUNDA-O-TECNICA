@@ -135,6 +135,12 @@ public static class ExperimentReportFormatter
         {
             sb.AppendLine($"HYPOTHESIS {report.Analysis.HypothesisId}");
             sb.AppendLine($"Primary metric: {report.Analysis.PrimaryMetric}");
+            var rule = report.Analysis.DecisionRule;
+            sb.AppendLine(
+                $"Decision rule: zeroReference={rule.ZeroReferencePolicy} " +
+                $"preregistered={rule.PolicyPreregistered} " +
+                $"observed={rule.ZeroReferenceObserved} " +
+                $"metric={rule.EffectiveMetric} minimum={rule.MinimumImprovement:F4}");
             foreach (var variant in report.Analysis.Variants)
             {
                 var yield = variant.VerifiedChangesPerEstimatedDollar is null

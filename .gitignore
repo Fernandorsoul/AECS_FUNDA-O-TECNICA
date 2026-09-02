@@ -57,6 +57,7 @@ coverage/
 # User-specific files
 **/local.settings.json
 **/launchSettings.json
+/.mimocode/
 /aecs.runtime.local.json
 /aecs.runtime.*.local.json
 /aecs.alert-policy.local.json

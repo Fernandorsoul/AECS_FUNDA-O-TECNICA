@@ -230,11 +230,11 @@ agrupa essas observações offline por risco e tipo. Detalhes estão em
 
 ## Experiment Harness
 
-O modo versionado do Experiment Harness lê datasets v1 gerais e protocolos de contexto A/B v2/v3,
-resolve a baseline exata e expande tarefas × variantes × repetições. Em v3, caminhos relevantes da
+O modo versionado do Experiment Harness lê datasets v1 gerais e protocolos de contexto A/B v2/v3/v4,
+resolve a baseline exata e expande tarefas × variantes × repetições. Em v3/v4, caminhos relevantes da
 fixture formam um gate anterior ao provider para a variante graph-ranked. Cada combinação usa o
 isolamento staged existente, recebe run key determinístico e checkpoint imutável. O relatório
-`aecs.experiment-report/v4` preserva ambiente, falhas individuais, caminhos/hashes do contexto,
+`aecs.experiment-report/v5` preserva ambiente, regra de decisão aplicada, falhas individuais, caminhos/hashes do contexto,
 pares, uso/custo reconciliado,
 CPVC por dimensão, distribuições, incerteza, conclusão H1 e links para todas as evidências produzidas. Consulte
 [Experiment Harness reproduzível](experiment-harness.md).
