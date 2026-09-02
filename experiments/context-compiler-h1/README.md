@@ -67,7 +67,8 @@ fatura. CPU, memória e GPU observáveis devem ser registrados separadamente dur
 
 O executor abaixo cria um repositório isolado e novo, mantém output, evidências e chaves fora do
 checkout, coleta telemetria do host e valida as contagens e a janela efetivamente carregada pelo
-Ollama. O destino deve ser um caminho inexistente:
+Ollama. Ele compila e executa explicitamente a configuração `Release`, impedindo que `--no-build`
+reutilize um binário Debug antigo. O destino deve ser um caminho inexistente:
 
 ```powershell
 ./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
