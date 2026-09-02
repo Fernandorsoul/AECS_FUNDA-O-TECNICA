@@ -31,8 +31,9 @@ public sealed class ReproducibleRealWorldE2ETests
         var expectations = JsonSerializer.Deserialize<RealWorldExpectations>(
             await File.ReadAllTextAsync(expectationsPath),
             JsonOptions) ?? throw new InvalidOperationException("E2E expectations are invalid.");
-        expectations.SchemaVersion.Should().Be("1.0");
+        expectations.SchemaVersion.Should().Be("1.1");
         expectations.Scenarios.Should().HaveCountGreaterThanOrEqualTo(2);
+        expectations.Scenarios.Should().ContainSingle(scenario => scenario.RequirePromotion);
 
         var configuredReportPath = Environment.GetEnvironmentVariable("AECS_E2E_REPORT_PATH");
         var preserveArtifacts = !string.IsNullOrWhiteSpace(configuredReportPath);
@@ -84,66 +85,11 @@ public sealed class ReproducibleRealWorldE2ETests
         failures.Should().BeEmpty(
             $"the reproducible E2E report is available at {reportPath}");
         reports.Should().OnlyContain(report => report.Succeeded);
+        reports.Single(report => report.PromotionRequired)
+            .PromotionVerified.Should().BeTrue();
 
         if (!preserveArtifacts)
             Directory.Delete(artifactRoot, recursive: true);
-    }
-
-    [Fact]
-    [Trait("Category", "RealWorldE2E")]
-    public async Task VerifiedAgronomoPlusCandidate_IsPromotedWithExactVerifiedDiff()
-    {
-        await using var repository = await RealWorldFixtureRepository.CreateAsync();
-        var contract = new TaskContractParser().ParseFromFile(System.IO.Path.Combine(
-            repository.Path,
-            "tasks",
-            "agro-001-animal-validation.yaml"));
-        var response = await File.ReadAllTextAsync(System.IO.Path.Combine(
-            RealWorldFixtureRepository.FixturePath,
-            "candidates",
-            "agro-001-valid.txt"));
-        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
-        var execution = await new StagedExecutionPipeline(
-                new FixtureAgent(response),
-                repository.ProcessRunner,
-                store,
-                retryDelay: (_, _) => Task.CompletedTask)
-            .RunAsync(repository.Path, contract, CancellationToken.None);
-
-        execution.Decision.Decision.Should().Be(TaskDecision.Verified);
-        var promotion = await new CandidatePromotionService(repository.ProcessRunner, store)
-            .PromoteAsync(new CandidatePromotionRequest
-            {
-                EvidenceId = execution.EvidenceId,
-                RepositoryPath = repository.Path,
-                ExpectedDiffHash = execution.CandidateChangeSet.DiffHash,
-                Actor = "real-world-e2e",
-                Approval = new PromotionApproval
-                {
-                    Kind = PromotionApprovalKind.Policy,
-                    Reference = "ci/real-world-promotion"
-                }
-            }, CancellationToken.None);
-
-        promotion.Status.Should().Be(CandidatePromotionStatus.Promoted);
-        var promotedDiff = (await repository.ProcessRunner.RunAsync(new ProcessExecutionRequest
-        {
-            FileName = "git",
-            Arguments =
-            [
-                "diff", "--cached", "--binary", "--no-ext-diff",
-                execution.Baseline.Commit, "--"
-            ],
-            WorkingDirectory = repository.Path,
-            Timeout = TimeSpan.FromMinutes(2)
-        }, CancellationToken.None));
-        promotedDiff.Succeeded.Should().BeTrue(promotedDiff.StandardError);
-        promotedDiff.StandardOutput.Should().Be(execution.CandidateChangeSet.Diff);
-        var persisted = await store.LoadAsync(execution.EvidenceId, CancellationToken.None);
-        persisted!.Promotions.Should().ContainSingle(record =>
-            record.Status == CandidatePromotionStatus.Promoted &&
-            record.ApprovalKind == PromotionApprovalKind.Policy &&
-            record.ApprovalReference == "ci/real-world-promotion");
     }
 
     private static async Task<RealWorldScenarioOutcome> RunScenarioAsync(
@@ -157,6 +103,8 @@ public sealed class ReproducibleRealWorldE2ETests
         ExecutionEvidence? evidence = null;
         RealWorldRepositorySnapshot? before = null;
         RealWorldRepositorySnapshot? after = null;
+        JsonExecutionEvidenceStore? store = null;
+        var promotionVerified = false;
         Exception? exception = null;
         var agent = new FixtureAgent(await File.ReadAllTextAsync(System.IO.Path.Combine(
             RealWorldFixtureRepository.FixturePath,
@@ -170,7 +118,7 @@ public sealed class ReproducibleRealWorldE2ETests
                 var contract = new TaskContractParser().ParseFromFile(System.IO.Path.Combine(
                     repository.Path,
                     scenario.Contract));
-                var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+                store = new JsonExecutionEvidenceStore(repository.EvidencePath);
                 result = await new StagedExecutionPipeline(
                         agent,
                         repository.ProcessRunner,
@@ -192,6 +140,14 @@ public sealed class ReproducibleRealWorldE2ETests
             ValidateRepositoryIsolation(repository, before, after, agent, failures);
             if (result is not null)
                 ValidateResult(repository, scenario, result, evidence, failures);
+            if (scenario.RequirePromotion && result is not null && store is not null)
+            {
+                promotionVerified = await ValidatePromotionAsync(
+                    repository,
+                    result,
+                    store,
+                    failures);
+            }
         }
 
         stopwatch.Stop();
@@ -203,8 +159,78 @@ public sealed class ReproducibleRealWorldE2ETests
             after,
             exception,
             stopwatch.Elapsed,
+            promotionVerified,
             failures);
         return new RealWorldScenarioOutcome(report, failures);
+    }
+
+    private static async Task<bool> ValidatePromotionAsync(
+        RealWorldFixtureRepository repository,
+        StagedExecutionResult execution,
+        JsonExecutionEvidenceStore store,
+        List<string> failures)
+    {
+        var failureCount = failures.Count;
+        if (execution.Decision.Decision != TaskDecision.Verified)
+        {
+            failures.Add("promotion requires a verified candidate");
+            return false;
+        }
+
+        try
+        {
+            var promotion = await new CandidatePromotionService(repository.ProcessRunner, store)
+                .PromoteAsync(new CandidatePromotionRequest
+                {
+                    EvidenceId = execution.EvidenceId,
+                    RepositoryPath = repository.Path,
+                    ExpectedDiffHash = execution.CandidateChangeSet.DiffHash,
+                    Actor = "real-world-e2e",
+                    Approval = new PromotionApproval
+                    {
+                        Kind = PromotionApprovalKind.Policy,
+                        Reference = "ci/real-world-promotion"
+                    }
+                }, CancellationToken.None);
+            Expect(
+                promotion.Status == CandidatePromotionStatus.Promoted,
+                $"promotion returned {promotion.Status}",
+                failures);
+
+            var promotedDiff = await repository.ProcessRunner.RunAsync(
+                new ProcessExecutionRequest
+                {
+                    FileName = "git",
+                    Arguments =
+                    [
+                        "diff", "--cached", "--binary", "--no-ext-diff",
+                        execution.Baseline.Commit, "--"
+                    ],
+                    WorkingDirectory = repository.Path,
+                    Timeout = TimeSpan.FromMinutes(2)
+                },
+                CancellationToken.None);
+            Expect(promotedDiff.Succeeded, promotedDiff.StandardError, failures);
+            Expect(
+                promotedDiff.StandardOutput == execution.CandidateChangeSet.Diff,
+                "promoted diff differs from the authenticated verified candidate",
+                failures);
+
+            var persisted = await store.LoadAsync(execution.EvidenceId, CancellationToken.None);
+            Expect(
+                persisted?.Promotions.Count(record =>
+                    record.Status == CandidatePromotionStatus.Promoted &&
+                    record.ApprovalKind == PromotionApprovalKind.Policy &&
+                    record.ApprovalReference == "ci/real-world-promotion") == 1,
+                "authenticated promotion record was not persisted exactly once",
+                failures);
+        }
+        catch (Exception exception)
+        {
+            failures.Add($"promotion threw {exception.GetType().Name}: {exception.Message}");
+        }
+
+        return failures.Count == failureCount;
     }
 
     private static void ValidateRepositoryIsolation(
@@ -331,6 +357,7 @@ public sealed class ReproducibleRealWorldE2ETests
         RealWorldRepositorySnapshot? after,
         Exception? exception,
         TimeSpan duration,
+        bool promotionVerified,
         IReadOnlyCollection<string> failures) => new()
         {
             Id = expectation.Id,
@@ -355,6 +382,8 @@ public sealed class ReproducibleRealWorldE2ETests
             EvidenceId = result?.EvidenceId.ToString("N") ?? string.Empty,
             EvidenceLocation = result?.EvidenceLocation ?? string.Empty,
             EvidenceReloaded = evidence is not null,
+            PromotionRequired = expectation.RequirePromotion,
+            PromotionVerified = promotionVerified,
             BaselineVerifications = result?.BaselineVerificationResults.Select(item =>
                 new RealWorldVerificationReport(item.Verifier, item.Status.ToString(), item.Message)).ToList() ?? [],
             CandidateVerifications = result?.VerificationResults.Select(item =>
@@ -451,6 +480,7 @@ internal sealed class RealWorldScenarioExpectation
     public List<string> ExpectedChangedFiles { get; init; } = [];
     public List<string> ExpectedFailingVerifiers { get; init; } = [];
     public bool RequireCandidateBuildAndTests { get; init; }
+    public bool RequirePromotion { get; init; }
 }
 
 internal sealed class RealWorldSuiteReport
@@ -484,6 +514,8 @@ internal sealed class RealWorldScenarioReport
     public string EvidenceId { get; init; } = string.Empty;
     public string EvidenceLocation { get; init; } = string.Empty;
     public bool EvidenceReloaded { get; init; }
+    public bool PromotionRequired { get; init; }
+    public bool PromotionVerified { get; init; }
     public List<RealWorldVerificationReport> BaselineVerifications { get; init; } = [];
     public List<RealWorldVerificationReport> CandidateVerifications { get; init; } = [];
     public List<RealWorldAcceptanceReport> AcceptanceCriteria { get; init; } = [];
