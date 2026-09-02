@@ -36,3 +36,43 @@ concluem `Abandon`. Falhas nunca são removidas da amostra.
 O workflow manual `Context Compiler H1` executa o mesmo protocolo com o secret
 `AECS_EXPERIMENT_OPENAI_API_KEY` e publica output, evidências e a chave pública de verificação
 por 30 dias. Ele nunca é acionado por push ou pull request.
+
+## Replicação local em hardware baixo
+
+`dataset.local-low-hardware.json` é um pré-registro separado. Ele não altera, substitui nem pode ser
+combinado com o resultado cloud. O protocolo mantém as mesmas três tarefas, estratégias, limites de
+contexto, seeds, 10 repetições e 30 pares, mas fixa o provider `Local`, o modelo
+`qwen2.5-coder:1.5b`, o Ollama loopback e uma janela de 8192 tokens.
+
+Host registrado antes da coleta, em 2026-09-02: Windows 11 `10.0.26200`, Ryzen 5 4500 com 6 cores
+e 12 threads, 16 GB de RAM e Radeon RX 570 com 4 GB. Ollama `0.33.2` estava ativo e ainda não
+possuía modelos instalados. O digest efetivamente baixado e o processador usado pelo Ollama devem
+ser registrados no relatório, sem pressupor aceleração da GPU.
+
+`dataset.local-low-hardware-pilot.json` executa apenas Retention em dois pares. Ele é um gate
+operacional anterior à amostra: valida disponibilidade do modelo, parsing, isolamento, persistência
+de evidência e contabilidade. Decisão rejeitada, resposta malformada ou baixa qualidade são resultados
+do modelo e não autorizam ajustar o dataset completo. Somente uma falha de infraestrutura impede a
+coleta até que sua causa seja corrigida.
+
+A estimativa de custo usa `aecs.local-compute-cost/v1`: 200 W, USD 0,20/kWh, hardware de USD 600
+e vida útil de 10.000 horas. São hipóteses reproduzíveis do adapter, não medição elétrica nem
+fatura. CPU, memória e GPU observáveis devem ser registrados separadamente durante a execução.
+
+O executor abaixo cria um repositório isolado e novo, mantém output, evidências e chaves fora do
+checkout, coleta telemetria do host e valida as contagens e a janela efetivamente carregada pelo
+Ollama. O destino deve ser um caminho inexistente:
+
+```powershell
+./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
+  -Mode pilot `
+  -ArtifactRoot "$env:LOCALAPPDATA/Temp/aecs-h1-local-pilot"
+
+./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
+  -Mode full `
+  -ArtifactRoot "$env:LOCALAPPDATA/Temp/aecs-h1-local-full"
+```
+
+Uma conclusão experimental rejeitada faz a CLI retornar código 1 mesmo quando toda a amostra foi
+coletada corretamente. O executor distingue esse resultado de falha operacional confrontando o
+código com `report.succeeded` e exigindo todos os runs e todas as evidências esperadas.
