@@ -15,7 +15,8 @@ public static class ExperimentDatasetSchema
     public const string Version = "aecs.experiment-dataset/v1";
     public const string ContextAbVersion = "aecs.experiment-dataset/v2";
     public const string ContextAbIntegrityVersion = "aecs.experiment-dataset/v3";
-    public const string ReportVersion = "aecs.experiment-report/v4";
+    public const string ContextAbDecisionPolicyVersion = "aecs.experiment-dataset/v4";
+    public const string ReportVersion = "aecs.experiment-report/v5";
     public const string CheckpointVersion = "aecs.experiment-checkpoint/v1";
 }
 
@@ -31,6 +32,12 @@ public enum HypothesisConclusion
     Maintain,
     Adjust,
     Abandon
+}
+
+public enum ZeroReferencePolicy
+{
+    Adjust,
+    AbsolutePairedDelta
 }
 
 public enum ExperimentProvider
@@ -69,12 +76,16 @@ public sealed class ExperimentProtocol
     public string PrimaryMetric { get; init; } = string.Empty;
     public int MinimumPairedSamples { get; init; }
     public double ConfidenceLevel { get; init; } = 0.95;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ZeroReferencePolicy? ZeroReferencePolicy { get; init; }
     public ExperimentDeathCriteria DeathCriteria { get; init; } = new();
 }
 
 public sealed class ExperimentDeathCriteria
 {
     public double MinimumRelativeImprovement { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? MinimumAbsoluteImprovement { get; init; }
     public double MaximumCandidateFailureRate { get; init; }
     public double MaximumCandidateScopeViolationRate { get; init; }
 }
@@ -296,7 +307,8 @@ public static class ExperimentDatasetContract
         if (manifest.SchemaVersion is not (
                 ExperimentDatasetSchema.Version or
                 ExperimentDatasetSchema.ContextAbVersion or
-                ExperimentDatasetSchema.ContextAbIntegrityVersion) ||
+                ExperimentDatasetSchema.ContextAbIntegrityVersion or
+                ExperimentDatasetSchema.ContextAbDecisionPolicyVersion) ||
             !ValidId(manifest.Id) ||
             string.IsNullOrWhiteSpace(manifest.Version) ||
             manifest.Version.Length > 100 ||
@@ -317,7 +329,8 @@ public static class ExperimentDatasetContract
             manifest.SchemaVersion == ExperimentDatasetSchema.Version &&
             manifest.Protocol is not null ||
             (manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbVersion ||
-             manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbIntegrityVersion) &&
+             manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbIntegrityVersion ||
+             manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbDecisionPolicyVersion) &&
             InvalidContextAbProtocol(manifest))
         {
             throw new InvalidOperationException(
@@ -336,9 +349,13 @@ public static class ExperimentDatasetContract
             protocol.MinimumPairedSamples < 2 ||
             protocol.ConfidenceLevel != 0.95 ||
             protocol.DeathCriteria is null ||
+            !double.IsFinite(protocol.DeathCriteria.MinimumRelativeImprovement) ||
             protocol.DeathCriteria.MinimumRelativeImprovement is < -1 or > 10 ||
+            !double.IsFinite(protocol.DeathCriteria.MaximumCandidateFailureRate) ||
             protocol.DeathCriteria.MaximumCandidateFailureRate is < 0 or > 1 ||
+            !double.IsFinite(protocol.DeathCriteria.MaximumCandidateScopeViolationRate) ||
             protocol.DeathCriteria.MaximumCandidateScopeViolationRate is < 0 or > 1 ||
+            InvalidDecisionPolicy(manifest.SchemaVersion, protocol) ||
             manifest.Variants.Count != 2 ||
             manifest.Tasks.Count * manifest.Repetitions < protocol.MinimumPairedSamples ||
             manifest.Variants.Any(variant =>
@@ -351,7 +368,9 @@ public static class ExperimentDatasetContract
             return true;
         }
 
-        if (manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbIntegrityVersion &&
+        if (manifest.SchemaVersion is (
+                ExperimentDatasetSchema.ContextAbIntegrityVersion or
+                ExperimentDatasetSchema.ContextAbDecisionPolicyVersion) &&
             manifest.Tasks.Any(task => task.RequiredContextPaths.Count == 0))
         {
             return true;
@@ -371,6 +390,34 @@ public static class ExperimentDatasetContract
             reference.Seed != candidate.Seed ||
             !Equivalent(reference.Context, candidate.Context) ||
             !Equivalent(reference.Parameters, candidate.Parameters);
+    }
+
+    private static bool InvalidDecisionPolicy(
+        string schemaVersion,
+        ExperimentProtocol protocol)
+    {
+        var isDecisionPolicyVersion = schemaVersion ==
+            ExperimentDatasetSchema.ContextAbDecisionPolicyVersion;
+        if (!isDecisionPolicyVersion)
+        {
+            return protocol.ZeroReferencePolicy is not null ||
+                protocol.DeathCriteria.MinimumAbsoluteImprovement is not null;
+        }
+
+        if (protocol.ZeroReferencePolicy is null ||
+            !Enum.IsDefined(protocol.ZeroReferencePolicy.Value))
+        {
+            return true;
+        }
+
+        var minimumAbsolute = protocol.DeathCriteria.MinimumAbsoluteImprovement;
+        return protocol.ZeroReferencePolicy.Value switch
+        {
+            ZeroReferencePolicy.Adjust => minimumAbsolute is not null,
+            ZeroReferencePolicy.AbsolutePairedDelta => minimumAbsolute is null ||
+                !double.IsFinite(minimumAbsolute.Value) || minimumAbsolute.Value < 0,
+            _ => true
+        };
     }
 
     private static bool Equivalent(ContextCompilationOptions left, ContextCompilationOptions right) =>

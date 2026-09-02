@@ -61,6 +61,23 @@ public sealed class ExperimentPairedAnalysis
     public ExperimentMetricDistribution VccPerEstimatedDollarDelta { get; init; } = new();
 }
 
+public static class ExperimentDecisionMetrics
+{
+    public const string RelativeVccPerEstimatedCostImprovement =
+        "relative-vcc-per-estimated-cost-improvement";
+    public const string PairedVccPerEstimatedCostDelta =
+        "paired-vcc-per-estimated-cost-delta";
+}
+
+public sealed class ExperimentDecisionRuleAnalysis
+{
+    public ZeroReferencePolicy ZeroReferencePolicy { get; init; }
+    public bool PolicyPreregistered { get; init; }
+    public bool ZeroReferenceObserved { get; init; }
+    public string EffectiveMetric { get; init; } = string.Empty;
+    public double MinimumImprovement { get; init; }
+}
+
 public sealed class ExperimentHypothesisAnalysis
 {
     public string HypothesisId { get; init; } = string.Empty;
@@ -70,6 +87,7 @@ public sealed class ExperimentHypothesisAnalysis
     public double ConfidenceLevel { get; init; }
     public HypothesisConclusion Conclusion { get; init; }
     public string ConclusionReason { get; init; } = string.Empty;
+    public ExperimentDecisionRuleAnalysis DecisionRule { get; init; } = new();
     public List<ExperimentVariantAnalysis> Variants { get; init; } = [];
     public ExperimentPairedAnalysis Pairs { get; init; } = new();
 }
@@ -98,7 +116,8 @@ public static class ExperimentAnalyzer
             candidate,
             manifest.Tasks.Count * manifest.Repetitions,
             pairs.Where(pair => pair.CandidateVariantId == candidate.VariantId).ToList());
-        var (conclusion, reason) = Conclude(protocol, candidate, paired);
+        var decisionRule = DecisionRule(protocol, paired);
+        var (conclusion, reason) = Conclude(protocol, candidate, paired, decisionRule);
 
         return new ExperimentHypothesisAnalysis
         {
@@ -109,6 +128,7 @@ public static class ExperimentAnalyzer
             ConfidenceLevel = protocol.ConfidenceLevel,
             Conclusion = conclusion,
             ConclusionReason = reason,
+            DecisionRule = decisionRule,
             Variants = variants,
             Pairs = paired
         };
@@ -217,7 +237,8 @@ public static class ExperimentAnalyzer
     private static (HypothesisConclusion Conclusion, string Reason) Conclude(
         ExperimentProtocol protocol,
         ExperimentVariantAnalysis candidate,
-        ExperimentPairedAnalysis pairs)
+        ExperimentPairedAnalysis pairs,
+        ExperimentDecisionRuleAnalysis decisionRule)
     {
         if (pairs.ObservedPairs < protocol.MinimumPairedSamples)
         {
@@ -238,12 +259,50 @@ public static class ExperimentAnalyzer
                 $"Candidate scope-violation rate {candidate.ScopeViolationRate:P2} exceeded the " +
                 $"preregistered limit {protocol.DeathCriteria.MaximumCandidateScopeViolationRate:P2}.");
         }
-        if (pairs.VccPerEstimatedDollarDelta.Count < protocol.MinimumPairedSamples ||
-            pairs.RelativePrimaryMetricImprovement is null)
+        if (pairs.VccPerEstimatedDollarDelta.Count < protocol.MinimumPairedSamples)
         {
             return (HypothesisConclusion.Adjust,
-                "The preregistered cost-efficiency metric is unavailable for enough pairs; " +
-                "estimated cost must be positive and reported by both variants.");
+                $"Only {pairs.VccPerEstimatedDollarDelta.Count}/" +
+                $"{protocol.MinimumPairedSamples} pairs report positive estimated cost for " +
+                "both variants; the preregistered cost-efficiency metric is unavailable.");
+        }
+        if (decisionRule.ZeroReferenceObserved)
+        {
+            if (decisionRule.ZeroReferencePolicy == ZeroReferencePolicy.Adjust)
+            {
+                return (HypothesisConclusion.Adjust,
+                    "The reference produced zero verified code changes with valid cost, so " +
+                    "relative VCC-per-estimated-cost improvement is undefined. A future " +
+                    "dataset must preregister an absolute paired-delta policy to evaluate " +
+                    "this case.");
+            }
+
+            var mean = pairs.VccPerEstimatedDollarDelta.Mean!.Value;
+            var lower = pairs.VccPerEstimatedDollarDelta.MeanConfidenceIntervalLower!.Value;
+            var threshold = decisionRule.MinimumImprovement;
+            if (mean < threshold)
+            {
+                return (HypothesisConclusion.Abandon,
+                    $"Absolute paired cost-efficiency improvement {mean:F4} did not reach " +
+                    $"the preregistered minimum {threshold:F4}.");
+            }
+            if (lower > threshold)
+            {
+                return (HypothesisConclusion.Maintain,
+                    "The absolute paired cost-efficiency improvement exceeded the " +
+                    "preregistered minimum and the 95% mean confidence interval remained " +
+                    "above that threshold.");
+            }
+            return (HypothesisConclusion.Adjust,
+                "The absolute paired cost-efficiency point estimate reached the " +
+                "preregistered minimum, but the 95% mean confidence interval did not remain " +
+                "above that threshold; increase evidence without changing the protocol.");
+        }
+        if (pairs.RelativePrimaryMetricImprovement is null)
+        {
+            return (HypothesisConclusion.Adjust,
+                "Relative VCC-per-estimated-cost improvement is unavailable despite paired " +
+                "cost coverage; inspect the aggregate inputs before collecting more runs.");
         }
         if (pairs.RelativePrimaryMetricImprovement <
             protocol.DeathCriteria.MinimumRelativeImprovement)
@@ -262,6 +321,29 @@ public static class ExperimentAnalyzer
         return (HypothesisConclusion.Adjust,
             "The observed effect is positive but the 95% paired mean confidence interval " +
             "still includes zero; increase evidence before changing the default.");
+    }
+
+    private static ExperimentDecisionRuleAnalysis DecisionRule(
+        ExperimentProtocol protocol,
+        ExperimentPairedAnalysis pairs)
+    {
+        var zeroReferenceObserved =
+            pairs.ReferenceVerifiedChangesPerEstimatedDollar == 0;
+        var zeroReferencePolicy = protocol.ZeroReferencePolicy ?? ZeroReferencePolicy.Adjust;
+        var usesAbsoluteMetric = zeroReferenceObserved &&
+            zeroReferencePolicy == ZeroReferencePolicy.AbsolutePairedDelta;
+        return new ExperimentDecisionRuleAnalysis
+        {
+            ZeroReferencePolicy = zeroReferencePolicy,
+            PolicyPreregistered = protocol.ZeroReferencePolicy is not null,
+            ZeroReferenceObserved = zeroReferenceObserved,
+            EffectiveMetric = usesAbsoluteMetric
+                ? ExperimentDecisionMetrics.PairedVccPerEstimatedCostDelta
+                : ExperimentDecisionMetrics.RelativeVccPerEstimatedCostImprovement,
+            MinimumImprovement = usesAbsoluteMetric
+                ? protocol.DeathCriteria.MinimumAbsoluteImprovement!.Value
+                : protocol.DeathCriteria.MinimumRelativeImprovement
+        };
     }
 
     public static ExperimentMetricDistribution Distribution(IEnumerable<double> values)

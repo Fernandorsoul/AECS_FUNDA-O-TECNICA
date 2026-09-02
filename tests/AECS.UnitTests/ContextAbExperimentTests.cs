@@ -262,6 +262,103 @@ public sealed class ContextAbExperimentTests
     }
 
     [Fact]
+    public void ContextAbV4_RequiresAnExplicitCoherentZeroReferencePolicy()
+    {
+        var adjust = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.Adjust));
+        var absolute = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: 5));
+        var missing = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true));
+        var missingRequiredContext = () => ExperimentDatasetContract.Validate(Manifest(
+            includeRequiredPaths: false,
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.Adjust));
+        var missingThreshold = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta));
+        var unexpectedThreshold = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.Adjust,
+            minimumAbsoluteImprovement: 5));
+        var negativeThreshold = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: -1));
+        var nonFiniteThreshold = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: double.NaN));
+        var unknown = () => ExperimentDatasetContract.Validate(Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: (ZeroReferencePolicy)99));
+        var retroactive = () => ExperimentDatasetContract.Validate(Manifest(
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: 5));
+
+        adjust.Should().NotThrow();
+        absolute.Should().NotThrow();
+        missing.Should().Throw<InvalidOperationException>();
+        missingRequiredContext.Should().Throw<InvalidOperationException>();
+        missingThreshold.Should().Throw<InvalidOperationException>();
+        unexpectedThreshold.Should().Throw<InvalidOperationException>();
+        negativeThreshold.Should().Throw<InvalidOperationException>();
+        nonFiniteThreshold.Should().Throw<InvalidOperationException>();
+        unknown.Should().Throw<InvalidOperationException>();
+        retroactive.Should().Throw<InvalidOperationException>();
+
+        var legacyJson = JsonSerializer.Serialize(
+            Manifest(),
+            ExperimentDatasetLoader.SerializerOptions);
+        legacyJson.Should().NotContain("zeroReferencePolicy")
+            .And.NotContain("minimumAbsoluteImprovement");
+    }
+
+    [Fact]
+    public void ContextAbV4_LoaderRejectsAnUnknownZeroReferencePolicy()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var json = JsonSerializer.Serialize(
+                Manifest(
+                    decisionPolicy: true,
+                    zeroReferencePolicy: ZeroReferencePolicy.Adjust),
+                ExperimentDatasetLoader.SerializerOptions).Replace(
+                    "\"Adjust\"",
+                    "\"UnknownPolicy\"",
+                    StringComparison.Ordinal);
+            File.WriteAllText(path, json);
+
+            var load = () => ExperimentDatasetLoader.Load(path);
+
+            load.Should().Throw<JsonException>();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ContextAbProtocol_RejectsNonFiniteDeathCriteria()
+    {
+        var relative = () => ExperimentDatasetContract.Validate(Manifest(
+            minimumRelativeImprovement: double.NaN));
+        var failure = () => ExperimentDatasetContract.Validate(Manifest(
+            maximumCandidateFailureRate: double.PositiveInfinity));
+        var scope = () => ExperimentDatasetContract.Validate(Manifest(
+            maximumCandidateScopeViolationRate: double.NaN));
+
+        relative.Should().Throw<InvalidOperationException>();
+        failure.Should().Throw<InvalidOperationException>();
+        scope.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
     public void Analyzer_ReportsDistributionAndMaintainsH1OnlyForConclusivePairedEffect()
     {
         var manifest = Manifest();
@@ -277,6 +374,9 @@ public sealed class ContextAbExperimentTests
         var analysis = ExperimentAnalyzer.Analyze(manifest, results, pairs)!;
 
         analysis.Conclusion.Should().Be(HypothesisConclusion.Maintain);
+        analysis.DecisionRule.ZeroReferenceObserved.Should().BeFalse();
+        analysis.DecisionRule.EffectiveMetric.Should().Be(
+            ExperimentDecisionMetrics.RelativeVccPerEstimatedCostImprovement);
         analysis.Pairs.ObservedPairs.Should().Be(2);
         analysis.Pairs.VccPerEstimatedDollarDelta.Count.Should().Be(2);
         analysis.Pairs.VccPerEstimatedDollarDelta.MeanConfidenceIntervalLower.Should()
@@ -302,55 +402,222 @@ public sealed class ContextAbExperimentTests
 
         analysis.Conclusion.Should().Be(HypothesisConclusion.Adjust);
         analysis.Pairs.RelativePrimaryMetricImprovement.Should().BeNull();
-        analysis.ConclusionReason.Should().Contain("cost-efficiency metric is unavailable");
+        analysis.ConclusionReason.Should().Contain("positive estimated cost");
+    }
+
+    [Fact]
+    public void Analyzer_LegacyProtocolAdjustsWithSpecificReasonWhenReferenceHasZeroVcc()
+    {
+        var analysis = AnalyzeZeroReference(Manifest(), true, true);
+
+        analysis.Conclusion.Should().Be(HypothesisConclusion.Adjust);
+        analysis.ConclusionReason.Should().Contain("reference produced zero verified code changes");
+        analysis.ConclusionReason.Should().NotContain("cost must be positive");
+        analysis.DecisionRule.ZeroReferencePolicy.Should().Be(ZeroReferencePolicy.Adjust);
+        analysis.DecisionRule.PolicyPreregistered.Should().BeFalse();
+        analysis.DecisionRule.ZeroReferenceObserved.Should().BeTrue();
+        analysis.DecisionRule.EffectiveMetric.Should().Be(
+            ExperimentDecisionMetrics.RelativeVccPerEstimatedCostImprovement);
+    }
+
+    [Fact]
+    public void Analyzer_V4HonorsExplicitAdjustPolicyWhenReferenceHasZeroVcc()
+    {
+        var analysis = AnalyzeZeroReference(
+            Manifest(
+                decisionPolicy: true,
+                zeroReferencePolicy: ZeroReferencePolicy.Adjust),
+            true,
+            true);
+
+        analysis.Conclusion.Should().Be(HypothesisConclusion.Adjust);
+        analysis.DecisionRule.ZeroReferencePolicy.Should().Be(ZeroReferencePolicy.Adjust);
+        analysis.DecisionRule.PolicyPreregistered.Should().BeTrue();
+        analysis.ConclusionReason.Should().Contain("absolute paired-delta policy");
+    }
+
+    [Fact]
+    public void Analyzer_V4MaintainsOnlyWhenAbsolutePairedIntervalExceedsThreshold()
+    {
+        var manifest = Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: 5);
+        var analysis = AnalyzeZeroReference(manifest, true, true);
+
+        analysis.Conclusion.Should().Be(HypothesisConclusion.Maintain);
+        analysis.DecisionRule.ZeroReferenceObserved.Should().BeTrue();
+        analysis.DecisionRule.PolicyPreregistered.Should().BeTrue();
+        analysis.DecisionRule.EffectiveMetric.Should().Be(
+            ExperimentDecisionMetrics.PairedVccPerEstimatedCostDelta);
+        analysis.DecisionRule.MinimumImprovement.Should().Be(5);
+        analysis.Pairs.VccPerEstimatedDollarDelta.MeanConfidenceIntervalLower.Should()
+            .BeGreaterThan(5);
+
+        var report = new ExperimentReport { Analysis = analysis };
+        using var reportJson = JsonDocument.Parse(JsonSerializer.Serialize(
+            report,
+            ExperimentDatasetLoader.SerializerOptions));
+        reportJson.RootElement.GetProperty("schemaVersion").GetString().Should()
+            .Be(ExperimentDatasetSchema.ReportVersion);
+        var serializedRule = reportJson.RootElement.GetProperty("analysis")
+            .GetProperty("decisionRule");
+        serializedRule.GetProperty("zeroReferencePolicy").GetString().Should()
+            .Be(nameof(ZeroReferencePolicy.AbsolutePairedDelta));
+        serializedRule.GetProperty("effectiveMetric").GetString().Should()
+            .Be(ExperimentDecisionMetrics.PairedVccPerEstimatedCostDelta);
+        var analysisCsv = ExperimentCsvFormatter.Analysis(report).Split('\n');
+        analysisCsv[0].Should()
+            .Contain("zero_reference_policy")
+            .And.Contain("effective_decision_metric");
+        analysisCsv[1].Should().Contain(nameof(ZeroReferencePolicy.AbsolutePairedDelta))
+            .And.Contain(ExperimentDecisionMetrics.PairedVccPerEstimatedCostDelta);
+        ExperimentReportFormatter.Format(report).Should()
+            .Contain("Decision rule: zeroReference=AbsolutePairedDelta")
+            .And.Contain($"metric={ExperimentDecisionMetrics.PairedVccPerEstimatedCostDelta}");
+    }
+
+    [Fact]
+    public void Analyzer_V4AdjustsWhenAbsolutePairedIntervalIsInconclusive()
+    {
+        var manifest = Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: 5);
+        var analysis = AnalyzeZeroReference(manifest, true, false);
+
+        analysis.Conclusion.Should().Be(HypothesisConclusion.Adjust);
+        analysis.ConclusionReason.Should().Contain("confidence interval");
+        analysis.Pairs.VccPerEstimatedDollarDelta.Mean.Should().BeGreaterThanOrEqualTo(5);
+        analysis.Pairs.VccPerEstimatedDollarDelta.MeanConfidenceIntervalLower.Should()
+            .BeLessThan(5);
+    }
+
+    [Fact]
+    public void Analyzer_V4AbandonsWhenAbsolutePointEstimateMissesThreshold()
+    {
+        var manifest = Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: 25);
+        var analysis = AnalyzeZeroReference(manifest, true, true);
+
+        analysis.Conclusion.Should().Be(HypothesisConclusion.Abandon);
+        analysis.ConclusionReason.Should().Contain("did not reach");
+    }
+
+    [Fact]
+    public void Analyzer_PreservesDeathCriteriaBeforeStatisticalDecision()
+    {
+        var manifest = Manifest(
+            decisionPolicy: true,
+            zeroReferencePolicy: ZeroReferencePolicy.AbsolutePairedDelta,
+            minimumAbsoluteImprovement: 5);
+        var results = new List<TaskExperimentResult>();
+        var pairs = new List<ExperimentPairedComparison>();
+        for (var repetition = 1; repetition <= 2; repetition++)
+        {
+            results.Add(Result("naive", repetition, cost: 0.10m, verified: false));
+            results.Add(Result(
+                "compiled",
+                repetition,
+                cost: 0.05m,
+                scopeViolations: repetition == 1 ? 1 : 0));
+            pairs.Add(Pair(
+                repetition,
+                referenceCost: 0.10m,
+                candidateCost: 0.05m,
+                referenceVerified: false));
+        }
+
+        var analysis = ExperimentAnalyzer.Analyze(manifest, results, pairs)!;
+
+        analysis.Conclusion.Should().Be(HypothesisConclusion.Abandon);
+        analysis.ConclusionReason.Should().Contain("scope-violation rate");
+    }
+
+    private static ExperimentHypothesisAnalysis AnalyzeZeroReference(
+        ExperimentDatasetManifest manifest,
+        params bool[] candidateVerified)
+    {
+        var results = new List<TaskExperimentResult>();
+        var pairs = new List<ExperimentPairedComparison>();
+        for (var index = 0; index < candidateVerified.Length; index++)
+        {
+            var repetition = index + 1;
+            results.Add(Result("naive", repetition, cost: 0.10m, verified: false));
+            results.Add(Result(
+                "compiled",
+                repetition,
+                cost: 0.05m,
+                verified: candidateVerified[index]));
+            pairs.Add(Pair(
+                repetition,
+                referenceCost: 0.10m,
+                candidateCost: 0.05m,
+                referenceVerified: false,
+                candidateVerified: candidateVerified[index]));
+        }
+
+        return ExperimentAnalyzer.Analyze(manifest, results, pairs)!;
     }
 
     private static ExperimentDatasetManifest Manifest(
         string candidateModel = "qwen-test",
         bool integrity = false,
-        bool includeRequiredPaths = true) => new()
-    {
-        SchemaVersion = integrity
-            ? ExperimentDatasetSchema.ContextAbIntegrityVersion
-            : ExperimentDatasetSchema.ContextAbVersion,
-        Id = "context-h1",
-        Version = "1.0.0",
-        Repository = new ExperimentRepositoryDefinition { Path = ".", Baseline = "HEAD" },
-        Repetitions = 2,
-        ReferenceVariantId = "naive",
-        Protocol = new ExperimentProtocol
+        bool includeRequiredPaths = true,
+        bool decisionPolicy = false,
+        ZeroReferencePolicy? zeroReferencePolicy = null,
+        double? minimumAbsoluteImprovement = null,
+        double minimumRelativeImprovement = 0.05,
+        double maximumCandidateFailureRate = 0.25,
+        double maximumCandidateScopeViolationRate = 0) => new()
         {
-            Design = ExperimentDesigns.PairedContextAb,
-            HypothesisId = "H1",
-            Hypothesis = "Selected context improves verified changes per estimated cost.",
-            PrimaryMetric = ExperimentDesigns.VccPerEstimatedCost,
-            MinimumPairedSamples = 2,
-            ConfidenceLevel = 0.95,
-            DeathCriteria = new ExperimentDeathCriteria
+            SchemaVersion = decisionPolicy
+            ? ExperimentDatasetSchema.ContextAbDecisionPolicyVersion
+            : integrity
+                ? ExperimentDatasetSchema.ContextAbIntegrityVersion
+                : ExperimentDatasetSchema.ContextAbVersion,
+            Id = "context-h1",
+            Version = "1.0.0",
+            Repository = new ExperimentRepositoryDefinition { Path = ".", Baseline = "HEAD" },
+            Repetitions = 2,
+            ReferenceVariantId = "naive",
+            Protocol = new ExperimentProtocol
             {
-                MinimumRelativeImprovement = 0.05,
-                MaximumCandidateFailureRate = 0.25,
-                MaximumCandidateScopeViolationRate = 0
-            }
-        },
-        Tasks =
+                Design = ExperimentDesigns.PairedContextAb,
+                HypothesisId = "H1",
+                Hypothesis = "Selected context improves verified changes per estimated cost.",
+                PrimaryMetric = ExperimentDesigns.VccPerEstimatedCost,
+                MinimumPairedSamples = 2,
+                ConfidenceLevel = 0.95,
+                ZeroReferencePolicy = zeroReferencePolicy,
+                DeathCriteria = new ExperimentDeathCriteria
+                {
+                    MinimumRelativeImprovement = minimumRelativeImprovement,
+                    MinimumAbsoluteImprovement = minimumAbsoluteImprovement,
+                    MaximumCandidateFailureRate = maximumCandidateFailureRate,
+                    MaximumCandidateScopeViolationRate = maximumCandidateScopeViolationRate
+                }
+            },
+            Tasks =
         [
             new ExperimentTaskDefinition
             {
                 Id = "TASK-AB",
                 ContractPath = "task.yaml",
                 ExpectedDecision = TaskDecision.Verified,
-                RequiredContextPaths = integrity && includeRequiredPaths
+                RequiredContextPaths = (integrity || decisionPolicy) && includeRequiredPaths
                     ? ["src/TargetPolicy.cs"]
                     : []
             }
         ],
-        Variants =
+            Variants =
         [
             Variant("naive", "qwen-test", ContextStrategyIds.NaivePathOrder),
             Variant("compiled", candidateModel, ContextStrategyIds.GraphRanked)
         ]
-    };
+        };
 
     private static ExperimentVariantDefinition Variant(
         string id,
@@ -377,15 +644,21 @@ public sealed class ContextAbExperimentTests
             }
         };
 
-    private static TaskExperimentResult Result(string variant, int repetition, decimal cost) =>
+    private static TaskExperimentResult Result(
+        string variant,
+        int repetition,
+        decimal cost,
+        bool verified = true,
+        int scopeViolations = 0) =>
         new()
         {
             VariantId = variant,
             Repetition = repetition,
             Status = ExperimentResultStatus.Completed,
-            Decision = TaskDecision.Verified,
-            VerifiedCodeChange = true,
-            FirstPassVerified = true,
+            Decision = verified ? TaskDecision.Verified : TaskDecision.Rejected,
+            VerifiedCodeChange = verified,
+            FirstPassVerified = verified,
+            ScopeViolationCount = scopeViolations,
             FilesChanged = 1,
             EstimatedCost = cost,
             InputTokens = variant == "naive" ? 1000 : 700,
@@ -399,7 +672,9 @@ public sealed class ContextAbExperimentTests
     private static ExperimentPairedComparison Pair(
         int repetition,
         decimal referenceCost,
-        decimal candidateCost) => new()
+        decimal candidateCost,
+        bool referenceVerified = true,
+        bool candidateVerified = true) => new()
         {
             TaskId = "TASK-AB",
             Repetition = repetition,
@@ -408,10 +683,13 @@ public sealed class ContextAbExperimentTests
             ReferenceStatus = ExperimentResultStatus.Completed,
             CandidateStatus = ExperimentResultStatus.Completed,
             BothCompleted = true,
-            ReferenceVerifiedCodeChange = true,
-            CandidateVerifiedCodeChange = true,
-            ReferenceFirstPass = true,
-            CandidateFirstPass = true,
+            ReferenceVerifiedCodeChange = referenceVerified,
+            CandidateVerifiedCodeChange = candidateVerified,
+            VerifiedCodeChangeDelta = (candidateVerified ? 1 : 0) -
+                (referenceVerified ? 1 : 0),
+            ReferenceFirstPass = referenceVerified,
+            CandidateFirstPass = candidateVerified,
+            FirstPassDelta = (candidateVerified ? 1 : 0) - (referenceVerified ? 1 : 0),
             ReferenceTotalTokens = 1100,
             CandidateTotalTokens = 800,
             TotalTokenDelta = -300,

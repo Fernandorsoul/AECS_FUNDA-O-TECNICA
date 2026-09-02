@@ -11,6 +11,11 @@ provider. A estratégia vigente é `graph-ranked-token-budget/v2`, que não proj
 estruturais de namespace como dependências entre arquivos. Os datasets e resultados v1 publicados
 em 2026-09-02 são históricos e possuem errata vinculada à issue #80.
 
+Eles também preservam a política histórica conservadora para baseline com zero VCC: a melhora
+relativa fica indefinida e H1 termina `Adjust`. Novos corpora, inclusive a futura expansão para 50
+tarefas, devem usar `aecs.experiment-dataset/v4` e pré-registrar `zeroReferencePolicy` antes de
+qualquer chamada ao provider. Consulte a documentação do harness para as regras válidas.
+
 O diretório `repository` é um template versionado. Copie todo o experimento para fora deste
 checkout, inicialize somente o repositório do dataset e mantenha os artefatos fora dele:
 
