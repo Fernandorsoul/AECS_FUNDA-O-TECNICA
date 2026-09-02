@@ -60,8 +60,9 @@ public sealed class AdaptiveOfflinePreflight
             throw new InvalidOperationException(
                 "Adaptive offline task ID does not match its TaskContract.");
         }
+        ValidateTaskEnvironment(dataset, definition, contract);
 
-        var repositoryPath = Path.GetFullPath(dataset.RepositoryPath);
+        var repositoryPath = Path.GetFullPath(dataset.RepositoryPathFor(definition));
         _evidenceStore.EnsureRepositoryIsolation(repositoryPath);
         var scope = new EvidenceReadScope
         {
@@ -150,7 +151,7 @@ public sealed class AdaptiveOfflinePreflight
             shadow.Recommendation.GeneratedAt > evidence.CreatedAt ||
             definition.HistoryCutoffUtc > shadow.Recommendation.GeneratedAt ||
             !evidence.Baseline.Commit.Equals(
-                dataset.Manifest.Repository.Baseline,
+                dataset.ExpectedBaseline(definition),
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -169,6 +170,27 @@ public sealed class AdaptiveOfflinePreflight
         {
             throw new InvalidOperationException(
                 "Shadow recommendation inputs or authenticated source IDs do not match the evaluated task.");
+        }
+    }
+
+    private static void ValidateTaskEnvironment(
+        LoadedAdaptiveOfflineDataset dataset,
+        AdaptiveOfflineTaskDefinition definition,
+        TaskContract contract)
+    {
+        if (!dataset.IsMultiBaseline)
+            return;
+        var oracle = definition.Oracle!;
+        if (contract.Execution.EffectiveRuntime != RepositoryExecutionProfile.DockerRuntime ||
+            contract.Execution.Sandbox is null ||
+            !contract.Execution.Sandbox.Image.Equals(
+                oracle.ContainerImage,
+                StringComparison.Ordinal) ||
+            oracle.AllowedPaths.Any(pattern =>
+                !contract.Scope.Forbidden.Contains(pattern, StringComparer.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "Adaptive offline v2 tasks must pin the oracle image and forbid its test-only scope.");
         }
     }
 

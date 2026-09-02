@@ -11,9 +11,11 @@ namespace AECS.Application.AdaptiveController;
 public static class AdaptiveOfflineSchema
 {
     public const string DatasetVersion = "aecs.adaptive-offline-dataset/v1";
+    public const string MultiBaselineDatasetVersion = "aecs.adaptive-offline-dataset/v2";
     public const string SessionVersion = "aecs.adaptive-offline-session/v1";
     public const string CheckpointVersion = "aecs.adaptive-offline-checkpoint/v1";
     public const string ReportVersion = "aecs.adaptive-offline-report/v1";
+    public const string MultiBaselineReportVersion = "aecs.adaptive-offline-report/v2";
     public const string Design = "paired-adaptive-routing";
     public const string HypothesisId = "H2";
     public const string PrimaryMetric = "vcc-per-effective-cost";
@@ -35,8 +37,10 @@ public sealed class AdaptiveOfflineDatasetManifest
     public string Version { get; init; } = string.Empty;
     [JsonRequired]
     public DateTime PreregisteredAtUtc { get; init; }
-    [JsonRequired]
-    public AdaptiveOfflineRepositoryDefinition Repository { get; init; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AdaptiveOfflineRepositoryDefinition? Repository { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AdaptiveOfflineRepositoryCatalogEntry>? Repositories { get; init; }
     [JsonRequired]
     public AdaptiveOfflineProviderDefinition Provider { get; init; } = new();
     [JsonRequired]
@@ -59,6 +63,41 @@ public sealed class AdaptiveOfflineRepositoryDefinition
     public string LicenseSpdx { get; init; } = string.Empty;
     [JsonRequired]
     public bool RedistributionAllowed { get; init; }
+}
+
+public sealed class AdaptiveOfflineRepositoryCatalogEntry
+{
+    [JsonRequired]
+    public string Id { get; init; } = string.Empty;
+    [JsonRequired]
+    public string Path { get; init; } = string.Empty;
+    [JsonRequired]
+    public string SourceUri { get; init; } = string.Empty;
+    [JsonRequired]
+    public string LicenseSpdx { get; init; } = string.Empty;
+    [JsonRequired]
+    public bool RedistributionAllowed { get; init; }
+}
+
+public enum AdaptiveOfflineOracleKind
+{
+    PrecommittedTestPatch
+}
+
+public sealed class AdaptiveOfflineTaskOracle
+{
+    [JsonRequired]
+    public AdaptiveOfflineOracleKind Kind { get; init; }
+    [JsonRequired]
+    public string DiffHash { get; init; } = string.Empty;
+    [JsonRequired]
+    public List<string> AllowedPaths { get; init; } = [];
+    [JsonRequired]
+    public string ContainerImage { get; init; } = string.Empty;
+    [JsonRequired]
+    public List<string> FailToPass { get; init; } = [];
+    [JsonRequired]
+    public List<string> PassToPass { get; init; } = [];
 }
 
 public sealed class AdaptiveOfflineProviderDefinition
@@ -122,17 +161,44 @@ public sealed class AdaptiveOfflineTaskDefinition
     public Guid RecommendationEvidenceId { get; init; }
     [JsonRequired]
     public string RecommendationEvidenceHash { get; init; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContractHash { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RepositoryId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UpstreamCommit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BaselineCommit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AdaptiveOfflineTaskOracle? Oracle { get; init; }
 }
 
 public sealed class LoadedAdaptiveOfflineDataset
 {
     public string ManifestPath { get; init; } = string.Empty;
+    public string ManifestDirectory { get; init; } = string.Empty;
     public string RepositoryPath { get; init; } = string.Empty;
+    public Dictionary<string, string> RepositoryPaths { get; init; } =
+        new(StringComparer.Ordinal);
     public AdaptiveOfflineDatasetManifest Manifest { get; init; } = new();
+
+    public bool IsMultiBaseline =>
+        Manifest.SchemaVersion == AdaptiveOfflineSchema.MultiBaselineDatasetVersion;
+
+    public string RepositoryPathFor(AdaptiveOfflineTaskDefinition task) => IsMultiBaseline
+        ? RepositoryPaths.TryGetValue(task.RepositoryId!, out var repositoryPath)
+            ? repositoryPath
+            : throw new InvalidOperationException(
+                $"Adaptive offline repository '{task.RepositoryId}' was not resolved.")
+        : RepositoryPath;
+
+    public string ExpectedBaseline(AdaptiveOfflineTaskDefinition task) => IsMultiBaseline
+        ? task.BaselineCommit!
+        : Manifest.Repository!.Baseline;
 
     public string ContractPath(AdaptiveOfflineTaskDefinition task) => Path.GetFullPath(
         Path.Combine(
-            RepositoryPath,
+            IsMultiBaseline ? ManifestDirectory : RepositoryPath,
             task.ContractPath.Replace('/', Path.DirectorySeparatorChar)));
 }
 
@@ -158,20 +224,43 @@ public static class AdaptiveOfflineDatasetLoader
         AdaptiveOfflineDatasetContract.Validate(manifest);
 
         var manifestDirectory = Path.GetDirectoryName(fullManifestPath)!;
-        var repositoryPath = ResolveWithin(
-            manifestDirectory,
-            manifest.Repository.Path,
-            "adaptive offline repository");
-        if (!Directory.Exists(repositoryPath))
+        var multiBaseline = manifest.SchemaVersion ==
+            AdaptiveOfflineSchema.MultiBaselineDatasetVersion;
+        var repositoryPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+        var repositoryPath = string.Empty;
+        if (multiBaseline)
         {
-            throw new DirectoryNotFoundException(
-                $"Adaptive offline repository was not found: {repositoryPath}");
+            foreach (var repository in manifest.Repositories!)
+            {
+                var resolved = ResolveWithin(
+                    manifestDirectory,
+                    repository.Path,
+                    $"adaptive offline repository '{repository.Id}'");
+                if (!Directory.Exists(resolved))
+                {
+                    throw new DirectoryNotFoundException(
+                        $"Adaptive offline repository '{repository.Id}' was not found: {resolved}");
+                }
+                repositoryPaths.Add(repository.Id, resolved);
+            }
+        }
+        else
+        {
+            repositoryPath = ResolveWithin(
+                manifestDirectory,
+                manifest.Repository!.Path,
+                "adaptive offline repository");
+            if (!Directory.Exists(repositoryPath))
+            {
+                throw new DirectoryNotFoundException(
+                    $"Adaptive offline repository was not found: {repositoryPath}");
+            }
         }
 
         foreach (var task in manifest.Tasks)
         {
             var contractPath = ResolveWithin(
-                repositoryPath,
+                multiBaseline ? manifestDirectory : repositoryPath,
                 task.ContractPath,
                 "adaptive offline task contract");
             if (!File.Exists(contractPath))
@@ -180,12 +269,21 @@ public static class AdaptiveOfflineDatasetLoader
                     "Adaptive offline task contract was not found.",
                     contractPath);
             }
+            if (multiBaseline && !AdaptiveOfflineDatasetFingerprint.FileHash(contractPath).Equals(
+                    task.ContractHash,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Adaptive offline task contract '{task.Id}' does not match its preregistered hash.");
+            }
         }
 
         return new LoadedAdaptiveOfflineDataset
         {
             ManifestPath = fullManifestPath,
+            ManifestDirectory = manifestDirectory,
             RepositoryPath = repositoryPath,
+            RepositoryPaths = repositoryPaths,
             Manifest = manifest
         };
     }
@@ -252,24 +350,34 @@ public static class AdaptiveOfflineDatasetContract
     public static void Validate(AdaptiveOfflineDatasetManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        if (manifest.SchemaVersion != AdaptiveOfflineSchema.DatasetVersion ||
+        var isVersionOne = manifest.SchemaVersion == AdaptiveOfflineSchema.DatasetVersion;
+        var isVersionTwo = manifest.SchemaVersion ==
+            AdaptiveOfflineSchema.MultiBaselineDatasetVersion;
+        if ((!isVersionOne && !isVersionTwo) ||
             !ValidId(manifest.Id) ||
             string.IsNullOrWhiteSpace(manifest.Version) || manifest.Version.Length > 100 ||
             !IsUtc(manifest.PreregisteredAtUtc) ||
-            InvalidRepository(manifest.Repository) ||
+            isVersionOne && (manifest.Repositories is not null ||
+                InvalidRepository(manifest.Repository)) ||
+            isVersionTwo && (manifest.Repository is not null ||
+                InvalidRepositoryCatalog(manifest.Repositories)) ||
             InvalidProvider(manifest.Provider) ||
             manifest.Repetitions is < 1 or > 20 ||
             InvalidProtocol(manifest.Protocol) ||
             manifest.Tasks is null ||
             manifest.Tasks.Count < manifest.Protocol.MinimumDistinctTasks ||
             manifest.Tasks.Count > 500 ||
-            manifest.Tasks.Any(task => InvalidTask(task, manifest.PreregisteredAtUtc)) ||
+            manifest.Tasks.Any(task => InvalidTask(
+                task,
+                manifest.PreregisteredAtUtc,
+                isVersionTwo)) ||
             manifest.Tasks.Select(task => task.Id)
                 .Distinct(StringComparer.Ordinal).Count() != manifest.Tasks.Count ||
             manifest.Tasks.Select(task => task.ContractPath)
                 .Distinct(StringComparer.Ordinal).Count() != manifest.Tasks.Count ||
             manifest.Tasks.Select(task => task.RecommendationEvidenceId)
-                .Distinct().Count() != manifest.Tasks.Count)
+                .Distinct().Count() != manifest.Tasks.Count ||
+            isVersionTwo && InvalidTaskRepositories(manifest))
         {
             throw new InvalidOperationException(
                 "Adaptive offline dataset is incomplete, unsafe, or uses an unsupported schema.");
@@ -279,21 +387,71 @@ public static class AdaptiveOfflineDatasetContract
     public static bool BaselineMatches(string expected, string actual) =>
         actual.Equals(expected, StringComparison.OrdinalIgnoreCase);
 
-    private static bool InvalidRepository(AdaptiveOfflineRepositoryDefinition repository)
+    private static bool InvalidRepository(AdaptiveOfflineRepositoryDefinition? repository)
     {
         if (repository is null ||
             !SafeRelativePath(repository.Path, allowCurrentDirectory: true) ||
             !IsGitCommit(repository.Baseline) ||
-            !Uri.TryCreate(repository.SourceUri, UriKind.Absolute, out var sourceUri) ||
-            sourceUri.Scheme is not ("https" or "http") ||
-            string.IsNullOrWhiteSpace(repository.LicenseSpdx) ||
-            repository.LicenseSpdx.Length > 100 ||
-            repository.LicenseSpdx.Any(character =>
-                !char.IsLetterOrDigit(character) && character is not ('.' or '-' or '+')))
+            InvalidRepositoryIdentity(
+                repository.SourceUri,
+                repository.LicenseSpdx,
+                repository.RedistributionAllowed))
         {
             return true;
         }
-        return !repository.RedistributionAllowed;
+        return false;
+    }
+
+    private static bool InvalidRepositoryCatalog(
+        List<AdaptiveOfflineRepositoryCatalogEntry>? repositories) =>
+        repositories is null || repositories.Count is < 1 or > 500 ||
+        repositories.Any(repository => repository is null ||
+            !ValidId(repository.Id) ||
+            !SafeRelativePath(repository.Path, allowCurrentDirectory: true) ||
+            InvalidRepositoryIdentity(
+                repository.SourceUri,
+                repository.LicenseSpdx,
+                repository.RedistributionAllowed)) ||
+        repositories.Select(repository => repository.Id)
+            .Distinct(StringComparer.Ordinal).Count() != repositories.Count ||
+        repositories.Select(repository => repository.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count() != repositories.Count;
+
+    private static bool InvalidRepositoryIdentity(
+        string sourceUri,
+        string licenseSpdx,
+        bool redistributionAllowed) =>
+        !Uri.TryCreate(sourceUri, UriKind.Absolute, out var source) ||
+        source.Scheme is not ("https" or "http") ||
+        !string.IsNullOrEmpty(source.UserInfo) ||
+        !string.IsNullOrEmpty(source.Query) ||
+        !string.IsNullOrEmpty(source.Fragment) ||
+        string.IsNullOrWhiteSpace(licenseSpdx) ||
+        licenseSpdx.Length > 100 ||
+        licenseSpdx.Any(character =>
+            !char.IsLetterOrDigit(character) && character is not ('.' or '-' or '+')) ||
+        !redistributionAllowed;
+
+    private static bool InvalidTaskRepositories(AdaptiveOfflineDatasetManifest manifest)
+    {
+        var repositoryIds = manifest.Repositories!
+            .Select(repository => repository.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var usedRepositoryIds = manifest.Tasks
+            .Select(task => task.RepositoryId!)
+            .ToHashSet(StringComparer.Ordinal);
+        return !usedRepositoryIds.SetEquals(repositoryIds) ||
+            manifest.Tasks.Any(task => !repositoryIds.Contains(task.RepositoryId!)) ||
+            manifest.Tasks.GroupBy(task => task.RepositoryId, StringComparer.Ordinal)
+                .Any(group =>
+                    group.Select(task => task.UpstreamCommit)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1 ||
+                    group.Select(task => task.BaselineCommit)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1 ||
+                    group.Select(task => task.Oracle!.DiffHash)
+                        .Distinct(StringComparer.Ordinal).Count() != 1 ||
+                    group.Select(task => task.Oracle!.ContainerImage)
+                        .Distinct(StringComparer.Ordinal).Count() != 1);
     }
 
     private static bool InvalidProvider(AdaptiveOfflineProviderDefinition provider)
@@ -342,14 +500,60 @@ public static class AdaptiveOfflineDatasetContract
 
     private static bool InvalidTask(
         AdaptiveOfflineTaskDefinition task,
-        DateTime preregisteredAtUtc) =>
+        DateTime preregisteredAtUtc,
+        bool multiBaseline) =>
         task is null || !ValidId(task.Id) || !SafeRelativePath(task.ContractPath) ||
         !Enum.IsDefined(task.ExpectedDecision) ||
         task.Seed is < 0 or > int.MaxValue - 20 ||
         !IsUtc(task.HistoryCutoffUtc) ||
         task.HistoryCutoffUtc > preregisteredAtUtc ||
         task.RecommendationEvidenceId == Guid.Empty ||
-        !IsSha256(task.RecommendationEvidenceHash);
+        !IsSha256(task.RecommendationEvidenceHash) ||
+        multiBaseline && (!IsSha256(task.ContractHash!) ||
+            !ValidId(task.RepositoryId!) ||
+            !IsGitCommit(task.UpstreamCommit!) ||
+            !IsGitCommit(task.BaselineCommit!) ||
+            task.UpstreamCommit!.Equals(
+                task.BaselineCommit,
+                StringComparison.OrdinalIgnoreCase) ||
+            InvalidOracle(task.Oracle)) ||
+        !multiBaseline && (task.ContractHash is not null ||
+            task.RepositoryId is not null ||
+            task.UpstreamCommit is not null ||
+            task.BaselineCommit is not null ||
+            task.Oracle is not null);
+
+    private static bool InvalidOracle(AdaptiveOfflineTaskOracle? oracle)
+    {
+        if (oracle is null || !Enum.IsDefined(oracle.Kind) ||
+            !IsSha256(oracle.DiffHash) ||
+            oracle.AllowedPaths is null || oracle.AllowedPaths.Count is < 1 or > 100 ||
+            oracle.AllowedPaths.Any(pattern => !SafePattern(pattern)) ||
+            oracle.AllowedPaths.Distinct(StringComparer.Ordinal).Count() !=
+                oracle.AllowedPaths.Count ||
+            !ValidContainerImage(oracle.ContainerImage) ||
+            oracle.FailToPass is null || oracle.FailToPass.Count is < 1 or > 500 ||
+            oracle.PassToPass is null || oracle.PassToPass.Count > 1000 ||
+            InvalidTestNames(oracle.FailToPass) || InvalidTestNames(oracle.PassToPass))
+        {
+            return true;
+        }
+        return oracle.FailToPass.Intersect(oracle.PassToPass, StringComparer.Ordinal).Any();
+    }
+
+    private static bool InvalidTestNames(List<string> names) =>
+        names.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 500 ||
+            name.Any(char.IsControl)) ||
+        names.Distinct(StringComparer.Ordinal).Count() != names.Count;
+
+    private static bool ValidContainerImage(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 500 ||
+            value.Any(character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            return false;
+        var separator = value.LastIndexOf('@');
+        return separator > 0 && IsSha256(value[(separator + 1)..]);
+    }
 
     private static bool InvalidParameterValue(KeyValuePair<string, string> parameter) =>
         parameter.Key switch
@@ -404,15 +608,33 @@ public static class AdaptiveOfflineDatasetContract
             return true;
         return value.Split('/').All(segment => segment is not ("" or "." or ".."));
     }
+
+    private static bool SafePattern(string value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 500 &&
+        !Path.IsPathRooted(value) && !value.Contains('\\') && !value.StartsWith('/') &&
+        !value.Any(char.IsControl) &&
+        value.Split('/').All(segment => segment is not ("" or "." or ".."));
 }
 
 public static class AdaptiveOfflineDatasetFingerprint
 {
+    public static string FileHash(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return "sha256:" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
+            .ToLowerInvariant();
+    }
+
     public static string Create(AdaptiveOfflineDatasetManifest manifest, string baselineCommit)
     {
         AdaptiveOfflineDatasetContract.Validate(manifest);
+        if (manifest.SchemaVersion != AdaptiveOfflineSchema.DatasetVersion)
+        {
+            throw new InvalidOperationException(
+                "A runtime baseline is valid only for adaptive offline dataset v1.");
+        }
         if (!AdaptiveOfflineDatasetContract.BaselineMatches(
-                manifest.Repository.Baseline,
+                manifest.Repository!.Baseline,
                 baselineCommit))
         {
             throw new InvalidOperationException(
@@ -423,6 +645,19 @@ public static class AdaptiveOfflineDatasetFingerprint
             manifest,
             AdaptiveOfflineDatasetLoader.SerializerOptions);
         return Hash(json + "\nresolved-baseline:" + baselineCommit.ToLowerInvariant());
+    }
+
+    public static string Create(AdaptiveOfflineDatasetManifest manifest)
+    {
+        AdaptiveOfflineDatasetContract.Validate(manifest);
+        if (manifest.SchemaVersion != AdaptiveOfflineSchema.MultiBaselineDatasetVersion)
+        {
+            throw new InvalidOperationException(
+                "Manifest-only fingerprinting requires adaptive offline dataset v2.");
+        }
+        return Hash(JsonSerializer.Serialize(
+            manifest,
+            AdaptiveOfflineDatasetLoader.SerializerOptions));
     }
 
     public static string PairKey(

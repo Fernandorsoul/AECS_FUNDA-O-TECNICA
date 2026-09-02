@@ -984,9 +984,6 @@ static async Task<int> RunAdaptiveExperiment(string[] args)
     {
         var dataset = AdaptiveOfflineDatasetLoader.Load(datasetPath);
         var processRunner = new SystemProcessRunner();
-        var baseline = await new GitWorkspaceManager(processRunner).CaptureBaselineAsync(
-            dataset.RepositoryPath,
-            CancellationToken.None);
         var artifacts = new AdaptiveOfflineArtifactStore(outputDirectory);
         using var experimentHttpClient = new HttpClient();
         var preflight = new AdaptiveOfflinePreflight(runtime.EvidenceStore, graphSource);
@@ -1040,13 +1037,31 @@ static async Task<int> RunAdaptiveExperiment(string[] args)
                     request.Contract,
                     cancellationToken);
             });
-        var runner = new AdaptiveOfflineRunner(preflight, executor);
-        var report = await runner.RunAsync(
-            dataset,
-            baseline.Commit,
-            artifacts,
-            resume,
-            CancellationToken.None);
+        var runner = new AdaptiveOfflineRunner(
+            preflight,
+            executor,
+            new AdaptiveOfflineTaskBaselineVerifier(processRunner));
+        AdaptiveOfflineReport report;
+        if (dataset.IsMultiBaseline)
+        {
+            report = await runner.RunAsync(
+                dataset,
+                artifacts,
+                resume,
+                CancellationToken.None);
+        }
+        else
+        {
+            var baseline = await new GitWorkspaceManager(processRunner).CaptureBaselineAsync(
+                dataset.RepositoryPath,
+                CancellationToken.None);
+            report = await runner.RunAsync(
+                dataset,
+                baseline.Commit,
+                artifacts,
+                resume,
+                CancellationToken.None);
+        }
         Console.WriteLine("AECS ADAPTIVE OFFLINE REPORT");
         Console.WriteLine($"Dataset: {report.DatasetId} v{report.DatasetVersion}");
         Console.WriteLine($"Pairs: {report.Analysis.CompletedPairs}/{report.Analysis.PlannedPairs}");

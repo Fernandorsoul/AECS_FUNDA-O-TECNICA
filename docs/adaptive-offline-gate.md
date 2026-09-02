@@ -137,3 +137,10 @@ Enquanto `AdaptiveShadowPlan` não carregar identidade própria de provider, cad
 único provider para os dois braços. O gate não autoriza troca de provider em produção.
 
 Consulte a [ADR-023](adr/ADR-023-paired-adaptive-offline-gate.md) para a decisão e seus trade-offs.
+
+Para tarefas históricas com commits e oráculos diferentes, use
+`aecs.adaptive-offline-dataset/v2`. O v2 mantém um checkout externo estável por baseline, valida
+origem, licença, parent direto, diff test-only e imagem Docker por digest, e publica provenance por
+par em `aecs.adaptive-offline-report/v2`. O procedimento está em
+[Adaptação de corpus real](adaptive-real-corpus.md) e na
+[ADR-024](adr/ADR-024-multi-baseline-real-corpus.md).
