@@ -4,6 +4,12 @@
 **Status:** Tese consolidada / pronto para iniciar prototipação  
 **Objetivo:** servir como documento-base para implementação do primeiro protótipo do AECS.
 
+> **Vigência:** este é um registro fundacional v0.1, não um inventário do código atual. Em
+> particular, a menção a .NET 10 registra a direção originalmente pretendida. A implementação
+> vigente usa projetos `net8.0` e SDK/sandbox .NET 9; consulte a
+> [matriz de suporte .NET](docs/dotnet-support.md) e o
+> [ADR-020](docs/adr/ADR-020-dotnet-support-matrix.md).
+
 ---
 
 # 1. Visão
