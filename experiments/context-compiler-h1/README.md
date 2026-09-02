@@ -58,3 +58,21 @@ coleta até que sua causa seja corrigida.
 A estimativa de custo usa `aecs.local-compute-cost/v1`: 200 W, USD 0,20/kWh, hardware de USD 600
 e vida útil de 10.000 horas. São hipóteses reproduzíveis do adapter, não medição elétrica nem
 fatura. CPU, memória e GPU observáveis devem ser registrados separadamente durante a execução.
+
+O executor abaixo cria um repositório isolado e novo, mantém output, evidências e chaves fora do
+checkout, coleta telemetria do host e valida as contagens e a janela efetivamente carregada pelo
+Ollama. O destino deve ser um caminho inexistente:
+
+```powershell
+./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
+  -Mode pilot `
+  -ArtifactRoot "$env:LOCALAPPDATA/Temp/aecs-h1-local-pilot"
+
+./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
+  -Mode full `
+  -ArtifactRoot "$env:LOCALAPPDATA/Temp/aecs-h1-local-full"
+```
+
+Uma conclusão experimental rejeitada faz a CLI retornar código 1 mesmo quando toda a amostra foi
+coletada corretamente. O executor distingue esse resultado de falha operacional confrontando o
+código com `report.succeeded` e exigindo todos os runs e todas as evidências esperadas.
