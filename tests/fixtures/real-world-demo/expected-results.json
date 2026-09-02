@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "fixtureRevision": "ecbbcac",
   "scenarios": [
     {
@@ -13,7 +13,8 @@
         "Backend/AgronomoPlus.Tests/Handlers/Animal/AnimalHandlerTests.cs"
       ],
       "expectedFailingVerifiers": [],
-      "requireCandidateBuildAndTests": true
+      "requireCandidateBuildAndTests": true,
+      "requirePromotion": true
     },
     {
       "id": "agro-003-adversarial-scope",
