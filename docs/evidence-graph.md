@@ -35,6 +35,8 @@ dot -Tsvg graph.dot -o graph.svg
 
 Cada nó informa ID estável, tipo, origem, autoridade, timestamp, hashes, atributos e estado de validade. Arestas também têm ID estável, origem e autoridade. A projeção inclui repositório, tarefa, execução, run, tentativas, baseline, `RepositorySnapshot`, `CSharpSymbolGraph`, contexto, candidato, comandos, verificações, critérios de aceite, decisão, replays e promoções. Eventos posteriores preservam a ordem global assinada por arestas `authenticated-next`.
 
+O nó de tarefa expõe `schemaVersion`, compatibilidade e `contractSha256` para contratos `aecs.task-contract/v1`. Evidências históricas autenticadas sem os dois campos são identificadas como `aecs.task-contract/legacy-v0` e não recebem hash retroativo.
+
 O nó `RepositorySnapshot` expõe hashes do inventário e da configuração, commit-base e contagens agregadas, sem conteúdo de arquivos. Ele recebe `configures-snapshot` da tarefa e `described-by` da baseline; a execução aponta com `records-snapshot`, e o snapshot informa o contexto por `informs-context`.
 
 O nó `CSharpSymbolGraph` expõe hash do grafo, vínculo ao snapshot e commit, versões de Roslyn/MSBuild/SDK, status de carga e contagens. O snapshot aponta com `derives-symbol-graph`, a baseline com `analyzed-by` e a execução com `records-symbol-graph`. Ele só informa o contexto quando `ContextManifest.SymbolGraphHash` coincide exatamente, sem inferência por proximidade.

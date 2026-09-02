@@ -21,6 +21,7 @@ public class TaskContractParserTests
         string expectedMessage)
     {
         var yaml = $"""
+            schema_version: aecs.task-contract/v1
             task:
               id: INVALID-BUDGET
               objective: Reject invalid limits
@@ -38,6 +39,7 @@ public class TaskContractParserTests
     public void Parse_ValidYaml_ReturnsTaskContract()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-001
               objective: Fix null handling
@@ -85,12 +87,16 @@ public class TaskContractParserTests
         result.Verification.UnitTests.Should().BeTrue();
         result.Approval.Production.Should().Be(ApprovalLevel.None);
         result.Status.Should().Be(TaskState.ContractReady);
+        result.SchemaVersion.Should().Be(TaskContractSchema.CurrentVersion);
+        result.ContractFingerprint.Should().MatchRegex("^sha256:[a-f0-9]{64}$");
+        TaskContractIntegrity.ValidateForEvidence(result);
     }
 
     [Fact]
     public void Parse_AcceptanceEvidence_MapsTestsVerifiersAndSemanticPolicy()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-ACCEPTANCE
               objective: Prevent null names
@@ -134,6 +140,7 @@ public class TaskContractParserTests
     public void Parse_UnboundAcceptanceEvidence_RejectsAmbiguousContract()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-INVALID
               objective: Invalid mapping
@@ -155,6 +162,7 @@ public class TaskContractParserTests
     public void Parse_MinimalYaml_UsesDefaults()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-MINIMAL
               objective: Simple change
@@ -187,6 +195,7 @@ public class TaskContractParserTests
     public void Parse_HumanApproval_SetsCorrectLevel()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-HUMAN
               objective: Critical change
@@ -203,6 +212,7 @@ public class TaskContractParserTests
     public void Parse_ExecutionProfile_MapsNestedSolution()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-NESTED
               objective: Verify a nested solution
@@ -222,6 +232,7 @@ public class TaskContractParserTests
     public void Parse_WithoutExecutionProfile_UsesRepositoryRootDefaults()
     {
         var yaml = """
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-DEFAULT
               objective: Use default execution profile
@@ -238,6 +249,7 @@ public class TaskContractParserTests
     public void Parse_ExplicitHostRuntime_MarksDevelopmentModeWithoutSandbox()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-HOST
               objective: Local development
@@ -262,6 +274,7 @@ public class TaskContractParserTests
         string expectedMessage)
     {
         var yaml = $"""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-BAD-SANDBOX
               objective: Reject weak isolation
@@ -281,6 +294,7 @@ public class TaskContractParserTests
     public void Parse_VersionedCapabilities_MapsEveryLeastPrivilegeDimension()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-CAPABILITIES
               objective: Run one authenticated build
@@ -344,6 +358,7 @@ public class TaskContractParserTests
     {
         var indented = fragment.Replace("\n", "\n    ");
         var yaml = $"""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-BAD-CAP
               objective: Reject invalid capabilities
@@ -360,6 +375,7 @@ public class TaskContractParserTests
     public void Parse_SandboxResourcesAboveCapabilityMaximum_FailsClosed()
     {
         var action = () => _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-RESOURCE-EXPANSION
               objective: Reject resource expansion
@@ -381,6 +397,7 @@ public class TaskContractParserTests
     public void Parse_MissingProcessCapabilityRequiredByGate_FailsBeforeExecution()
     {
         var action = () => _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-MISSING-PROCESS
               objective: Reject a policy that cannot execute the required test gate
@@ -407,6 +424,7 @@ public class TaskContractParserTests
     public void Parse_RequiredSecurityScan_MapsVersionedPolicyAndSuppression()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-SECURITY-SCAN
               objective: Apply a deterministic security gate
@@ -451,6 +469,7 @@ public class TaskContractParserTests
     {
         var indented = fragment.Replace("\n", "\n        ");
         var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-BAD-SECURITY-POLICY
               objective: Reject an invalid security scan policy
@@ -467,6 +486,7 @@ public class TaskContractParserTests
     public void Parse_SecurityScanWithoutDotNetListCapability_FailsPreflight()
     {
         var action = () => _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-MISSING-SCAN-CAPABILITY
               objective: Reject missing scanner capability
@@ -498,6 +518,7 @@ public class TaskContractParserTests
     public void Parse_SecurityScanWithoutDependencyScanner_DoesNotRequireDotNetListCapability()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-SECRET-SCAN-ONLY
               objective: Run only the built-in secret scanner
@@ -532,6 +553,7 @@ public class TaskContractParserTests
     public void Parse_VersionedTestSuites_MapsIndependentModesTargetsAndTimeouts()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-INDEPENDENT-TESTS
               objective: Run separate test projects
@@ -585,6 +607,7 @@ public class TaskContractParserTests
     {
         var indented = fragment.Replace("\n", "\n        ");
         var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-BAD-TEST-SUITE
               objective: Reject an invalid test suite profile
@@ -601,6 +624,7 @@ public class TaskContractParserTests
     public void Parse_TestBasedAcceptanceWithDisabledAcceptanceSuite_FailsClosed()
     {
         var action = () => _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-DISABLED-ACCEPTANCE-SUITE
               objective: Reject acceptance evidence without an executable suite
@@ -629,6 +653,7 @@ public class TaskContractParserTests
     public void Parse_LegacyTestFields_PreserveAggregateTestsCompatibility()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-LEGACY-TESTS
               objective: Preserve the aggregate gate
@@ -646,6 +671,7 @@ public class TaskContractParserTests
     public void Parse_RepositorySnapshotProfile_MapsVersionAndSafeExclusions()
     {
         var result = _parser.Parse("""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-REPOSITORY-SNAPSHOT
               objective: Configure deterministic repository discovery
@@ -674,6 +700,7 @@ public class TaskContractParserTests
         string expected)
     {
         var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
             task:
               id: TASK-BAD-REPOSITORY-SNAPSHOT
               objective: Reject unsafe snapshot configuration
@@ -683,6 +710,216 @@ public class TaskContractParserTests
             """);
 
         action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Theory]
+    [InlineData("", "must declare schema_version")]
+    [InlineData("schema_version: aecs.task-contract/v2\n", "Unsupported TaskContract schema_version")]
+    public void Parse_MissingOrUnsupportedSchema_FailsClosed(
+        string schema,
+        string expected)
+    {
+        var action = () => _parser.Parse($"""
+            {schema}task:
+              id: TASK-SCHEMA
+              objective: Validate the contract schema
+            """);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Theory]
+    [InlineData("task.budegt", "budegt: {}")]
+    [InlineData("task.budget.toknes", "budget:\n    toknes: 100")]
+    [InlineData("task.execution.sandbox.memroy_limit", "execution:\n    sandbox:\n      memroy_limit: 512m")]
+    public void Parse_UnknownProperties_ReportTheirFullPath(
+        string expectedPath,
+        string fragment)
+    {
+        var indented = fragment.Replace("\n", "\n  ");
+        var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
+            task:
+              id: TASK-TYPO
+              objective: Reject misspelled policy fields
+              {indented}
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*$.{expectedPath}*");
+    }
+
+    [Fact]
+    public void Parse_ConflictingAliases_FailsClosed()
+    {
+        var action = () => _parser.Parse("""
+            schema_version: aecs.task-contract/v1
+            SchemaVersion: aecs.task-contract/v1
+            task:
+              id: TASK-ALIASES
+              objective: Reject conflicting aliases
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*conflicting aliases*");
+    }
+
+    [Theory]
+    [InlineData("id", "")]
+    [InlineData("objective", "")]
+    public void Parse_EmptyRequiredText_FailsClosed(string field, string value)
+    {
+        var id = field == "id" ? value : "TASK-REQUIRED";
+        var objective = field == "objective" ? value : "Validate required values";
+        var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
+            task:
+              id: {id}
+              objective: {objective}
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*task.{field} is required*");
+    }
+
+    [Theory]
+    [InlineData("id", TaskContractIntegrity.MaximumIdLength + 1)]
+    [InlineData("objective", TaskContractIntegrity.MaximumObjectiveLength + 1)]
+    public void Parse_RequiredTextAboveLimit_FailsClosed(string field, int length)
+    {
+        var id = field == "id" ? new string('I', length) : "TASK-BOUNDS";
+        var objective = field == "objective"
+            ? new string('O', length)
+            : "Validate required value limits";
+        var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
+            task:
+              id: {id}
+              objective: {objective}
+            """);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*task.{field} cannot exceed*");
+    }
+
+    [Theory]
+    [InlineData("r0", RiskLevel.R0)]
+    [InlineData("low", RiskLevel.R1)]
+    [InlineData("r1", RiskLevel.R1)]
+    [InlineData("medium", RiskLevel.R2)]
+    [InlineData("r2", RiskLevel.R2)]
+    [InlineData("high", RiskLevel.R3)]
+    [InlineData("r3", RiskLevel.R3)]
+    [InlineData("r4", RiskLevel.R4)]
+    public void Parse_DeclaredRisk_IsMappedExactly(string value, RiskLevel expected)
+    {
+        var result = _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
+            task:
+              id: TASK-RISK
+              objective: Preserve explicitly declared risk
+              constraints:
+                security_risk: {value}
+            """);
+
+        result.Constraints.SecurityRisk.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("constraints:\n    security_risk: r5", "constraints.security_risk")]
+    [InlineData("verification:\n    build: sometimes", "verification mode")]
+    [InlineData("approval:\n    production: automatic", "approval.production")]
+    public void Parse_UnknownPolicyValues_FailClosed(string fragment, string expected)
+    {
+        var indented = fragment.Replace("\n", "\n  ");
+        var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
+            task:
+              id: TASK-POLICY
+              objective: Reject unknown policy values
+              {indented}
+            """);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Theory]
+    [InlineData("execution:\n    runtime: future", "execution.runtime")]
+    [InlineData("capabilities:\n    file_system:\n      read: [\"**\"]\n    processes:\n      - executable: git\n        argument_prefix: [\"--version\"]\n        phases: [\"future.phase\"]", "unknown phase")]
+    [InlineData("acceptance:\n  - It works\nacceptance_evidence:\n  - id: AC-001\n    type: future", "acceptance evidence type")]
+    public void Parse_UnknownEnumeratedValues_FailClosed(string fragment, string expected)
+    {
+        var indented = fragment.Replace("\n", "\n  ");
+        var action = () => _parser.Parse($"""
+            schema_version: aecs.task-contract/v1
+            task:
+              id: TASK-FUTURE-VALUE
+              objective: Reject values outside closed enumerations
+              {indented}
+            """);
+
+        action.Should().Throw<InvalidOperationException>().WithMessage($"*{expected}*");
+    }
+
+    [Fact]
+    public void Parse_SameSemanticContract_ProducesStableFingerprint()
+    {
+        const string yaml = """
+            schema_version: aecs.task-contract/v1
+            task:
+              id: TASK-FINGERPRINT
+              objective: Produce a stable semantic fingerprint
+              constraints:
+                security_risk: r4
+              approval:
+                production: human
+            """;
+
+        var first = _parser.Parse(yaml);
+        var second = _parser.Parse(yaml);
+
+        first.ContractFingerprint.Should().Be(second.ContractFingerprint);
+    }
+
+    [Fact]
+    public void Parse_AllTrackedTaskContracts_AreValidCurrentSchema()
+    {
+        var root = FindRepositoryRoot();
+        var searchRoots = new[]
+        {
+            Path.Combine(root, "tasks"),
+            Path.Combine(root, "experiments"),
+            Path.Combine(root, "tests", "fixtures")
+        };
+        var contracts = searchRoots
+            .Where(Directory.Exists)
+            .SelectMany(path => Directory.EnumerateFiles(
+                path,
+                "*.yaml",
+                SearchOption.AllDirectories))
+            .Where(path => File.ReadLines(path).Any(line => line == "task:"))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        contracts.Should().HaveCount(22);
+        foreach (var path in contracts)
+        {
+            TaskContract contract;
+            try
+            {
+                contract = _parser.ParseFromFile(path);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"Tracked contract '{Path.GetRelativePath(root, path)}' is invalid.",
+                    exception);
+            }
+            contract.SchemaVersion.Should().Be(
+                TaskContractSchema.CurrentVersion,
+                $"{Path.GetRelativePath(root, path)} must use the current schema");
+            TaskContractIntegrity.ValidateForEvidence(contract);
+        }
     }
 
     [Fact]
@@ -713,5 +950,18 @@ public class TaskContractParserTests
         result.Objective.Should().Contain("NullReferenceException");
         result.Scope.Allowed.Should().Contain("src/Customers/**");
         result.Scope.Forbidden.Should().Contain("src/Billing/**");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+            !File.Exists(Path.Combine(directory.FullName, "AECS.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new DirectoryNotFoundException(
+            "Unable to find the AECS repository root from the test output directory.");
     }
 }

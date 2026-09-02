@@ -4,6 +4,8 @@ Os backends JSON e PostgreSQL persistem cada execução em um envelope `aecs.exe
 
 Quando presente, `CSharpSymbolGraph` também é validado estruturalmente antes da leitura: versões, vínculo ao `RepositorySnapshot` e à baseline, limites, caminhos relativos, unicidade, hashes de projetos/nós/arestas e referências entre elementos precisam ser consistentes. O store recalcula `graphHash`; o `ContextManifest` só pode declarar o mesmo hash autenticado. Evidências legadas sem esse campo permanecem compatíveis, mas não ganham autoridade semântica retroativa.
 
+Contratos novos registram `aecs.task-contract/v1` e um fingerprint SHA-256 canônico do contrato efetivo após a classificação determinística de risco. O store recalcula esse fingerprint antes de assinar e em toda leitura. A ausência simultânea dos dois campos identifica somente evidência autenticada histórica como `aecs.task-contract/legacy-v0`; entrada YAML sem versão não é aceita e evidência parcialmente migrada falha fechada.
+
 ## Envelope e cadeia de eventos
 
 O documento separa três elementos:

@@ -15,18 +15,19 @@ Use `--evidence-store postgres` para evidências no PostgreSQL. `--evidence-root
 
 O replay:
 
-1. registra HEAD, branch e status do checkout original e recusa um repositório sujo;
-2. confirma que o commit-base autenticado ainda existe;
-3. cria um worktree detached descartável exatamente nesse commit;
-4. compara versões de Git e .NET e reconstrói o `RepositorySnapshot` da baseline;
-5. reconstrói o `CSharpSymbolGraph` com os limites originais e compara seu hash ao autenticado;
-6. compara os hashes esperado/observado do snapshot e calcula arquivos adicionados, removidos ou alterados;
-7. repete o preflight de build/test;
-8. aplica no worktree apenas o diff persistido e assinado, sem interpretar a antiga resposta do agente;
-9. deriva novamente o `CandidateChangeSet` pelo Git e compara hash e arquivos;
-10. repete build, o gate legado `Tests` ou a matriz versionada `UnitTests`/`IntegrationTests`/`AcceptanceTests`, verificadores EB determinísticos disponíveis e evidências de aceite;
-11. compara definições e resultados dos comandos, gates e referências de artefatos;
-12. remove o worktree e confirma que HEAD, branch e index originais não mudaram.
+1. valida a versão e o fingerprint do TaskContract autenticado, ou marca explicitamente o contrato histórico como `legacy-v0`;
+2. registra HEAD, branch e status do checkout original e recusa um repositório sujo;
+3. confirma que o commit-base autenticado ainda existe;
+4. cria um worktree detached descartável exatamente nesse commit;
+5. compara versões de Git e .NET e reconstrói o `RepositorySnapshot` da baseline;
+6. reconstrói o `CSharpSymbolGraph` com os limites originais e compara seu hash ao autenticado;
+7. compara os hashes esperado/observado do snapshot e calcula arquivos adicionados, removidos ou alterados;
+8. repete o preflight de build/test;
+9. aplica no worktree apenas o diff persistido e assinado, sem interpretar a antiga resposta do agente;
+10. deriva novamente o `CandidateChangeSet` pelo Git e compara hash e arquivos;
+11. repete build, o gate legado `Tests` ou a matriz versionada `UnitTests`/`IntegrationTests`/`AcceptanceTests`, verificadores EB determinísticos disponíveis e evidências de aceite;
+12. compara definições e resultados dos comandos, gates e referências de artefatos;
+13. remove o worktree e confirma que HEAD, branch e index originais não mudaram.
 
 O agente não é uma dependência do serviço de replay e nunca é chamado. O diff autenticado é a única entrada capaz de reconstruir o candidato.
 

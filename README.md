@@ -293,6 +293,7 @@ indisponíveis; consulte [Contabilidade de custo, VCC e CPVC](docs/cost-accounti
 Cada tarefa declara objetivo, critérios de aceite, escopo, restrições, orçamento, verificações e política de aprovação:
 
 ```yaml
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-001
   objective: Fix NullReferenceException in CustomerMapper when input is null
@@ -389,7 +390,7 @@ task:
     production: none
 ```
 
-A referência de campos, capabilities preventivas, padrões de escopo, valores padrão e regras de decisão está em [TaskContract](docs/task-contract.md). Os YAMLs em [`tasks/`](tasks/) são modelos de contrato; o exemplo realmente executado em CI fica no [fixture AgronomoPlus](tests/fixtures/real-world-demo/README.md).
+A referência de campos, schema estrito, fingerprint, capabilities preventivas, padrões de escopo, valores padrão e regras de decisão está em [TaskContract](docs/task-contract.md). Os YAMLs em [`tasks/`](tasks/) são modelos de contrato; o exemplo realmente executado em CI fica no [fixture AgronomoPlus](tests/fixtures/real-world-demo/README.md).
 
 ## Comandos da CLI
 

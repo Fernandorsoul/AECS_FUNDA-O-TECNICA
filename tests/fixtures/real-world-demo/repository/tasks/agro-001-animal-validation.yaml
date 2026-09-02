@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: AGRO-001
   objective: Add null validation to CreateAnimalHandler so Name and Breed cannot cause NullReferenceException

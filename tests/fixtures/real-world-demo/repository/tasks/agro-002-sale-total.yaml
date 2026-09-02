@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: AGRO-002
   objective: Add CalculateTotal to SaleService to sum sale items and apply a discount percentage

@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: REAL-001
   objective: Fix Customer.Equals to handle null input without throwing NullReferenceException. It should return false when compared to null.
@@ -26,6 +27,5 @@ task:
     build: required
     unit_tests: required
     scope: required
-    budget: required
   approval:
     production: none

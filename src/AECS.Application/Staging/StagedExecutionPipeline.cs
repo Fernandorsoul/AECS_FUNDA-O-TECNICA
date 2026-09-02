@@ -1054,24 +1054,26 @@ public sealed class StagedExecutionPipeline
         }
     }
 
-    private static TaskContract WithRisk(TaskContract contract, RiskLevel risk) => new()
-    {
-        Id = contract.Id,
-        Objective = contract.Objective,
-        AcceptanceCriteria = contract.AcceptanceCriteria,
-        AcceptanceRequirements = contract.AcceptanceRequirements,
-        Scope = contract.Scope,
-        Constraints = new TaskConstraints
+    private static TaskContract WithRisk(TaskContract contract, RiskLevel risk) =>
+        TaskContractIntegrity.Seal(new TaskContract
         {
-            SecurityRisk = risk,
-            DatabaseMigration = contract.Constraints.DatabaseMigration,
-            ExternalDependency = contract.Constraints.ExternalDependency
-        },
-        Budget = contract.Budget,
-        Execution = contract.Execution,
-        Verification = contract.Verification,
-        Approval = contract.Approval,
-        Status = contract.Status,
-        CreatedAt = contract.CreatedAt
-    };
+            SchemaVersion = TaskContractSchema.CurrentVersion,
+            Id = contract.Id,
+            Objective = contract.Objective,
+            AcceptanceCriteria = contract.AcceptanceCriteria,
+            AcceptanceRequirements = contract.AcceptanceRequirements,
+            Scope = contract.Scope,
+            Constraints = new TaskConstraints
+            {
+                SecurityRisk = risk,
+                DatabaseMigration = contract.Constraints.DatabaseMigration,
+                ExternalDependency = contract.Constraints.ExternalDependency
+            },
+            Budget = contract.Budget,
+            Execution = contract.Execution,
+            Verification = contract.Verification,
+            Approval = contract.Approval,
+            Status = contract.Status,
+            CreatedAt = contract.CreatedAt
+        });
 }

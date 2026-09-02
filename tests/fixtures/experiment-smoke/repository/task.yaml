@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: EXP-SMOKE-001
   objective: Create the deterministic experiment smoke result

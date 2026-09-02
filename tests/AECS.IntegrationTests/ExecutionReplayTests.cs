@@ -25,6 +25,9 @@ public sealed class ExecutionReplayTests
         var replay = await fixture.ReplayAsync(execution.EvidenceId);
 
         replay.Outcome.Should().Be(ExecutionReplayOutcome.Reproduced);
+        execution.Contract.SchemaVersion.Should().Be(TaskContractSchema.CurrentVersion);
+        execution.Contract.ContractFingerprint.Should().MatchRegex("^sha256:[a-f0-9]{64}$");
+        TaskContractIntegrity.ValidateForEvidence(execution.Contract);
         replay.Evidence.ActualDiffHash.Should().Be(execution.CandidateChangeSet.DiffHash);
         replay.Evidence.ExpectedRepositorySnapshotHash.Should()
             .Be(execution.RepositorySnapshot.SnapshotHash);
@@ -112,6 +115,28 @@ public sealed class ExecutionReplayTests
         await replay.Should().ThrowAsync<EvidenceIntegrityException>();
         (await File.ReadAllTextAsync(execution.EvidenceLocation))
             .Should().Contain("\"replayEvents\": []");
+    }
+
+    [Fact]
+    public async Task Replay_RejectsIncompatibleTaskContractBeforeCreatingAnEvent()
+    {
+        await using var fixture = await ReplayFixture.CreateAsync();
+        var execution = await fixture.ExecuteAsync();
+        var json = await File.ReadAllTextAsync(execution.EvidenceLocation);
+        await File.WriteAllTextAsync(
+            execution.EvidenceLocation,
+            json.Replace(
+                TaskContractSchema.CurrentVersion,
+                "aecs.task-contract/v999",
+                StringComparison.Ordinal));
+
+        var replay = () => fixture.ReplayAsync(execution.EvidenceId);
+
+        await replay.Should().ThrowAsync<EvidenceIntegrityException>();
+        (await File.ReadAllTextAsync(execution.EvidenceLocation))
+            .Should().Contain("\"replayEvents\": []");
+        fixture.Agent.Calls.Should().Be(1,
+            "an incompatible persisted contract must fail before replay work starts");
     }
 
     [Fact]

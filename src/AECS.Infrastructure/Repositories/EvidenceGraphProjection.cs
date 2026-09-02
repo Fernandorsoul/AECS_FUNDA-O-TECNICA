@@ -35,10 +35,19 @@ internal static class EvidenceGraphProjection
             attributes: new() { ["path"] = repositoryPath });
         builder.Node(taskNode, EvidenceGraphNodeKind.Task, evidence.TaskContract.Id,
             "task-contract", envelope.Seal.KeyId, evidence.TaskContract.CreatedAt,
+            hashes: TaskContractIntegrity.IsLegacy(evidence.TaskContract)
+                ? []
+                : new() { ["contractSha256"] = evidence.TaskContract.ContractFingerprint! },
             attributes: new()
             {
                 ["objective"] = evidence.TaskContract.Objective,
-                ["status"] = evidence.TaskContract.Status.ToString()
+                ["status"] = evidence.TaskContract.Status.ToString(),
+                ["schemaVersion"] = TaskContractIntegrity.IsLegacy(evidence.TaskContract)
+                    ? TaskContractSchema.LegacyVersion
+                    : evidence.TaskContract.SchemaVersion!,
+                ["compatibility"] = TaskContractIntegrity.IsLegacy(evidence.TaskContract)
+                    ? "authenticated-legacy-evidence"
+                    : "strict-versioned-contract"
             });
         builder.Node(executionNode, EvidenceGraphNodeKind.Execution, evidence.Id.ToString("N"),
             "execution-evidence", envelope.Seal.KeyId, evidence.CreatedAt,

@@ -89,14 +89,64 @@ public sealed class AuthenticatedEvidenceStoreTests
         document["seal"]!["signature"]!.GetValue<string>().Should().NotBeNullOrWhiteSpace();
         document["chainSeal"]!["signature"]!.GetValue<string>().Should().NotBeNullOrWhiteSpace();
         document["promotionEvents"]!.AsArray().Should().BeEmpty();
+        document["evidence"]!["taskContract"]!.AsObject()
+            .ContainsKey("schemaVersion").Should().BeFalse(
+                "authenticated evidence created before TaskContract v1 remains explicitly legacy");
+        document["evidence"]!["taskContract"]!.AsObject()
+            .ContainsKey("contractFingerprint").Should().BeFalse();
         (await File.ReadAllTextAsync(path)).Should().NotContain("PRIVATE KEY");
 
         var restartedStore = fixture.CreateRestartedStore();
         var loaded = await restartedStore.LoadAsync(evidence.Id, CancellationToken.None);
 
         loaded.Should().NotBeNull();
+        TaskContractIntegrity.IsLegacy(loaded!.TaskContract).Should().BeTrue();
         loaded!.CandidateChangeSet.Diff.Should().Be(evidence.CandidateChangeSet.Diff);
         loaded.FinalDecision.Decision.Should().Be(TaskDecision.Verified);
+    }
+
+    [Fact]
+    public async Task Save_VersionedTaskContract_PersistsAndValidatesCanonicalFingerprint()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var contract = TaskContractIntegrity.Seal(new TaskContract
+        {
+            Id = "TASK-EVIDENCE-001",
+            Objective = "Verify the versioned TaskContract"
+        });
+        var evidence = fixture.CreateEvidence(taskContract: contract);
+
+        var path = await fixture.Store.SaveAsync(evidence, CancellationToken.None);
+
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        document["evidence"]!["taskContract"]!["schemaVersion"]!.GetValue<string>()
+            .Should().Be(TaskContractSchema.CurrentVersion);
+        document["evidence"]!["taskContract"]!["contractFingerprint"]!.GetValue<string>()
+            .Should().Be(contract.ContractFingerprint);
+        var loaded = await fixture.CreateRestartedStore().LoadAsync(
+            evidence.Id,
+            CancellationToken.None);
+        loaded.Should().NotBeNull();
+        TaskContractIntegrity.ValidateForEvidence(loaded!.TaskContract);
+    }
+
+    [Fact]
+    public async Task Save_VersionedTaskContractWithInvalidFingerprint_IsRejectedBeforeSigning()
+    {
+        await using var fixture = AuthenticatedEvidenceFixture.Create();
+        var tampered = new TaskContract
+        {
+            SchemaVersion = TaskContractSchema.CurrentVersion,
+            ContractFingerprint = "sha256:" + new string('0', 64),
+            Id = "TASK-EVIDENCE-001",
+            Objective = "Tamper with a versioned TaskContract"
+        };
+        var evidence = fixture.CreateEvidence(taskContract: tampered);
+
+        var save = () => fixture.Store.SaveAsync(evidence, CancellationToken.None);
+
+        await save.Should().ThrowAsync<EvidenceIntegrityException>()
+            .WithMessage("*invalid TaskContract version or fingerprint*");
     }
 
     [Fact]
@@ -604,18 +654,20 @@ public sealed class AuthenticatedEvidenceStoreTests
             ContextManifest? contextManifest = null,
             string objective = "Verify authenticated evidence",
             string model = "",
-            DateTime? createdAt = null)
+            DateTime? createdAt = null,
+            TaskContract? taskContract = null)
         {
-            var taskId = "TASK-EVIDENCE-001";
+            var effectiveTaskContract = taskContract ?? new TaskContract
+            {
+                Id = "TASK-EVIDENCE-001",
+                Objective = objective
+            };
+            var taskId = effectiveTaskContract.Id;
             var runId = Guid.NewGuid();
             var diff = "diff --git a/file.txt b/file.txt\n-old\n+new\n";
             return new ExecutionEvidence
             {
-                TaskContract = new TaskContract
-                {
-                    Id = taskId,
-                    Objective = objective
-                },
+                TaskContract = effectiveTaskContract,
                 AgentRun = new AgentRun
                 {
                     Id = runId,

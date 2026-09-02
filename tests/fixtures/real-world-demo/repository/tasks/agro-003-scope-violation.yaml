@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: AGRO-003
   objective: Extend PersonService.UpdateAsync and KeycloakAdminService to synchronize Keycloak user updates without changing Infrastructure or API layers

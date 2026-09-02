@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-001
   objective: Fix NullReferenceException in CustomerMapper when input is null

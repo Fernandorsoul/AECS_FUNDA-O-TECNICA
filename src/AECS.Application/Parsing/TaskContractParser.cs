@@ -12,15 +12,23 @@ public class TaskContractParser
 {
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(NullNamingConvention.Instance)
-        .IgnoreUnmatchedProperties()
         .Build();
 
     public TaskContract Parse(string yaml)
     {
+        TaskContractYamlShapeValidator.Validate(yaml);
         var yamlTask = Deserializer.Deserialize<TaskYamlRoot>(yaml);
         var model = yamlTask.Task ?? yamlTask.task ?? throw new InvalidOperationException("YAML must contain a 'task' root key.");
+        var schemaVersion = yamlTask.SchemaVersion ?? yamlTask.schema_version ??
+            throw new InvalidOperationException(
+                "TaskContract must declare schema_version: aecs.task-contract/v1.");
+        if (schemaVersion != TaskContractSchema.CurrentVersion)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported TaskContract schema_version: '{schemaVersion}'.");
+        }
 
-        return MapToContract(model);
+        return MapToContract(model, schemaVersion);
     }
 
     public TaskContract ParseFromFile(string filePath)
@@ -29,7 +37,9 @@ public class TaskContractParser
         return Parse(yaml);
     }
 
-    private static TaskContract MapToContract(TaskYamlModel model)
+    private static TaskContract MapToContract(
+        TaskYamlModel model,
+        string schemaVersion)
     {
         var scope = model.Scope ?? model.scope;
         var constraints = model.Constraints ?? model.constraints;
@@ -114,10 +124,22 @@ public class TaskContractParser
             mappedAcceptance,
             mappedTestSuites);
 
-        return new TaskContract
+        var id = model.Id ?? model.id ?? string.Empty;
+        var objective = model.Objective ?? model.objective ?? string.Empty;
+        ValidateRequiredText(
+            id,
+            "task.id",
+            TaskContractIntegrity.MaximumIdLength);
+        ValidateRequiredText(
+            objective,
+            "task.objective",
+            TaskContractIntegrity.MaximumObjectiveLength);
+
+        return TaskContractIntegrity.Seal(new TaskContract
         {
-            Id = model.Id ?? model.id ?? string.Empty,
-            Objective = model.Objective ?? model.objective ?? string.Empty,
+            SchemaVersion = schemaVersion,
+            Id = id,
+            Objective = objective,
             AcceptanceCriteria = acceptance,
             AcceptanceRequirements = mappedAcceptance,
             Scope = new ScopeDefinition
@@ -151,7 +173,15 @@ public class TaskContractParser
             },
             Status = TaskState.ContractReady,
             CreatedAt = DateTime.UtcNow
-        };
+        });
+    }
+
+    private static void ValidateRequiredText(string value, string field, int maximumLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidOperationException($"{field} is required and cannot be empty.");
+        if (value.Length > maximumLength)
+            throw new InvalidOperationException($"{field} cannot exceed {maximumLength} characters.");
     }
 
     private static void ValidateBudget(ExecutionBudget budget)
@@ -796,26 +826,38 @@ public class TaskContractParser
             _ => throw new InvalidOperationException($"Unknown acceptance evidence type: '{value}'.")
         };
 
-    private static RiskLevel ParseRiskLevel(string value) => value.ToLowerInvariant() switch
+    private static RiskLevel ParseRiskLevel(string value) => value.Trim().ToLowerInvariant() switch
     {
-        "low" or "r0" or "r1" => RiskLevel.R1,
+        "r0" => RiskLevel.R0,
+        "low" or "r1" => RiskLevel.R1,
         "medium" or "r2" => RiskLevel.R2,
         "high" or "r3" => RiskLevel.R3,
-        _ => RiskLevel.R1
+        "r4" => RiskLevel.R4,
+        _ => throw new InvalidOperationException(
+            $"Unknown constraints.security_risk: '{value}'. Expected low, medium, high, or R0-R4.")
     };
 
-    private static bool IsRequired(string value) =>
-        value.Equals("required", StringComparison.OrdinalIgnoreCase);
-
-    private static ApprovalLevel ParseApprovalLevel(string value) => value.ToLowerInvariant() switch
+    private static bool IsRequired(string value) => value.Trim().ToLowerInvariant() switch
     {
+        "required" => true,
+        "optional" or "disabled" => false,
+        _ => throw new InvalidOperationException(
+            $"Unknown verification mode: '{value}'. Expected required, optional, or disabled.")
+    };
+
+    private static ApprovalLevel ParseApprovalLevel(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "none" => ApprovalLevel.None,
         "human" => ApprovalLevel.Human,
-        _ => ApprovalLevel.None
+        _ => throw new InvalidOperationException(
+            $"Unknown approval.production: '{value}'. Expected none or human.")
     };
 }
 
 public class TaskYamlRoot
 {
+    public string? SchemaVersion { get; set; }
+    public string? schema_version { get; set; }
     public TaskYamlModel? Task { get; set; }
     public TaskYamlModel? task { get; set; }
 }

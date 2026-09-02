@@ -60,6 +60,12 @@ public sealed class EvidenceGraphTests
                 item.Timestamp.HasValue && item.Hashes.ContainsKey("evidencePayloadSha256"));
         first.Nodes.Single(item => item.Kind == EvidenceGraphNodeKind.Candidate)
             .Hashes["diffSha256"].Should().Be(evidence.CandidateChangeSet.DiffHash);
+        var taskNode = first.Nodes.Single(item => item.Kind == EvidenceGraphNodeKind.Task);
+        taskNode.Hashes["contractSha256"].Should()
+            .Be(evidence.TaskContract.ContractFingerprint);
+        taskNode.Attributes["schemaVersion"].Should()
+            .Be(TaskContractSchema.CurrentVersion);
+        taskNode.Attributes["compatibility"].Should().Be("strict-versioned-contract");
         first.Edges.Count(item => item.Kind == "authenticated-next").Should().Be(2);
         first.Edges.Should().Contain(item => item.Kind == "described-by");
         first.Edges.Should().Contain(item => item.Kind == "derives-symbol-graph");
@@ -209,11 +215,11 @@ public sealed class EvidenceGraphTests
             var symbolGraph = SymbolGraph(repositorySnapshot, baseline);
             return new ExecutionEvidence
             {
-                TaskContract = new TaskContract
+                TaskContract = TaskContractIntegrity.Seal(new TaskContract
                 {
                     Id = taskId,
                     Objective = "Project authenticated evidence graph"
-                },
+                }),
                 AgentRun = new AgentRun
                 {
                     Id = runId,

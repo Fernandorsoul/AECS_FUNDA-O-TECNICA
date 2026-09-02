@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: H1-RETENTION
   objective: Replace the pending RetentionPolicy implementation with the production value declared by its contract

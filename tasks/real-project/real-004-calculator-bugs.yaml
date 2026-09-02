@@ -1,6 +1,7 @@
+schema_version: aecs.task-contract/v1
 task:
   id: REAL-004
-  objective: Fix OrderCalculator bugs: ApplyDiscount should reject discount > 100 (off-by-one error), CalculateTax should reject negative tax rate, CalculateTotal should handle empty items list.
+  objective: "Fix OrderCalculator bugs: ApplyDiscount should reject discount > 100 (off-by-one error), CalculateTax should reject negative tax rate, CalculateTotal should handle empty items list."
   acceptance:
     - ApplyDiscount(100, 101) throws ArgumentOutOfRangeException
     - ApplyDiscount(100, 100) returns 0
@@ -28,6 +29,5 @@ task:
     build: required
     unit_tests: required
     scope: required
-    budget: required
   approval:
     production: none

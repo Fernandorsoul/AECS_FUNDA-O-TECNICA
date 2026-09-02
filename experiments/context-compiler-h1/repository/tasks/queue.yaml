@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: H1-QUEUE
   objective: Replace the pending QueuePolicy implementation with the production queue declared by its contract

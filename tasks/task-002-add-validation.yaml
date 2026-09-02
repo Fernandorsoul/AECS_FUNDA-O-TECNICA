@@ -1,3 +1,4 @@
+schema_version: aecs.task-contract/v1
 task:
   id: TASK-002
   objective: Add input validation to CustomerService.Create method

@@ -376,6 +376,7 @@ public sealed class ExperimentDatasetTests
             OutputPath = Path.Combine(rootPath, "output");
             Directory.CreateDirectory(RepositoryPath);
             File.WriteAllText(TaskPath, """
+                schema_version: aecs.task-contract/v1
                 task:
                   id: TASK-EXP
                   objective: Exercise experiment harness
