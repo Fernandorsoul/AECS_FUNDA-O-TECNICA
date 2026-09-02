@@ -228,6 +228,20 @@ estratégia, as fontes e a avaliação honesta do resultado fixo; o comando `ada
 agrupa essas observações offline por risco e tipo. Detalhes estão em
 [Adaptive Controller em shadow mode](adaptive-shadow-controller.md).
 
+## Gate causal offline do Adaptive Controller
+
+`adaptive-experiment` é um caminho experimental separado do `run`. Seu dataset estrito referencia
+uma recomendação shadow autenticada por tarefa e congela cutoff temporal, baseline, provider, seed,
+hipótese e critérios de morte antes da inferência. O preflight relê a recomendação e todas as fontes,
+rejeita leakage temporal e garante que o plano recomendado não amplie budget, capabilities ou gates.
+
+O runner executa o plano fixo e o recomendado em worktrees staged independentes, confere modelo,
+contexto, budget, evidência e preservação do checkout e grava checkpoints retomáveis. A análise usa
+custo efetivo, mantém pares incompletos no denominador e produz somente `Maintain`, `Adjust` ou
+`Abandon`; nenhuma conclusão ativa o controller. O corpus real de 50 tarefas ainda pertence à #89,
+e a #35 continua bloqueada. Consulte [Gate causal offline](adaptive-offline-gate.md) e
+[ADR-023](adr/ADR-023-paired-adaptive-offline-gate.md).
+
 ## Experiment Harness
 
 O modo versionado do Experiment Harness lê datasets v1 gerais e protocolos de contexto A/B v2/v3/v4,
@@ -246,7 +260,7 @@ CPVC por dimensão, distribuições, incerteza, conclusão H1 e links para todas
 | `AECS.Domain` | contratos, candidatos, evidências, decisões e interfaces sem dependência de infraestrutura |
 | `AECS.Application` | pipeline staged, contexto, orçamento/retries, gates, decisão, replay e promoção |
 | `AECS.Infrastructure` | runtimes mock/Ollama/cloud, processos, stores autenticados JSON/PostgreSQL e fundações Docker |
-| `AECS.Cli` | `run`, `experiment`, `jarvis`, `evidence`, `adaptive-report`, `replay`, `promote` e `export-patch` |
+| `AECS.Cli` | `run`, `experiment`, `adaptive-experiment`, `jarvis`, `evidence`, `adaptive-report`, `replay`, `promote` e `export-patch` |
 | `AECS.UnitTests` | regras isoladas, parsing, adapters, verificação e control kernel |
 | `AECS.IntegrationTests` | Git e PostgreSQL reais, concorrência, rollback e E2E reproduzível do AgronomoPlus |
 
