@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "aecs.local-model-capacity-gate/v1",
+  "hardwareProfile": "windows-rx570-4gb-ram16gb",
+  "selectionPolicy": "first-passing-candidate",
+  "failurePolicy": {
+    "qualityFailure": "advance",
+    "operationalFailure": "stop-and-diagnose"
+  },
+  "candidates": [
+    {
+      "order": 1,
+      "model": "qwen2.5-coder:3b",
+      "dataset": "dataset.local-capacity-3b.json",
+      "officialArtifactSizeGb": 1.9
+    },
+    {
+      "order": 2,
+      "model": "qwen2.5-coder:7b",
+      "dataset": "dataset.local-capacity-7b.json",
+      "officialArtifactSizeGb": 4.7
+    }
+  ],
+  "gate": {
+    "requiredRuns": 6,
+    "requiredCompletedRuns": 6,
+    "maximumFailedRuns": 0,
+    "maximumSkippedRuns": 0,
+    "minimumVerifiedChanges": 3,
+    "minimumVerifiedChangesPerTask": 1,
+    "maximumScopeViolations": 0,
+    "requiredEvidence": 6,
+    "requiredContextWindowTokens": 8192,
+    "minimumFreePhysicalMemoryBytes": 1073741824,
+    "allowOutOfMemory": false,
+    "allowTimeout": false,
+    "requireOriginalRepositoryUnchanged": true,
+    "requireIdempotentResume": true
+  }
+}

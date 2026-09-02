@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "aecs.experiment-dataset/v1",
+  "id": "local-model-capacity-qwen25-coder-3b",
+  "version": "1.0.0",
+  "repository": {
+    "path": "repository",
+    "baseline": "HEAD"
+  },
+  "repetitions": 2,
+  "referenceVariantId": "qwen25-coder-3b",
+  "tasks": [
+    {
+      "id": "H1-RETENTION",
+      "contractPath": "tasks/retention.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "H1-INVOICE",
+      "contractPath": "tasks/invoice.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "H1-QUEUE",
+      "contractPath": "tasks/queue.yaml",
+      "expectedDecision": "Verified"
+    }
+  ],
+  "variants": [
+    {
+      "id": "qwen25-coder-3b",
+      "provider": "Local",
+      "model": "qwen2.5-coder:3b",
+      "contextStrategy": "graph-ranked",
+      "context": {
+        "maxTokens": 1600,
+        "maxCharacters": 4000,
+        "maxFileCharacters": 400,
+        "maxFileTokens": 200,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 5200,
+      "parameters": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "contextWindowTokens": "8192"
+      }
+    }
+  ]
+}
