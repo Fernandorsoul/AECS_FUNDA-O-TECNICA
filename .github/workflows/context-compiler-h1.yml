@@ -59,15 +59,99 @@ jobs:
             --evidence-root "${RUNNER_TEMP}/context-compiler-h1-evidence" \
             --key-directory "${RUNNER_TEMP}/context-compiler-h1-keys"
 
-      - name: Validate published artifacts
+      - name: Validate complete preregistered sample
         if: always()
         shell: bash
         run: |
-          test -s "${RUNNER_TEMP}/context-compiler-h1-output/report.json"
-          test -s "${RUNNER_TEMP}/context-compiler-h1-output/results.csv"
-          test -s "${RUNNER_TEMP}/context-compiler-h1-output/comparisons.csv"
-          test -s "${RUNNER_TEMP}/context-compiler-h1-output/analysis.csv"
-          test "$(find "${RUNNER_TEMP}/context-compiler-h1-output/runs" -name '*.json' | wc -l)" -eq 60
+          output_root="${RUNNER_TEMP}/context-compiler-h1-output"
+          evidence_root="${RUNNER_TEMP}/context-compiler-h1-evidence"
+
+          test -s "${output_root}/report.json"
+          test -s "${output_root}/results.csv"
+          test -s "${output_root}/comparisons.csv"
+          test -s "${output_root}/analysis.csv"
+          test -s "${output_root}/cost-records.csv"
+          test -s "${output_root}/cost-efficiency.csv"
+          test "$(find "${output_root}/runs" -type f -name '*.json' | wc -l)" -eq 60
+          test "$(find "${evidence_root}" -type f -name '*.json' | wc -l)" -eq 60
+
+          jq -e '
+            .schemaVersion == "aecs.experiment-report/v3" and
+            .totalTasks == 60 and
+            (.results | length) == 60 and
+            (.pairedComparisons | length) == 30 and
+            ((.completedCount + .failedCount + .skippedCount) == 60)
+          ' "${output_root}/report.json" > /dev/null
+
+          find "${output_root}/runs" -type f -name '*.json' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > "${RUNNER_TEMP}/context-compiler-h1-checkpoints-before.sha256"
+          find "${evidence_root}" -type f -name '*.json' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > "${RUNNER_TEMP}/context-compiler-h1-evidence-before.sha256"
+
+      - name: Prove resume is checkpoint-only
+        shell: bash
+        env:
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          NO_PROXY: ""
+        run: |
+          dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            experiment \
+            --dataset "${RUNNER_TEMP}/context-compiler-h1/dataset.cloud.json" \
+            --output "${RUNNER_TEMP}/context-compiler-h1-output" \
+            --resume \
+            --include-real-providers \
+            --allow-host-execution \
+            --evidence-root "${RUNNER_TEMP}/context-compiler-h1-evidence" \
+            --key-directory "${RUNNER_TEMP}/context-compiler-h1-keys"
+
+      - name: Validate immutable resume and write checksums
+        shell: bash
+        run: |
+          output_root="${RUNNER_TEMP}/context-compiler-h1-output"
+          evidence_root="${RUNNER_TEMP}/context-compiler-h1-evidence"
+          key_root="${RUNNER_TEMP}/context-compiler-h1-keys"
+
+          find "${output_root}/runs" -type f -name '*.json' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > "${RUNNER_TEMP}/context-compiler-h1-checkpoints-after.sha256"
+          find "${evidence_root}" -type f -name '*.json' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > "${RUNNER_TEMP}/context-compiler-h1-evidence-after.sha256"
+
+          diff --unified \
+            "${RUNNER_TEMP}/context-compiler-h1-checkpoints-before.sha256" \
+            "${RUNNER_TEMP}/context-compiler-h1-checkpoints-after.sha256"
+          diff --unified \
+            "${RUNNER_TEMP}/context-compiler-h1-evidence-before.sha256" \
+            "${RUNNER_TEMP}/context-compiler-h1-evidence-after.sha256"
+
+          manifest="${RUNNER_TEMP}/context-compiler-h1-checksums.sha256"
+          (
+            cd "${RUNNER_TEMP}"
+            find \
+              context-compiler-h1-output \
+              context-compiler-h1-evidence \
+              context-compiler-h1-keys \
+              -type f \
+              ! -name '*private*' \
+              ! -name 'checksums.sha256' \
+              -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > "${manifest}"
+          mv "${manifest}" "${output_root}/checksums.sha256"
+
+          find "${key_root}" -type f -name '*private*' -delete
+          test -z "$(find "${key_root}" -type f -name '*private*' -print -quit)"
 
       - name: Publish report and authenticated evidence
         if: always()

@@ -35,4 +35,7 @@ concluem `Abandon`. Falhas nunca são removidas da amostra.
 
 O workflow manual `Context Compiler H1` executa o mesmo protocolo com o secret
 `AECS_EXPERIMENT_OPENAI_API_KEY` e publica output, evidências e a chave pública de verificação
-por 30 dias. Ele nunca é acionado por push ou pull request.
+por 30 dias. Antes da publicação, o workflow exige 60 checkpoints, 60 evidências, 30 pares e o
+schema de relatório v3. Em seguida repete a execução com `--resume` e acesso HTTP bloqueado,
+compara os hashes de checkpoints e evidências, publica `checksums.sha256` e remove a chave privada.
+Ele nunca é acionado por push ou pull request.
