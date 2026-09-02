@@ -77,6 +77,7 @@ public class OllamaAdapterTests
         var adapter = new OllamaAdapter(
             new HttpClient(handler),
             "http://localhost:11434",
+            contextWindowTokens: 8192,
             seed: 321);
         const string context = "## REPOSITORY CONTEXT\n### src/Existing.cs\n" +
             "Symbols:\n- class Demo.Existing\n```csharp\nclass Existing { }\n```";
@@ -89,6 +90,7 @@ public class OllamaAdapterTests
         handler.LastRequestContent.Should().Contain("src/Existing.cs");
         handler.LastRequestContent.Should().Contain("class Demo.Existing");
         handler.LastRequestContent.Should().Contain("class Existing");
+        handler.LastRequestContent.Should().Contain("\"num_ctx\":8192");
         handler.LastRequestContent.Should().Contain("\"seed\":321");
     }
 
