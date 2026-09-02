@@ -295,7 +295,23 @@ public sealed class DockerSandboxE2ETests
             failure.Succeeded.Should().BeFalse();
 
             var symlink = Path.Combine(workspace, ".aecs-verification", "escape");
-            Directory.CreateSymbolicLink(symlink, original);
+            try
+            {
+                Directory.CreateSymbolicLink(symlink, original);
+            }
+            catch (Exception exception) when (
+                OperatingSystem.IsWindows() &&
+                exception is IOException or UnauthorizedAccessException)
+            {
+                var junction = await host.RunAsync(new ProcessExecutionRequest
+                {
+                    FileName = "cmd.exe",
+                    Arguments = ["/d", "/c", "mklink", "/J", symlink, original],
+                    WorkingDirectory = workspace,
+                    Timeout = TimeSpan.FromSeconds(10)
+                }, CancellationToken.None);
+                junction.Succeeded.Should().BeTrue(junction.StandardError);
+            }
             var symlinkAttempt = await RunAsync(
                 runner,
                 workspace,
