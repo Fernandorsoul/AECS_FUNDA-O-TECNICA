@@ -1,0 +1,197 @@
+{
+  "name": "aecs-vscode",
+  "displayName": "AECS",
+  "description": "Cliente fino para execuções, evidências e aprovações do AECS.",
+  "version": "0.1.0",
+  "publisher": "aecs",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA.git",
+    "directory": "clients/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/issues"
+  },
+  "homepage": "https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/tree/dev/clients/vscode",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "O AECS executa TaskContracts e só deve ser iniciado em workspaces confiáveis."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "activationEvents": [
+    "onView:aecs.executions"
+  ],
+  "main": "./out/src/extension.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "check": "tsc -p . --noEmit",
+    "test": "npm run compile && node --test out/test/protocolClient.test.js",
+    "package": "npx @vscode/vsce package"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "aecs.startExecution",
+        "title": "AECS: Iniciar execução"
+      },
+      {
+        "command": "aecs.refreshExecution",
+        "title": "AECS: Atualizar execução"
+      },
+      {
+        "command": "aecs.cancelExecution",
+        "title": "AECS: Cancelar execução"
+      },
+      {
+        "command": "aecs.openDiff",
+        "title": "AECS: Abrir diff autenticado"
+      },
+      {
+        "command": "aecs.approveCandidate",
+        "title": "AECS: Aprovar candidato"
+      },
+      {
+        "command": "aecs.rejectCandidate",
+        "title": "AECS: Rejeitar candidato"
+      },
+      {
+        "command": "aecs.copyEvidenceLink",
+        "title": "AECS: Copiar link da evidência"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aecs",
+          "title": "AECS",
+          "icon": "media/aecs.svg"
+        }
+      ]
+    },
+    "views": {
+      "aecs": [
+        {
+          "id": "aecs.executions",
+          "name": "Execução e evidências"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "aecs.startExecution",
+          "when": "view == aecs.executions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aecs.refreshExecution",
+          "when": "view == aecs.executions",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "aecs.cancelExecution",
+          "when": "view == aecs.executions && viewItem == aecs.running",
+          "group": "inline@1"
+        },
+        {
+          "command": "aecs.openDiff",
+          "when": "view == aecs.executions && viewItem == aecs.diff",
+          "group": "inline@1"
+        },
+        {
+          "command": "aecs.approveCandidate",
+          "when": "view == aecs.executions && viewItem == aecs.reviewable",
+          "group": "inline@1"
+        },
+        {
+          "command": "aecs.rejectCandidate",
+          "when": "view == aecs.executions && viewItem == aecs.reviewable",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AECS",
+      "properties": {
+        "aecs.backendPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Caminho do executável AECS ou de AECS.Cli.dll. Não use este campo para segredos."
+        },
+        "aecs.runtimeConfig": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Caminho opcional do contrato aecs.runtime-config/v1."
+        },
+        "aecs.agentMode": {
+          "type": "string",
+          "enum": [
+            "runtime",
+            "mock"
+          ],
+          "default": "runtime",
+          "scope": "resource",
+          "description": "Usa o runtime compartilhado ou força o agente mock para desenvolvimento."
+        },
+        "aecs.allowHostExecution": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Override explícito para contratos de desenvolvimento que executam no host."
+        },
+        "aecs.evidenceStore": {
+          "type": "string",
+          "enum": [
+            "runtime",
+            "json",
+            "postgres"
+          ],
+          "default": "runtime",
+          "scope": "resource",
+          "description": "Usa o runtime compartilhado ou substitui explicitamente seu backend de evidências."
+        },
+        "aecs.evidenceRoot": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Diretório opcional do store JSON de evidências."
+        },
+        "aecs.keyDirectory": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Diretório do keyring de evidências; chaves não são lidas pela extensão."
+        },
+        "aecs.refreshIntervalMs": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 1000,
+          "maximum": 30000,
+          "scope": "window",
+          "description": "Intervalo de atualização durante uma execução, em milissegundos."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.7.2"
+  }
+}
