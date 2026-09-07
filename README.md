@@ -57,6 +57,8 @@ O protótipo já inclui:
 
 Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes já conectados na CLI daqueles que ainda são fundação para etapas futuras. O fluxo e a matriz de fixtures de EB001–EB004 estão em [Verificação semântica](docs/semantic-verification.md), o ciclo do EB005 está em [Registro histórico](docs/historical-decision-registry.md) e a infraestrutura de A/B está em [Experiment Harness](docs/experiment-harness.md).
 
+A entrega piloto é controlada por uma baseline própria em [Baseline da entrega piloto AECS](docs/pilot-delivery-baseline.md), que fixa o SHA inicial, o escopo C#/.NET, as limitações e as issues que bloqueiam o release.
+
 ## Pré-requisitos
 
 - [.NET 9 SDK estável](https://dotnet.microsoft.com/download/dotnet/9.0), selecionado por `global.json` sem aceitar previews;
