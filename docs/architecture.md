@@ -242,6 +242,13 @@ custo efetivo, mantém pares incompletos no denominador e produz somente `Mainta
 e a #35 continua bloqueada. Consulte [Gate causal offline](adaptive-offline-gate.md) e
 [ADR-023](adr/ADR-023-paired-adaptive-offline-gate.md).
 
+Corpora históricos usam `aecs.adaptive-offline-dataset/v2`: cada tarefa aponta para um checkout
+externo estável, um commit upstream, uma baseline filha contendo somente o oráculo e uma imagem
+Docker por digest. O gate recalcula origem, parent, diff e paths antes do provider; os paths do
+oráculo são proibidos ao agente e gold patches não pertencem ao schema. Consulte
+[Adaptação de corpus real](adaptive-real-corpus.md) e
+[ADR-024](adr/ADR-024-multi-baseline-real-corpus.md).
+
 ## Experiment Harness
 
 O modo versionado do Experiment Harness lê datasets v1 gerais e protocolos de contexto A/B v2/v3/v4,

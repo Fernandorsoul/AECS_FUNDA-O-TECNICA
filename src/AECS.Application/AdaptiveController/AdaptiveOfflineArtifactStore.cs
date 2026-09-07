@@ -111,7 +111,9 @@ public sealed class AdaptiveOfflineArtifactStore
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(report);
-        if (report.SchemaVersion != AdaptiveOfflineSchema.ReportVersion)
+        if (report.SchemaVersion is not (
+                AdaptiveOfflineSchema.ReportVersion or
+                AdaptiveOfflineSchema.MultiBaselineReportVersion))
         {
             throw new InvalidOperationException(
                 "Adaptive offline report uses an unsupported schema.");

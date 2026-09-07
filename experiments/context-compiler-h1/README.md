@@ -75,6 +75,14 @@ checkout, coleta telemetria do host e valida as contagens e a janela efetivament
 Ollama. Ele compila e executa explicitamente a configuração `Release`, impedindo que `--no-build`
 reutilize um binário Debug antigo. O destino deve ser um caminho inexistente:
 
+O parâmetro `-DotnetPath` aceita o executável de uma instalação portátil com SDK 9 estável e
+runtime 8. O executor valida essa instalação antes do build e das chamadas ao provider, propaga
+seu diretório pelo PATH aos processos filhos e fixa o SDK exato em um `global.json` commitado
+na fixture isolada. Assim os worktrees de verificação usam a mesma versão do controlador,
+mesmo quando o host possui SDKs mais novos. O ambiente do chamador é restaurado também em falhas.
+`toolchain.json` e a telemetria registram o executável, SDK e runtimes selecionados. Essa preparação
+gera uma nova baseline experimental; resultados anteriores mantêm sua identidade original.
+
 ```powershell
 ./experiments/context-compiler-h1/Invoke-LocalLowHardwareH1.ps1 `
   -Mode pilot `
@@ -88,6 +96,8 @@ reutilize um binário Debug antigo. O destino deve ser um caminho inexistente:
 Uma conclusão experimental rejeitada faz a CLI retornar código 1 mesmo quando toda a amostra foi
 coletada corretamente. O executor distingue esse resultado de falha operacional confrontando o
 código com `report.succeeded` e exigindo todos os runs e todas as evidências esperadas.
+Depois de validar esses artefatos, o próprio executor devolve o mesmo código ao chamador: `0` para
+`Maintain` e `1` para `Adjust` ou `Abandon`.
 
 ## Gate de capacidade de modelos locais
 

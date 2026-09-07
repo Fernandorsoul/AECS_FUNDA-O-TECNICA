@@ -60,6 +60,11 @@ $expectedRuns = [int]$manifest.repetitions *
     @($manifest.tasks).Count *
     @($manifest.variants).Count
 
+. (Join-Path $scriptDirectory 'ExperimentToolchain.ps1')
+Invoke-AecsExperimentToolchain -DotnetPath $DotnetPath -RepositoryRoot $repositoryRoot -Action {
+param($toolchain)
+$DotnetPath = $toolchain.dotnetPath
+
 & $DotnetPath build $cliProject --configuration Release --nologo
 if ($LASTEXITCODE -ne 0) {
     throw "Could not build the Release experiment runner."
@@ -68,6 +73,10 @@ if ($LASTEXITCODE -ne 0) {
 New-Item -ItemType Directory -Path $artifactPath | Out-Null
 Copy-Item -LiteralPath $scriptDirectory -Destination $experimentRoot -Recurse
 New-Item -ItemType Directory -Path $outputRoot, $evidenceRoot, $keyRoot | Out-Null
+Set-AecsExperimentSdkPin -FixtureRoot (Join-Path $experimentRoot 'repository') `
+    -SdkVersion $toolchain.sdkVersion
+$toolchain | ConvertTo-Json -Depth 4 |
+    Set-Content -LiteralPath (Join-Path $artifactPath 'toolchain.json') -Encoding utf8
 
 git -C (Join-Path $experimentRoot "repository") init --quiet
 git -C (Join-Path $experimentRoot "repository") config user.email "experiment@aecs.local"
@@ -200,6 +209,7 @@ $telemetry = [ordered]@{
     finishedAtUtc = $finishedAt.ToString("O")
     wallClockSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
     processExitCode = $processExitCode
+    toolchain = $toolchain
     host = [ordered]@{
         operatingSystem = $operatingSystem.Caption
         operatingSystemVersion = $operatingSystem.Version
@@ -264,3 +274,5 @@ if (($report.succeeded -and $processExitCode -ne 0) -or (-not $report.succeeded 
     cliExitCode = $processExitCode
     ollamaContextLength = $loadedModel.context_length
 } | Format-List
+exit $processExitCode
+}
