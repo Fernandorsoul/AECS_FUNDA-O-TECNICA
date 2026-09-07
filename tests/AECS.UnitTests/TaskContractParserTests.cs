@@ -263,7 +263,7 @@ public class TaskContractParserTests
     }
 
     [Theory]
-    [InlineData("image", "mcr.microsoft.com/dotnet/sdk:9.0", "pinned by sha256")]
+    [InlineData("image", "mcr.microsoft.com/dotnet/sdk:10.0", "pinned by sha256")]
     [InlineData("cpu_limit", "0", "cpu_limit")]
     [InlineData("memory_limit", "0m", "memory_limit")]
     [InlineData("process_limit", "0", "process_limit")]

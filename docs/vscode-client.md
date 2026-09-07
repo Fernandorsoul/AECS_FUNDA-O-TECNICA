@@ -15,7 +15,7 @@ e exata exigida pelo fluxo de promoção controlada.
 
 - VS Code 1.95 ou mais recente, em workspace local e confiável;
 - Node.js 20 ou mais recente apenas para compilar e testar a extensão;
-- backend AECS publicado para .NET 8 conforme a [matriz de suporte vigente](dotnet-support.md);
+- backend AECS publicado para .NET 10 conforme a [matriz de suporte vigente](dotnet-support.md);
 - extensão e backend com o protocolo exato `aecs.vscode/v1`;
 - mesmos requisitos de Docker, Ollama, PostgreSQL e TaskContract da CLI escolhidos pela
   configuração de runtime.

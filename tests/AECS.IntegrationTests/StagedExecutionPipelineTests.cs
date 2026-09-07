@@ -1164,7 +1164,7 @@ public sealed class StagedExecutionPipelineTests
                 return Task.FromResult(new ProcessExecutionResult
                 {
                     ExitCode = 0,
-                    StandardOutput = request.FileName == "dotnet" ? "9.0.100" : "git version 2.50",
+                    StandardOutput = request.FileName == "dotnet" ? "10.0.400" : "git version 2.50",
                     Environment = Evidence(request)
                 });
             }

@@ -44,7 +44,7 @@ public sealed class RepositoryExecutionProfile
 public sealed class SandboxExecutionProfile
 {
     public const string DefaultImage =
-        "mcr.microsoft.com/dotnet/sdk:9.0@sha256:f190d2dd9eef2899c91ac323caa0bd2b39334a5400ba93013e5199da39dad940";
+        "mcr.microsoft.com/dotnet/sdk:10.0@sha256:4beef5b8919dcaa2dc924233bd069257e883cc7a061e09088a97d152d6a48510";
 
     public string Image { get; init; } = DefaultImage;
     public string CpuLimit { get; init; } = "1.0";

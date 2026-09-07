@@ -67,7 +67,7 @@ task:
         target: tests/SampleProject.UnitTests/SampleProject.UnitTests.csproj
         timeout_seconds: 45
     sandbox:
-      image: mcr.microsoft.com/dotnet/sdk:9.0@sha256:f190d2dd9eef2899c91ac323caa0bd2b39334a5400ba93013e5199da39dad940
+      image: mcr.microsoft.com/dotnet/sdk:10.0@sha256:4beef5b8919dcaa2dc924233bd069257e883cc7a061e09088a97d152d6a48510
       cpu_limit: "1.0"
       memory_limit: 512m
       process_limit: 128
@@ -228,7 +228,7 @@ Valores negativos para tokens, USD, retries ou arquivos e `wall_clock_seconds` m
 | `execution.target` | caminho relativo | vazio | Arquivo `.sln`, `.slnx`, `.csproj`, `.fsproj` ou `.vbproj` usado por build, gate legado de testes e inventário de dependências |
 | `execution.repository_snapshot` | objeto versionado | perfil v1 sem exclusões adicionais | Configura diretórios extras que não entram no inventário determinístico da baseline |
 | `execution.test_suites` | objeto versionado | ausente | Ativa os gates independentes `UnitTests`, `IntegrationTests` e `AcceptanceTests` |
-| `execution.sandbox.image` | referência OCI | SDK .NET 9 fixado | Imagem imutável; tags sem `@sha256:<digest>` são rejeitadas |
+| `execution.sandbox.image` | referência OCI | SDK .NET 10 fixado | Imagem imutável; tags sem `@sha256:<digest>` são rejeitadas |
 | `execution.sandbox.cpu_limit` | decimal positivo | `1.0` | Limite de CPU passado ao Docker |
 | `execution.sandbox.memory_limit` | limite Docker | `512m` | Limite de memória do container |
 | `execution.sandbox.process_limit` | inteiro positivo | `128` | Limite de processos/PIDs |
@@ -344,7 +344,7 @@ Os verificadores EB001–EB005 executam depois dos pré-requisitos e de um event
 | `vulnerability_database_version` | Deve selecionar a snapshot suportada, nunca um alias móvel como `latest` |
 | `suppressions` | Cada item exige `rule`, `path` relativo seguro, justificativa de ao menos 10 caracteres e, opcionalmente, fingerprint SHA-256 exato |
 
-Os scanners de segredos e padrões leem apenas extensões textuais conhecidas no worktree staged, sem seguir links e sem carregar código. O inventário de dependências executa `dotnet list <target> package --include-transitive --format json` por argv estruturado no mesmo runner Docker dos demais gates, nas fases `baseline.security-scan` e `candidate.security-scan`. No SDK .NET 9 esse comando lê os assets produzidos pelo build anterior; o sandbox permanece sem rede. O parser tolera o aviso textual de workload que o SDK pode antepor, mas exige que o restante da saída seja um documento JSON completo. `execution.target` e os artefatos de restore/build precisam existir; ferramenta ausente, exit code não zero, timeout, cancelamento ou JSON inválido tornam o gate inconclusivo e resultam em `Error` crítico.
+Os scanners de segredos e padrões leem apenas extensões textuais conhecidas no worktree staged, sem seguir links e sem carregar código. O inventário de dependências executa `dotnet list <target> package --include-transitive --format json` por argv estruturado no mesmo runner Docker dos demais gates, nas fases `baseline.security-scan` e `candidate.security-scan`. No SDK .NET 10 esse comando lê os assets produzidos pelo build anterior; o sandbox permanece sem rede. O parser tolera o aviso textual de workload que o SDK pode antepor, mas exige que o restante da saída seja um documento JSON completo. `execution.target` e os artefatos de restore/build precisam existir; ferramenta ausente, exit code não zero, timeout, cancelamento ou JSON inválido tornam o gate inconclusivo e resultam em `Error` crítico.
 
 A base embutida é deliberadamente pequena e reproduzível. A versão atual cobre [GHSA-5crp-9r3c-p9vr](https://github.com/advisories/GHSA-5crp-9r3c-p9vr) para `Newtonsoft.Json < 13.0.1` e [GHSA-ghhp-997w-qr28](https://github.com/advisories/GHSA-ghhp-997w-qr28) para as faixas afetadas de `System.Text.Encodings.Web`. Alterar regras ou advisories exige uma nova versão da snapshot e testes correspondentes.
 

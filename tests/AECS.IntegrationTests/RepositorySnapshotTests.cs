@@ -207,7 +207,7 @@ public sealed class RepositorySnapshotTests
             FileName = "dotnet",
             Arguments = ["--version"],
             ExitCode = 0,
-            StandardOutput = "9.0.100\n"
+            StandardOutput = "10.0.400\n"
         }
     ];
 

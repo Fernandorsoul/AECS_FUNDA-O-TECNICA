@@ -13,7 +13,7 @@ O pipeline staged separa operações de controle de comandos potencialmente não
 - nenhum shell intermediário: executável e argumentos são enviados separadamente ao Docker;
 - nenhuma montagem do checkout original, socket Docker, credenciais ou caches do host.
 
-A imagem padrão é o SDK .NET 9 multi-arch fixado pelo digest declarado em `SandboxExecutionProfile.DefaultImage`. Ela é uma camada distinta do TFM `net8.0` dos binários AECS, conforme a [matriz de suporte .NET](dotnet-support.md). Dependências e runtimes que não estejam na imagem ou no próprio worktree não podem ser restaurados com a política sem rede.
+A imagem padrão é o SDK .NET 10 multi-arch fixado pelo digest declarado em `SandboxExecutionProfile.DefaultImage`. Ela acompanha o TFM `net10.0` dos binários AECS, conforme a [matriz de suporte .NET](dotnet-support.md). Dependências e runtimes que não estejam na imagem ou no próprio worktree não podem ser restaurados com a política sem rede.
 
 Além do perfil de sandbox, cada contrato possui uma política `aecs.capabilities/v1`, com autoridade `task-contract`. Antes de chamar o Docker, o runner confronta executável, prefixo de argv e fase; calcula os mounts graváveis; valida recursos, rede e segredos; e falha fechado se não houver uma concessão correspondente. A política padrão permite somente os probes, build, testes e diretórios de saída necessários ao pipeline.
 
