@@ -56,6 +56,10 @@ jobs:
           npm ci
           npm test
 
+      - name: Test experiment SDK isolation
+        shell: pwsh
+        run: ./tests/scripts/Test-ExperimentToolchain.ps1
+
       - name: Restore
         run: dotnet restore AECS.slnx
 
