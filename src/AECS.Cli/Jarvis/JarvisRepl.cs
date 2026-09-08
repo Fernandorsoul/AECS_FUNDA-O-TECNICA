@@ -242,7 +242,7 @@ public class JarvisRepl
             Console.WriteLine(
                 "Correction: edit the named field in the contract and keep schema_version, " +
                 "task.id, task.objective and task.scope.allowed valid before retrying.");
-            return;
+            throw;
         }
 
         Console.WriteLine("AECS GUIDED TASK RUN");
