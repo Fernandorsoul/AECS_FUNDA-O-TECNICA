@@ -65,6 +65,8 @@ A demonstração reproduzível do fluxo completo está em [Demonstração real r
 
 A matriz de recuperação, rollback, backup e ameaças residuais do piloto está em [Recuperação de falhas e integridade](docs/resilience-and-integrity.md).
 
+O roteiro operacional para conduzir uma tarefa pelo CLI/Jarvis está em [Fluxo guiado no CLI e Jarvis](docs/guided-cli-flow.md); dentro do REPL use `guide`.
+
 ## Pré-requisitos
 
 - [.NET 10 SDK LTS estável](https://dotnet.microsoft.com/download/dotnet/10.0), selecionado por `global.json` sem aceitar previews;
@@ -425,6 +427,7 @@ Comandos disponíveis dentro do Jarvis:
 
 | Comando | Descrição |
 | --- | --- |
+| `guide` | Mostra o roteiro seguro de preflight, execução, revisão, exportação e promoção |
 | `run <task-file>` | Executa uma tarefa |
 | `experiment <dir>` | Executa os YAMLs do diretório |
 | `status [--json]` | Mostra a execução autenticada mais recente do repositório |
@@ -468,6 +471,7 @@ tasks/                    # TaskContracts de exemplo e de experimento
 - [Gate causal offline do Adaptive Controller](docs/adaptive-offline-gate.md) — pré-registro, cutoff temporal, braços pareados, checkpoints e decisão H2;
 - [Adaptação de corpus real](docs/adaptive-real-corpus.md) — checkouts externos, baseline/oráculo por tarefa e proteção contra gold leakage;
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
+- [Fluxo guiado CLI/Jarvis](docs/guided-cli-flow.md) — sequência operacional de tarefa, revisão, exportação e promoção;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;
 - [Alertas proativos](docs/proactive-alerts.md) — política, severidade, cooldown, privacidade, lifecycle e critério de morte;
