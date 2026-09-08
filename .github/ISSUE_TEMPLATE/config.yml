@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: AECS pilot support and feedback guide
+    url: https://github.com/Fernandorsoul/AECS_FUNDA-O-TECNICA/blob/dev/docs/pilot-feedback-triage.md
+    about: Read what to include, redact, and escalate during pilot validation.

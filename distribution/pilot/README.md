@@ -10,6 +10,8 @@ revisáveis por alguém que não acompanhou o desenvolvimento.
 - `Create-PilotReleasePackage.ps1`: gera pacote versionado da CLI a partir do `HEAD` atual.
 - `pilot-release-notes.template.md`: notas de release, limitações, suporte, rollback e feedback.
 - `pilot-go-no-go-checklist.md`: checklist de aceite operacional antes de publicar.
+- `../../docs/pilot-feedback-triage.md`: canal de feedback, template de bug, redaction e
+  responsável por triagem.
 
 ## Fluxo
 
@@ -26,5 +28,7 @@ revisáveis por alguém que não acompanhou o desenvolvimento.
 4. Teste instalação e primeira execução usando apenas o ZIP produzido.
 5. Preencha as notas e o checklist com checksums, CI, evidências, aceite independente e resultado do
    piloto de utilidade.
+6. Registre defeitos e achados usando o template `AECS pilot bug report` no GitHub; não publique
+   segredos, chaves privadas, `.env`, connection strings ou dumps com memória.
 
 Não use binários Debug, diretórios locais do desenvolvedor ou evidências sem hash no pacote final.

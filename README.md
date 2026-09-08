@@ -480,6 +480,7 @@ distribution/            # Empacotamento, notas e checklist do release piloto
 - [Fluxo guiado CLI/Jarvis](docs/guided-cli-flow.md) — sequência operacional de tarefa, revisão, exportação e promoção;
 - [Piloto de utilidade](pilot/utility-validation/README.md) — protocolo, manifesto e relatório para 10 tarefas reais revisadas;
 - [Release piloto](distribution/pilot/README.md) — pacote versionado, checksums, notas e go/no-go;
+- [Feedback e triagem do piloto](docs/pilot-feedback-triage.md) — template de bug, dados mínimos, redaction e responsável de triagem;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;
 - [Alertas proativos](docs/proactive-alerts.md) — política, severidade, cooldown, privacidade, lifecycle e critério de morte;

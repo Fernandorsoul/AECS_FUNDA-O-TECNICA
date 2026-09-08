@@ -1,0 +1,117 @@
+name: AECS pilot bug report
+description: Report a defect or support issue found while validating the AECS pilot.
+title: "[pilot bug]: "
+labels: ["bug", "pilot-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for pilot validation findings. Do not paste secrets, private keys, `.env` files, provider tokens, connection strings, or full evidence directories.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What failed, and what did you expect instead?
+      placeholder: The doctor command reported ready, but the first demo run failed...
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Use Critical/High only for release-blocking correctness, integrity, security, data-loss, or install failures.
+      options:
+        - Critical - blocks pilot release or can cause unsafe promotion/data loss
+        - High - blocks a supported pilot flow
+        - Medium - workaround exists, but the pilot experience is materially degraded
+        - Low - cosmetic, wording, or non-blocking improvement
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installation / doctor
+        - Task contract / quickstart
+        - Jarvis guided flow
+        - Evidence / history / replay
+        - Promotion / rollback
+        - Real-world demo
+        - Pilot release package
+        - Adaptive controller / experiments
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: AECS version or commit SHA
+      description: Use the pilot version, package manifest commit, or `git rev-parse HEAD`.
+      placeholder: 0.1.0-pilot / a07b2a6...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, architecture, .NET SDK/runtime, Docker status, provider mode and evidence backend. Redact secrets.
+      placeholder: |
+        OS: Windows 11 x64
+        .NET SDK: 10.0.x stable
+        Docker: running
+        Provider: mock/local/cloud (no token values)
+        Evidence backend: json/postgres
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: List exact commands and inputs. Prefer minimal commands from a clean checkout/package install.
+      placeholder: |
+        1. Install package from ...
+        2. Run `aecs doctor --format json`
+        3. Run `aecs jarvis --repo ...`
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed result
+      description: Paste concise output/log excerpts only. Redact paths or identifiers if needed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What should AECS have done according to docs or release notes?
+    validations:
+      required: true
+  - type: textarea
+    id: support_package
+    attributes:
+      label: Redacted support package contents
+      description: Confirm which safe artifacts you can provide.
+      value: |
+        - [ ] `dotnet --info`
+        - [ ] `aecs doctor --format json`
+        - [ ] Package manifest and SHA256SUMS
+        - [ ] Evidence IDs/hashes, not private keys
+        - [ ] CI log link or concise redacted excerpt
+        - [ ] Demo/replay report
+        - [ ] No `.env`, provider tokens, connection strings, private keys, or process dumps with secrets
+    validations:
+      required: true
+  - type: textarea
+    id: reviewer_notes
+    attributes:
+      label: Reviewer notes
+      description: Maintainers use this to record triage owner, decision, and follow-up.
+      value: |
+        Triage owner:
+        Decision: release-blocker / fix-forward / document-limitation / follow-up
+        Linked evidence:
+        Follow-up issue/PR:
