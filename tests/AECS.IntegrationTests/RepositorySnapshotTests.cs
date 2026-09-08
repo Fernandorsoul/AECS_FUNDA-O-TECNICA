@@ -187,7 +187,7 @@ public sealed class RepositorySnapshotTests
             relation.Kind == "project-reference" &&
             relation.From == "Backend/AgronomoPlus.Application/AgronomoPlus.Application.csproj" &&
             relation.To == "Backend/AgronomoPlus.Domain/AgronomoPlus.Domain.csproj");
-        snapshot.Frameworks.Should().Contain("net9.0");
+        snapshot.Frameworks.Should().Contain("net10.0");
         snapshot.TestSuites.Should().Contain(suite =>
             suite.Name == "Tests" &&
             suite.Target == "Backend/AgronomoPlus.Tests/AgronomoPlus.Tests.csproj");

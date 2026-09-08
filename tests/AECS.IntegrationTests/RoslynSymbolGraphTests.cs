@@ -299,7 +299,7 @@ public sealed class RoslynSymbolGraphTests
             snapshot,
             cancellationToken: default);
 
-        if (!await HasSdk9Async(repository.ProcessRunner))
+        if (!await HasSdk10Async(repository.ProcessRunner))
         {
             graph.LoadSucceeded.Should().BeFalse();
             graph.Diagnostics.Should().Contain(diagnostic =>
@@ -350,7 +350,7 @@ public sealed class RoslynSymbolGraphTests
             snapshot,
             cancellationToken: default);
 
-        if (!await HasSdk9Async(runner))
+        if (!await HasSdk10Async(runner))
         {
             graph.LoadSucceeded.Should().BeFalse();
             graph.Diagnostics.Should().Contain(diagnostic =>
@@ -381,7 +381,7 @@ public sealed class RoslynSymbolGraphTests
         }
     ];
 
-    private static async Task<bool> HasSdk9Async(IProcessRunner runner)
+    private static async Task<bool> HasSdk10Async(IProcessRunner runner)
     {
         var result = await runner.RunAsync(new ProcessExecutionRequest
         {
@@ -391,7 +391,8 @@ public sealed class RoslynSymbolGraphTests
             Timeout = TimeSpan.FromSeconds(30)
         }, CancellationToken.None);
         return result.Succeeded && result.StandardOutput.Split('\n').Any(line =>
-            line.TrimStart().StartsWith("9.", StringComparison.Ordinal));
+            line.TrimStart().StartsWith("10.", StringComparison.Ordinal) &&
+            !line.Contains("preview", StringComparison.OrdinalIgnoreCase));
     }
 
     private sealed class SymbolGraphFixture : IAsyncDisposable
