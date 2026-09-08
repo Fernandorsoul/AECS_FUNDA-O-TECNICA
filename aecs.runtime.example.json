@@ -21,6 +21,13 @@
     "backend": "json"
   },
   "execution": {
-    "allowHostExecution": false
+    "allowHostExecution": false,
+    "adaptiveRouting": {
+      "enabled": false,
+      "rollbackRequested": false,
+      "minimumReadyRecords": 50,
+      "canaryRepositoryPath": "",
+      "allowedRisks": ["R0", "R1"]
+    }
   }
 }

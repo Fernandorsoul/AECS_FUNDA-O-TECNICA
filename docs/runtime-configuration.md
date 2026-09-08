@@ -76,6 +76,43 @@ autorizar explicitamente o envio do contexto do repositório. Além disso:
 Ollama continua sendo o primário. Falhas transitórias, indisponibilidade local, timeout e 429
 podem acionar o cloud somente quando todas as condições anteriores forem satisfeitas.
 
+## Roteamento adaptativo opt-in
+
+O Adaptive Controller continua coletando recomendações em shadow mode por padrão. Para preparar a
+#35, o runtime aceita uma política opt-in em `execution.adaptiveRouting`, mas ela é fail-closed:
+
+```json
+{
+  "schemaVersion": "aecs.runtime-config/v1",
+  "execution": {
+    "adaptiveRouting": {
+      "enabled": true,
+      "minimumReadyRecords": 50,
+      "allowedRisks": ["R0", "R1"],
+      "canaryRepositoryPath": "C:\\repos\\produto-piloto"
+    }
+  }
+}
+```
+
+`enabled` não basta para alterar uma execução. O plano fixo é preservado se a recomendação não está
+`Ready`, se houver menos registros que o mínimo, se o risco não estiver permitido, se o repositório
+não corresponder ao canary ou se `rollbackRequested` estiver `true`. Capabilities, verification,
+scope e budget nunca podem ser ampliados; nesta etapa, somente o modelo recomendado pode ser usado.
+
+Variáveis de ambiente equivalentes:
+
+```text
+AECS_ADAPTIVE_ROUTING_ENABLED
+AECS_ADAPTIVE_ROUTING_ROLLBACK
+AECS_ADAPTIVE_ROUTING_MINIMUM_READY_RECORDS
+AECS_ADAPTIVE_ROUTING_ALLOWED_RISKS
+AECS_ADAPTIVE_ROUTING_CANARY_REPOSITORY
+```
+
+Use `rollbackRequested: true` ou `AECS_ADAPTIVE_ROUTING_ROLLBACK=true` para voltar imediatamente ao
+controlador fixo sem migração de dados.
+
 ## Fronteiras que a configuração não substitui
 
 Profiles de execução, capabilities, rede do sandbox, secrets, gates e budget máximo continuam
