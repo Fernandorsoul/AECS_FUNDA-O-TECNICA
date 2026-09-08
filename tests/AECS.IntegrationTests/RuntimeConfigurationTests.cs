@@ -161,6 +161,64 @@ public sealed class RuntimeConfigurationTests : IDisposable
             .WithMessage("*duplicate property*");
     }
 
+    [Fact]
+    public void AdaptiveRoutingPolicy_IsOptInRedactedAndFailClosed()
+    {
+        var configPath = WriteConfiguration("""
+            {
+              "schemaVersion": "aecs.runtime-config/v1",
+              "execution": {
+                "adaptiveRouting": {
+                  "enabled": true,
+                  "rollbackRequested": true,
+                  "minimumReadyRecords": 75,
+                  "canaryRepositoryPath": "CANARY_ROOT",
+                  "allowedRisks": ["R0", "R1"]
+                }
+              }
+            }
+            """
+            .Replace("CANARY_ROOT", Escape(Path.Combine(_root, "canary"))));
+
+        var resolved = AecsRuntimeConfigurationResolver.Resolve(
+            Parse("--runtime-config", configPath),
+            _ => null);
+        var text = AecsRuntimeConfigurationResolver.ToText(resolved.Effective);
+
+        resolved.Effective.AdaptiveRoutingEnabled.Value.Should().BeTrue();
+        resolved.Effective.AdaptiveRoutingRollbackRequested.Value.Should().BeTrue();
+        resolved.Effective.AdaptiveRoutingMinimumReadyRecords.Value.Should().Be(75);
+        resolved.Effective.AdaptiveRoutingAllowedRisks.Value.Should()
+            .Equal(RiskLevel.R0, RiskLevel.R1);
+        text.Should().Contain("adaptive-routing=enabled")
+            .And.Contain("rollback=True")
+            .And.Contain("minimum-ready-records=75");
+    }
+
+    [Fact]
+    public void InvalidAdaptiveRoutingPolicy_FailsBeforeRuntimeExecution()
+    {
+        var configPath = WriteConfiguration("""
+            {
+              "schemaVersion": "aecs.runtime-config/v1",
+              "execution": {
+                "adaptiveRouting": {
+                  "enabled": true,
+                  "minimumReadyRecords": 1,
+                  "allowedRisks": ["R0"]
+                }
+              }
+            }
+            """);
+
+        var action = () => AecsRuntimeConfigurationResolver.Resolve(
+            Parse("--runtime-config", configPath),
+            _ => null);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*minimum ready records*");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

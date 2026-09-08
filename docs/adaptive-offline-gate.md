@@ -133,6 +133,62 @@ O relatório pode concluir `Maintain`, `Adjust` ou `Abandon`, mas não modifica 
 políticas. Mesmo um `Maintain` na #89 é somente evidência de entrada para a decisão humana e
 arquitetural da #35.
 
+## Opt-in operacional fail-closed
+
+O runtime aceita uma política explícita de roteamento adaptativo para preparar a ativação gradual da
+#35, mas o padrão continua sendo controlador fixo. Quando habilitada, a política só pode usar uma
+recomendação shadow se todas as condições abaixo forem verdadeiras:
+
+- `execution.adaptiveRouting.enabled` está `true`;
+- `execution.adaptiveRouting.rollbackRequested` está ausente ou `false`;
+- a recomendação autenticada está `Ready`;
+- a quantidade de registros equivalentes é maior ou igual a `minimumReadyRecords` (padrão: 50);
+- o risco da tarefa está em `allowedRisks` (padrão: `R0,R1`);
+- o repositório corresponde ao canary configurado, quando `canaryRepositoryPath` é informado;
+- capabilities, verificações e budget não são ampliados.
+
+Nesta etapa, somente o modelo recomendado pode influenciar a execução. Budget, capabilities,
+verificação e escopo continuam presos ao plano fixo/TaskContract. Qualquer violação preserva o
+plano fixo ou falha fechada antes da chamada ao provider.
+
+Exemplo de configuração para canary controlado:
+
+```json
+{
+  "schemaVersion": "aecs.runtime-config/v1",
+  "execution": {
+    "adaptiveRouting": {
+      "enabled": true,
+      "minimumReadyRecords": 50,
+      "allowedRisks": ["R0", "R1"],
+      "canaryRepositoryPath": "C:\\repos\\produto-piloto"
+    }
+  }
+}
+```
+
+Rollback operacional imediato:
+
+```json
+{
+  "schemaVersion": "aecs.runtime-config/v1",
+  "execution": {
+    "adaptiveRouting": {
+      "enabled": true,
+      "rollbackRequested": true
+    }
+  }
+}
+```
+
+As mesmas chaves podem ser sobrescritas por ambiente:
+
+- `AECS_ADAPTIVE_ROUTING_ENABLED`
+- `AECS_ADAPTIVE_ROUTING_ROLLBACK`
+- `AECS_ADAPTIVE_ROUTING_MINIMUM_READY_RECORDS`
+- `AECS_ADAPTIVE_ROUTING_ALLOWED_RISKS`
+- `AECS_ADAPTIVE_ROUTING_CANARY_REPOSITORY`
+
 Enquanto `AdaptiveShadowPlan` não carregar identidade própria de provider, cada dataset congela um
 único provider para os dois braços. O gate não autoriza troca de provider em produção.
 

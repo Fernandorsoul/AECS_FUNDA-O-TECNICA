@@ -1,4 +1,5 @@
 using AECS.Application.ContextCompiler;
+using AECS.Application.AdaptiveController;
 using AECS.Application.Promotion;
 using AECS.Application.Staging;
 using AECS.Domain.Interfaces;
@@ -141,6 +142,11 @@ public sealed class AecsExecutionRuntime : IDisposable
             EvidenceJsonRoot = baseConfiguration.EvidenceJsonRoot,
             EvidenceKeyDirectory = baseConfiguration.EvidenceKeyDirectory,
             PostgreSqlConnection = baseConfiguration.PostgreSqlConnection,
+            AdaptiveRoutingEnabled = baseConfiguration.AdaptiveRoutingEnabled,
+            AdaptiveRoutingRollbackRequested = baseConfiguration.AdaptiveRoutingRollbackRequested,
+            AdaptiveRoutingMinimumReadyRecords = baseConfiguration.AdaptiveRoutingMinimumReadyRecords,
+            AdaptiveRoutingCanaryRepositoryPath = baseConfiguration.AdaptiveRoutingCanaryRepositoryPath,
+            AdaptiveRoutingAllowedRisks = baseConfiguration.AdaptiveRoutingAllowedRisks,
             AllowHostExecution = new EffectiveRuntimeSetting<bool>
             {
                 Value = allowHostExecution,
@@ -168,8 +174,21 @@ public sealed class AecsExecutionRuntime : IDisposable
             contextCompiler,
             stagedProcessRunnerFactory: CreateStagedProcessRunnerFactory(processRunner),
             executionController: executionController,
+            adaptiveRoutingPolicy: CreateAdaptiveRoutingPolicy(),
             compiledContextGate: compiledContextGate);
     }
+
+    private AdaptiveRoutingPolicy CreateAdaptiveRoutingPolicy() => new()
+    {
+        Enabled = Configuration.AdaptiveRoutingEnabled.Value,
+        RollbackRequested = Configuration.AdaptiveRoutingRollbackRequested.Value,
+        MinimumReadyRecords = Configuration.AdaptiveRoutingMinimumReadyRecords.Value,
+        AllowedRisks = Configuration.AdaptiveRoutingAllowedRisks.Value,
+        CanaryRepositoryPath = string.IsNullOrWhiteSpace(
+            Configuration.AdaptiveRoutingCanaryRepositoryPath.Value)
+            ? null
+            : Configuration.AdaptiveRoutingCanaryRepositoryPath.Value
+    };
 
     public IStagedProcessRunnerFactory CreateStagedProcessRunnerFactory(
         IProcessRunner? processRunner = null) =>

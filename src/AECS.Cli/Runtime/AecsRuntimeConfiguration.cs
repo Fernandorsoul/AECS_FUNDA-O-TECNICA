@@ -56,6 +56,16 @@ public sealed class RuntimeEvidenceConfiguration
 public sealed class RuntimeExecutionConfiguration
 {
     public bool? AllowHostExecution { get; init; }
+    public RuntimeAdaptiveRoutingConfiguration? AdaptiveRouting { get; init; }
+}
+
+public sealed class RuntimeAdaptiveRoutingConfiguration
+{
+    public bool? Enabled { get; init; }
+    public bool? RollbackRequested { get; init; }
+    public int? MinimumReadyRecords { get; init; }
+    public string? CanaryRepositoryPath { get; init; }
+    public List<string>? AllowedRisks { get; init; }
 }
 
 public sealed class EffectiveRuntimeSetting<T>
@@ -91,6 +101,11 @@ public sealed class EffectiveAecsRuntimeConfiguration
     public EffectiveRuntimeSetting<string> EvidenceKeyDirectory { get; init; } = null!;
     public EffectiveSecretSetting PostgreSqlConnection { get; init; } = new();
     public EffectiveRuntimeSetting<bool> AllowHostExecution { get; init; } = null!;
+    public EffectiveRuntimeSetting<bool> AdaptiveRoutingEnabled { get; init; } = null!;
+    public EffectiveRuntimeSetting<bool> AdaptiveRoutingRollbackRequested { get; init; } = null!;
+    public EffectiveRuntimeSetting<int> AdaptiveRoutingMinimumReadyRecords { get; init; } = null!;
+    public EffectiveRuntimeSetting<string> AdaptiveRoutingCanaryRepositoryPath { get; init; } = null!;
+    public EffectiveRuntimeSetting<List<RiskLevel>> AdaptiveRoutingAllowedRisks { get; init; } = null!;
     public string SandboxFactory { get; init; } = "docker-staged";
     public string ProfileAuthority { get; init; } = "task-contract";
     public string PolicyAuthority { get; init; } = "task-contract";
@@ -160,6 +175,13 @@ public static class AecsRuntimeConfigurationResolver
             JsonExecutionEvidenceStore.GetDefaultKeyDirectoryPath(),
             "default");
         var allowHost = Setting(false, "default");
+        var adaptiveRoutingEnabled = Setting(false, "default");
+        var adaptiveRoutingRollback = Setting(false, "default");
+        var adaptiveRoutingMinimumReadyRecords = Setting(50, "default");
+        var adaptiveRoutingCanaryRepositoryPath = Setting(string.Empty, "default");
+        var adaptiveRoutingAllowedRisks = Setting(
+            new List<RiskLevel> { RiskLevel.R0, RiskLevel.R1 },
+            "default");
 
         if (document is not null)
         {
@@ -207,6 +229,26 @@ public static class AecsRuntimeConfigurationResolver
             allowHost = Apply(
                 allowHost,
                 document.Execution?.AllowHostExecution,
+                fileSource);
+            adaptiveRoutingEnabled = Apply(
+                adaptiveRoutingEnabled,
+                document.Execution?.AdaptiveRouting?.Enabled,
+                fileSource);
+            adaptiveRoutingRollback = Apply(
+                adaptiveRoutingRollback,
+                document.Execution?.AdaptiveRouting?.RollbackRequested,
+                fileSource);
+            adaptiveRoutingMinimumReadyRecords = Apply(
+                adaptiveRoutingMinimumReadyRecords,
+                document.Execution?.AdaptiveRouting?.MinimumReadyRecords,
+                fileSource);
+            adaptiveRoutingCanaryRepositoryPath = Apply(
+                adaptiveRoutingCanaryRepositoryPath,
+                document.Execution?.AdaptiveRouting?.CanaryRepositoryPath,
+                fileSource);
+            adaptiveRoutingAllowedRisks = ApplyRisks(
+                adaptiveRoutingAllowedRisks,
+                document.Execution?.AdaptiveRouting?.AllowedRisks,
                 fileSource);
         }
 
@@ -265,6 +307,26 @@ public static class AecsRuntimeConfigurationResolver
         allowHost = ApplyEnvironmentBool(
             allowHost,
             "AECS_ALLOW_HOST_EXECUTION",
+            getEnvironmentVariable);
+        adaptiveRoutingEnabled = ApplyEnvironmentBool(
+            adaptiveRoutingEnabled,
+            "AECS_ADAPTIVE_ROUTING_ENABLED",
+            getEnvironmentVariable);
+        adaptiveRoutingRollback = ApplyEnvironmentBool(
+            adaptiveRoutingRollback,
+            "AECS_ADAPTIVE_ROUTING_ROLLBACK",
+            getEnvironmentVariable);
+        adaptiveRoutingMinimumReadyRecords = ApplyEnvironmentInt(
+            adaptiveRoutingMinimumReadyRecords,
+            "AECS_ADAPTIVE_ROUTING_MINIMUM_READY_RECORDS",
+            getEnvironmentVariable);
+        adaptiveRoutingCanaryRepositoryPath = ApplyEnvironment(
+            adaptiveRoutingCanaryRepositoryPath,
+            "AECS_ADAPTIVE_ROUTING_CANARY_REPOSITORY",
+            getEnvironmentVariable);
+        adaptiveRoutingAllowedRisks = ApplyEnvironmentRisks(
+            adaptiveRoutingAllowedRisks,
+            "AECS_ADAPTIVE_ROUTING_ALLOWED_RISKS",
             getEnvironmentVariable);
 
         agentMode = Apply(agentMode, options.AgentMode, "flag:--mock");
@@ -344,7 +406,10 @@ public static class AecsRuntimeConfigurationResolver
             evidenceRoot.Value,
             evidenceRoot.Source,
             keyDirectory.Value,
-            postgresSecret);
+            postgresSecret,
+            adaptiveRoutingEnabled.Value,
+            adaptiveRoutingMinimumReadyRecords.Value,
+            adaptiveRoutingAllowedRisks.Value);
 
         var effective = new EffectiveAecsRuntimeConfiguration
         {
@@ -371,7 +436,12 @@ public static class AecsRuntimeConfigurationResolver
                 Configured = !string.IsNullOrWhiteSpace(postgresSecret),
                 Source = postgresSecretSource
             },
-            AllowHostExecution = allowHost
+            AllowHostExecution = allowHost,
+            AdaptiveRoutingEnabled = adaptiveRoutingEnabled,
+            AdaptiveRoutingRollbackRequested = adaptiveRoutingRollback,
+            AdaptiveRoutingMinimumReadyRecords = adaptiveRoutingMinimumReadyRecords,
+            AdaptiveRoutingCanaryRepositoryPath = adaptiveRoutingCanaryRepositoryPath,
+            AdaptiveRoutingAllowedRisks = adaptiveRoutingAllowedRisks
         };
         effective.ConfigurationHash = Fingerprint(effective);
         return new ResolvedAecsRuntimeConfiguration
@@ -403,6 +473,11 @@ public static class AecsRuntimeConfigurationResolver
             $"risk-source={configuration.CloudAllowedRisks.Source} " +
             $"credential={(configuration.CloudCredential.Configured ? "configured" : "unavailable")} " +
             $"credential-source={configuration.CloudCredential.Source}\n" +
+            $"[AECS] adaptive-routing={(configuration.AdaptiveRoutingEnabled.Value ? "enabled" : "disabled")} " +
+            $"rollback={configuration.AdaptiveRoutingRollbackRequested.Value} " +
+            $"minimum-ready-records={configuration.AdaptiveRoutingMinimumReadyRecords.Value} " +
+            $"risks={string.Join(',', configuration.AdaptiveRoutingAllowedRisks.Value)} " +
+            $"canary={(string.IsNullOrWhiteSpace(configuration.AdaptiveRoutingCanaryRepositoryPath.Value) ? "any" : configuration.AdaptiveRoutingCanaryRepositoryPath.Value)}\n" +
             $"[AECS] evidence={configuration.EvidenceBackend.Value} " +
             $"source={configuration.EvidenceBackend.Source} sandbox={configuration.SandboxFactory} " +
             $"host-execution={configuration.AllowHostExecution.Value} " +
@@ -483,7 +558,10 @@ public static class AecsRuntimeConfigurationResolver
         string evidenceRoot,
         string evidenceRootSource,
         string keyDirectory,
-        string? postgresConnection)
+        string? postgresConnection,
+        bool adaptiveRoutingEnabled,
+        int adaptiveRoutingMinimumReadyRecords,
+        IReadOnlyCollection<RiskLevel> adaptiveRoutingAllowedRisks)
     {
         if (agentMode is not ("local" or "mock"))
             throw new InvalidOperationException("Agent mode must be 'local' or 'mock'.");
@@ -535,6 +613,16 @@ public static class AecsRuntimeConfigurationResolver
             throw new InvalidOperationException(
                 $"PostgreSQL evidence requires the secret environment variable " +
                 $"{PostgreSqlExecutionEvidenceStore.ConnectionStringEnvironmentVariable}.");
+        }
+        if (adaptiveRoutingMinimumReadyRecords < 2)
+        {
+            throw new InvalidOperationException(
+                "Adaptive routing minimum ready records must be at least 2.");
+        }
+        if (adaptiveRoutingEnabled && adaptiveRoutingAllowedRisks.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Adaptive routing requires at least one allowed risk.");
         }
     }
 

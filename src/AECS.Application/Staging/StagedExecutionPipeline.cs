@@ -58,6 +58,7 @@ public sealed class StagedExecutionPipeline
     private readonly ICSharpSymbolGraphBuilder _symbolGraphBuilder;
     private readonly IHistoricalDecisionStore? _historicalDecisionStore;
     private readonly IAdaptiveShadowController? _adaptiveShadowController;
+    private readonly AdaptiveRoutingPolicy _adaptiveRoutingPolicy;
     private readonly ICompiledContextGate? _compiledContextGate;
 
     public StagedExecutionPipeline(
@@ -74,6 +75,7 @@ public sealed class StagedExecutionPipeline
         IHistoricalDecisionStore? historicalDecisionStore = null,
         IExecutionController? executionController = null,
         IAdaptiveShadowController? adaptiveShadowController = null,
+        AdaptiveRoutingPolicy? adaptiveRoutingPolicy = null,
         ICompiledContextGate? compiledContextGate = null)
     {
         _agentAdapter = agentAdapter;
@@ -95,6 +97,7 @@ public sealed class StagedExecutionPipeline
                     evidenceStore,
                     graphSource)
                 : null);
+        _adaptiveRoutingPolicy = adaptiveRoutingPolicy ?? AdaptiveRoutingPolicy.Disabled;
         _compiledContextGate = compiledContextGate;
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
@@ -127,8 +130,14 @@ public sealed class StagedExecutionPipeline
             contract,
             plan,
             cancellationToken);
+        var effectivePlan = AdaptiveRoutingPlanSelector.Select(
+            plan,
+            shadowRecommendation,
+            contract,
+            baseline.RepositoryPath,
+            _adaptiveRoutingPolicy);
         using var budgetScope = new ExecutionBudgetScope(
-            inputContract.Budget,
+            effectivePlan.Budget,
             cancellationToken);
 
         var agentRunId = Guid.NewGuid().ToString("N");
@@ -206,7 +215,7 @@ public sealed class StagedExecutionPipeline
             return await PublishAsync(
                 contract,
                 risk,
-                plan.Model,
+                effectivePlan.Model,
                 shadowRecommendation,
                 baseline,
                 repositorySnapshot,
@@ -256,7 +265,7 @@ public sealed class StagedExecutionPipeline
                 Scope = contract.Scope,
                 Budget = contract.Budget,
                 Risk = risk,
-                Model = plan.Model
+                Model = effectivePlan.Model
             };
             var contextProfile = _agentAdapter.GetContextProfile(baseAgentRequest);
             var compiledContext = _contextCompiler.Compile(
@@ -341,7 +350,7 @@ public sealed class StagedExecutionPipeline
         return await PublishAsync(
             contract,
             risk,
-            plan.Model,
+            effectivePlan.Model,
             shadowRecommendation,
             baseline,
             repositorySnapshot,
