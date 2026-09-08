@@ -12,6 +12,8 @@ revisáveis por alguém que não acompanhou o desenvolvimento.
   `.env`, connection strings e tokens antes da publicação.
 - `pilot-release-notes.template.md`: notas de release, limitações, suporte, rollback e feedback.
 - `pilot-go-no-go-checklist.md`: checklist de aceite operacional antes de publicar.
+- `Test-PilotUpgradePreservation.ps1`: ensaia atualização entre dois diretórios publicados,
+  preservando runtime config, evidence root e keyring fora do repositório.
 - `../../docs/pilot-feedback-triage.md`: canal de feedback, template de bug, redaction e
   responsável por triagem.
 
@@ -32,6 +34,11 @@ revisáveis por alguém que não acompanhou o desenvolvimento.
    piloto de utilidade.
 6. Registre defeitos e achados usando o template `AECS pilot bug report` no GitHub; não publique
    segredos, chaves privadas, `.env`, connection strings ou dumps com memória.
+7. Rode o rehearsal de preservação de upgrade:
+
+   ```powershell
+   pwsh distribution\pilot\Test-PilotUpgradePreservation.ps1 -Version 0.1.0-pilot
+   ```
 
 Não use binários Debug, diretórios locais do desenvolvedor ou evidências sem hash no pacote final.
 O empacotador executa o scan de redaction automaticamente sobre o diretório publicado, ZIP,
