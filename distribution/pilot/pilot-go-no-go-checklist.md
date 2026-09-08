@@ -20,6 +20,7 @@
 - [ ] Instalação testada a partir do ZIP, sem binário Debug.
 - [ ] `aecs doctor --repo <repo> --format json` executado.
 - [ ] Quickstart validado.
+- [ ] `Test-PilotUpgradePreservation.ps1` validou configuração, evidence root e keyring entre diretórios publicados.
 - [ ] Contratos de exemplo parseiam e falham fechado quando inválidos.
 - [ ] Guia `jarvis guide` validado.
 
@@ -44,6 +45,7 @@
 - [ ] `Test-PilotReleaseRedaction.ps1` passou sobre ZIP, manifesto, checksums e pacote publicado.
 - [ ] Conteúdo sem licença de redistribuição excluído.
 - [ ] Backup/restauração de evidências e keyring documentados.
+- [ ] Evidências e configurações do usuário permanecem fora do diretório publicado e sobrevivem à troca de pacote.
 - [ ] Zero defeitos críticos/altos abertos em escopo, orçamento, integridade e promoção.
 - [ ] Exceções menores têm issue, responsável e severidade.
 
