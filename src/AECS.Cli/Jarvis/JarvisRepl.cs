@@ -5,6 +5,7 @@ using AECS.Application.Jarvis;
 using AECS.Application.Parsing;
 using AECS.Application.Promotion;
 using AECS.Application.ProactiveAlerts;
+using AECS.Application.Staging;
 using AECS.Cli.Runtime;
 using AECS.Domain.Enums;
 using AECS.Domain.Interfaces;
@@ -102,6 +103,10 @@ public class JarvisRepl
                 ShowHelp();
                 return false;
 
+            case "guide":
+                ShowGuide();
+                return false;
+
             case "run":
                 await RunTask(argument, ct);
                 return false;
@@ -155,6 +160,7 @@ public class JarvisRepl
     private void ShowHelp()
     {
         Console.WriteLine("Commands:");
+        Console.WriteLine("  guide               Show the guided task/review/promotion flow");
         Console.WriteLine("  run <task-file>     Execute a single task");
         Console.WriteLine("  experiment <dir>    Run experiment on task directory");
         Console.WriteLine("  status [--json]     Show latest persisted execution");
@@ -169,6 +175,53 @@ public class JarvisRepl
         Console.WriteLine("  exit                Quit AECS");
     }
 
+    public static string GuidedFlowText(string repoPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repoPath);
+        return
+            "AECS GUIDED FLOW\n" +
+            $"Repository: {Path.GetFullPath(repoPath)}\n" +
+            "\n" +
+            "1. Preflight\n" +
+            "   aecs doctor --repo <repo> --mock\n" +
+            "   Confirm dotnet, git, Docker/image, evidence store, keyring and provider before a task.\n" +
+            "\n" +
+            "2. Contract\n" +
+            "   Start from tasks/task-001-fix-null.yaml or docs/task-contract.md.\n" +
+            "   Required shape: schema_version, task.id, task.objective, task.scope.allowed.\n" +
+            "   If validation fails, fix the named field before execution; no agent is called.\n" +
+            "\n" +
+            "3. Execute\n" +
+            "   aecs> run <task-file>\n" +
+            "   Jarvis reports phases, attempts, budget usage, decision reason and authenticated evidence.\n" +
+            "   A partial or interrupted operation is never presented as final success.\n" +
+            "\n" +
+            "4. Inspect after restart\n" +
+            "   aecs> status\n" +
+            "   aecs> history --task <task-id>\n" +
+            "   aecs> explain --evidence <evidence-id>\n" +
+            "   aecs> context --evidence <evidence-id>\n" +
+            "   These commands read persisted authenticated facts instead of reconstructing from memory.\n" +
+            "\n" +
+            "5. Review or export\n" +
+            "   aecs> review <evidence-id> --policy <policy-ref>\n" +
+            "   aecs> export-patch <evidence-id> <outside-repo.patch>\n" +
+            "   Review shows diff, gates, acceptance criteria, decision reason, baseline and diff hash.\n" +
+            "\n" +
+            "6. Promote\n" +
+            "   Approval only records a signed review event. Promotion still requires the exact literal\n" +
+            "   PROMOTE <diff-hash> and revalidates evidence, baseline, checkout and repository path.\n" +
+            "   Approval never grants extra agent permissions.\n" +
+            "\n" +
+            "Outcome language\n" +
+            "   code rejected: deterministic gates or policy rejected the candidate.\n" +
+            "   infrastructure failed: a required dependency/store/process failed closed.\n" +
+            "   cancelled/interrupted: operator or process stopped the run; inspect durable status.\n" +
+            "   human review pending: candidate is authenticated but needs explicit human decision.\n";
+    }
+
+    private void ShowGuide() => Console.Write(GuidedFlowText(_repoPath));
+
     private async Task RunTask(string taskFile, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(taskFile))
@@ -177,14 +230,89 @@ public class JarvisRepl
             return;
         }
 
-        var contract = _parser.ParseFromFile(taskFile);
+        TaskContract contract;
+        try
+        {
+            contract = _parser.ParseFromFile(taskFile);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine("TaskContract validation failed before execution.");
+            Console.WriteLine($"Field/problem: {ex.Message}");
+            Console.WriteLine(
+                "Correction: edit the named field in the contract and keep schema_version, " +
+                "task.id, task.objective and task.scope.allowed valid before retrying.");
+            return;
+        }
+
+        Console.WriteLine("AECS GUIDED TASK RUN");
+        Console.WriteLine($"Phase: preflight/contract — valid TaskContract {contract.Id}");
+        Console.WriteLine($"Phase: staged execution — starting with repository {_repoPath}");
         var execution = await _runtime.CreatePipeline().RunAsync(_repoPath, contract, ct);
 
-        Console.WriteLine($"Decision: {execution.Decision.Decision}");
-        Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
-        Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
-        Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
+        PrintGuidedExecutionSummary(execution);
         await EvaluateConfiguredAlerts(ct);
+    }
+
+    private static void PrintGuidedExecutionSummary(StagedExecutionResult execution)
+    {
+        Console.WriteLine("Phase: baseline verification");
+        PrintPhaseGates(execution.BaselineVerificationResults);
+        Console.WriteLine("Phase: candidate generation");
+        foreach (var attempt in execution.AgentAttempts)
+        {
+            var retry = attempt.WillRetry
+                ? $" retry in {attempt.RetryDelay?.TotalSeconds:F1}s"
+                : string.Empty;
+            Console.WriteLine(
+                $"  attempt #{attempt.AttemptNumber}: {attempt.FailureKind}; " +
+                $"tokens={attempt.InputTokens + attempt.OutputTokens}; " +
+                $"cost=${attempt.EstimatedCost:F4}{retry}; reason={attempt.DecisionReason}");
+        }
+        if (execution.AgentAttempts.Count == 0)
+            Console.WriteLine("  agent not called");
+        Console.WriteLine("Phase: candidate verification");
+        PrintPhaseGates(execution.VerificationResults);
+        Console.WriteLine("Phase: decision");
+        Console.WriteLine($"Decision: {execution.Decision.Decision}");
+        Console.WriteLine($"State: {execution.Decision.TargetState}");
+        Console.WriteLine($"Reason: {execution.Decision.Reason}");
+        Console.WriteLine(
+            $"Budget: attempts {execution.BudgetUsage.AttemptsUsed}/{execution.BudgetUsage.MaximumAttempts}, " +
+            $"tokens {execution.BudgetUsage.InputTokens + execution.BudgetUsage.OutputTokens}, " +
+            $"wall-clock {execution.BudgetUsage.WallClockElapsed.TotalSeconds:F1}/" +
+            $"{execution.BudgetUsage.WallClockLimitSeconds}s, " +
+            $"cost ${execution.BudgetUsage.EstimatedCost:F4}");
+        Console.WriteLine($"Candidate: {execution.CandidateChangeSet.Id:N}");
+        Console.WriteLine($"Diff hash: {execution.CandidateChangeSet.DiffHash}");
+        Console.WriteLine("Changed files:");
+        foreach (var file in execution.CandidateChangeSet.ChangedFiles)
+            Console.WriteLine($"  {file}");
+        if (execution.CandidateChangeSet.ChangedFiles.Count == 0)
+            Console.WriteLine("  (none)");
+        Console.WriteLine("Acceptance evidence:");
+        foreach (var criterion in execution.AcceptanceCriteriaResults)
+        {
+            var reference = string.IsNullOrWhiteSpace(criterion.EvidenceReference)
+                ? "missing"
+                : $"{criterion.EvidenceType}:{criterion.EvidenceReference}";
+            Console.WriteLine(
+                $"  {criterion.CriterionId}: {criterion.Status} {reference} — {criterion.Description}");
+        }
+        if (execution.AcceptanceCriteriaResults.Count == 0)
+            Console.WriteLine("  (none declared)");
+        Console.WriteLine($"Original repository unchanged: {execution.OriginalRepositoryUnchanged}");
+        Console.WriteLine($"Evidence ID: {execution.EvidenceId:N}");
+        Console.WriteLine($"Evidence: {execution.EvidenceLocation}");
+        Console.WriteLine("Next: use status/history/explain/context, then review or export-patch.");
+    }
+
+    private static void PrintPhaseGates(IReadOnlyCollection<VerificationResult> results)
+    {
+        foreach (var result in results)
+            Console.WriteLine($"  {result.Verifier}: {result.Status} — {result.Message}");
+        if (results.Count == 0)
+            Console.WriteLine("  (not required)");
     }
 
     private async Task RunExperiment(string tasksDir, CancellationToken ct)

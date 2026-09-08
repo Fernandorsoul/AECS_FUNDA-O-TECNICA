@@ -1,5 +1,6 @@
 using AECS.Application;
 using AECS.Application.Classification;
+using AECS.Cli.Jarvis;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 using FluentAssertions;
@@ -102,5 +103,33 @@ public class JarvisCommandTests
 
         history.Should().HaveCount(2);
         history.Should().Contain("TASK-001: VERIFIED");
+    }
+
+    [Fact]
+    public void GuideCommand_DescribesCompleteTaskReviewPromotionFlow()
+    {
+        var text = JarvisRepl.GuidedFlowText(Environment.CurrentDirectory);
+
+        text.Should().Contain("AECS GUIDED FLOW");
+        text.Should().Contain("aecs doctor --repo <repo> --mock");
+        text.Should().Contain("aecs> run <task-file>");
+        text.Should().Contain("aecs> explain --evidence <evidence-id>");
+        text.Should().Contain("aecs> review <evidence-id> --policy <policy-ref>");
+        text.Should().Contain("aecs> export-patch <evidence-id> <outside-repo.patch>");
+        text.Should().Contain("PROMOTE <diff-hash>");
+    }
+
+    [Fact]
+    public void GuideCommand_DocumentsTrustBoundariesAndOutcomeLanguage()
+    {
+        var text = JarvisRepl.GuidedFlowText(Environment.CurrentDirectory);
+
+        text.Should().Contain("no agent is called");
+        text.Should().Contain("never presented as final success");
+        text.Should().Contain("Approval never grants extra agent permissions");
+        text.Should().Contain("code rejected");
+        text.Should().Contain("infrastructure failed");
+        text.Should().Contain("cancelled/interrupted");
+        text.Should().Contain("human review pending");
     }
 }
