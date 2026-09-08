@@ -59,6 +59,8 @@ Consulte [Arquitetura atual](docs/architecture.md) para separar os componentes j
 
 A entrega piloto é controlada por uma baseline própria em [Baseline da entrega piloto AECS](docs/pilot-delivery-baseline.md), que fixa o SHA inicial, o escopo C#/.NET, as limitações e as issues que bloqueiam o release.
 
+Instalação, atualização, desinstalação e diagnóstico de pré-requisitos ficam em [Instalação e diagnóstico](docs/installation-and-diagnostics.md). Use `aecs doctor --repo . --mock` para checar o ambiente antes de executar uma tarefa.
+
 ## Pré-requisitos
 
 - [.NET 10 SDK LTS estável](https://dotnet.microsoft.com/download/dotnet/10.0), selecionado por `global.json` sem aceitar previews;
@@ -412,6 +414,7 @@ A referência de campos, schema estrito, fingerprint, capabilities preventivas, 
 | Replay | `replay --repo <path> --evidence <id> --evidence-store <json\|postgres>` | Reproduz candidato e gates sem chamar o agente |
 | Evidence Graph | `evidence <show\|list\|trace> --repo <path> [--evidence <id>] [--format <text\|json\|dot>]` | Consulta e exporta causalidade autenticada |
 | Adaptive report | `adaptive-report --repo <path> [--limit <1-500>] [--format <text\|json>]` | Avalia recomendações shadow offline por risco e tipo de tarefa |
+| Diagnóstico | `doctor --repo <path> [--format <text\|json>]` | Verifica pré-requisitos antes de chamar modelo ou executar tarefa |
 | Rotação de chave | `evidence-key rotate [--runtime-config <file>] [--key-directory <path>]` | Gera nova chave ativa e preserva as chaves públicas históricas |
 
 Comandos disponíveis dentro do Jarvis:
