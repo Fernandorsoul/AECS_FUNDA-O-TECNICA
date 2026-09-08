@@ -69,6 +69,8 @@ O roteiro operacional para conduzir uma tarefa pelo CLI/Jarvis está em [Fluxo g
 
 O protocolo do piloto de utilidade com 10 tarefas reais fica em [Piloto de utilidade](pilot/utility-validation/README.md) e valida que provider real, revisor independente, métricas e evidências foram registrados antes do aceite.
 
+A preparação do release versionado está em [Release piloto](distribution/pilot/README.md), incluindo geração de pacote, checksums, inventário, notas e checklist go/no-go.
+
 ## Pré-requisitos
 
 - [.NET 10 SDK LTS estável](https://dotnet.microsoft.com/download/dotnet/10.0), selecionado por `global.json` sem aceitar previews;
@@ -458,6 +460,7 @@ docs/
 └── adr/                  # Registros de decisões arquiteturais
 tasks/                    # TaskContracts de exemplo e de experimento
 pilot/                   # Protocolos operacionais de validação do piloto
+distribution/            # Empacotamento, notas e checklist do release piloto
 ```
 
 ## Documentação
@@ -476,6 +479,7 @@ pilot/                   # Protocolos operacionais de validação do piloto
 - [Histórico durável do Jarvis](docs/jarvis-durable-history.md) — consultas, explicações rastreáveis, autorização e formatos humano/JSON;
 - [Fluxo guiado CLI/Jarvis](docs/guided-cli-flow.md) — sequência operacional de tarefa, revisão, exportação e promoção;
 - [Piloto de utilidade](pilot/utility-validation/README.md) — protocolo, manifesto e relatório para 10 tarefas reais revisadas;
+- [Release piloto](distribution/pilot/README.md) — pacote versionado, checksums, notas e go/no-go;
 - [Runtime compartilhado](docs/runtime-configuration.md) — schema, precedência, fallback, redação de segredos e trust boundaries;
 - [Cliente VS Code](docs/vscode-client.md) — instalação, protocolo local autenticado, retomada e modelo de ameaças;
 - [Alertas proativos](docs/proactive-alerts.md) — política, severidade, cooldown, privacidade, lifecycle e critério de morte;
