@@ -1,0 +1,47 @@
+{
+  "schema_version": "aecs.pilot-utility/v1",
+  "pilot": {
+    "id": "AECS-PILOT-UTILITY-001",
+    "owner": "responsavel@example.com",
+    "frozen_at": "2026-09-08T00:00:00Z",
+    "registration_sha256": "sha256:replace-after-freeze",
+    "decision": "pending",
+    "limitations": [
+      "Amostra pequena; resultados não inferem benefício adaptativo."
+    ]
+  },
+  "runtime": {
+    "provider_mode": "local",
+    "provider_name": "ollama",
+    "model": "qwen2.5-coder:14b",
+    "sdk": "10.0.x",
+    "docker_image": "mcr.microsoft.com/dotnet/sdk:10.0@sha256:4beef5b8919dcaa2dc924233bd069257e883cc7a061e09088a97d152d6a48510",
+    "hardware": "preencher CPU/RAM/GPU",
+    "context_window_tokens": 32768,
+    "max_retries": 1,
+    "timeout_seconds": 120,
+    "minimum_memory_mb": 8192,
+    "max_cost_usd_per_task": 0.20,
+    "max_cost_usd_total": 5.00,
+    "interruption_conditions": [
+      "Docker/provider indisponível por mais de duas tarefas consecutivas",
+      "Custo estimado acumulado acima do teto pré-registrado",
+      "Falha que impeça persistência de evidência parcial"
+    ]
+  },
+  "acceptance_thresholds": {
+    "minimum_vcc_rate": 0.40,
+    "maximum_infrastructure_failure_rate": 0.20,
+    "maximum_median_review_minutes": 10,
+    "required_independent_reviewers": 1,
+    "required_promoted_changes": 1
+  },
+  "independent_reviewers": [
+    {
+      "id": "reviewer-001",
+      "relationship": "não implementou o fluxo",
+      "confirmed_independent": true
+    }
+  ],
+  "tasks": []
+}
