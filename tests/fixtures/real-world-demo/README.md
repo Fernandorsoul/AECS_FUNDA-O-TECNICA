@@ -5,7 +5,7 @@ Este fixture é um recorte curado e compilável do repositório real AgronomoPlu
 ## Proveniência e isolamento
 
 - revisão de origem: `ecbbcac`, da branch local `desenvolvimento`;
-- runtime: .NET 9, selecionado pelo `global.json` do fixture;
+- runtime: .NET 10, selecionado pelo `global.json` do fixture;
 - `repository/`: snapshot sem `.git`, copiado para um diretório temporário e inicializado como novo repositório Git em cada cenário;
 - `candidates/`: respostas determinísticas no mesmo protocolo `FILE:` usado pelos agentes;
 - `expected-results.json`: oráculo versionado de decisão, estado, arquivos alterados e gates esperados.
@@ -17,6 +17,7 @@ O diretório versionado nunca é usado diretamente como alvo. O fixture não con
 | Cenário | Resultado esperado | O que comprova |
 | --- | --- | --- |
 | `agro-001-valid` | `Verified` | baseline verde, contexto do worktree, mudança de handler e teste, build/testes do candidato e dois testes de aceite filtrados |
+| `agro-002-failing-tests` | `Rejected` | uma mudança dentro do escopo pode compilar, mas continua inelegível quando testes obrigatórios falham |
 | `agro-003-adversarial-scope` | `Rejected` | Git detecta escrita em Infrastructure apesar da alegação do agente; `Scope` bloqueia e os gates posteriores não legitimam o candidato |
 | promoção de AGRO-001 | `Promoted` | uma política referenciada aplica exatamente o diff verificado e o deixa staged com auditoria persistida |
 
@@ -42,6 +43,6 @@ Uma mudança no snapshot, contrato ou candidato deve atualizar conscientemente `
 
 1. execução offline e determinística;
 2. baseline compilável antes do agente;
-3. ao menos um caso verificado e um caso adversarial rejeitado;
+3. ao menos um caso verificado, uma rejeição por teste obrigatório e um caso adversarial rejeitado;
 4. caminhos de escopo e filtros de teste correspondentes ao projeto versionado;
 5. ausência de `.git`, credenciais e outputs gerados no fixture fonte.

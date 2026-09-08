@@ -61,6 +61,8 @@ A entrega piloto é controlada por uma baseline própria em [Baseline da entrega
 
 Instalação, atualização, desinstalação e diagnóstico de pré-requisitos ficam em [Instalação e diagnóstico](docs/installation-and-diagnostics.md). Use `aecs doctor --repo . --mock` para checar o ambiente antes de executar uma tarefa.
 
+A demonstração reproduzível do fluxo completo está em [Demonstração real reproduzível](docs/real-world-demo.md) e pode ser executada por `.\demos\Run-RealWorldDemo.ps1`.
+
 ## Pré-requisitos
 
 - [.NET 10 SDK LTS estável](https://dotnet.microsoft.com/download/dotnet/10.0), selecionado por `global.json` sem aceitar previews;
