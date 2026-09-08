@@ -72,7 +72,7 @@ try {
         } finally { Pop-Location }
 
         $originalPin = Get-Content (Join-Path $fixture 'global.json') -Raw
-        Assert-Throws { Set-AecsExperimentSdkPin -FixtureRoot $fixture -SdkVersion '9.0.100' } 'existing fixture SDK policy'
+        Assert-Throws { Set-AecsExperimentSdkPin -FixtureRoot $fixture -SdkVersion '10.0.100' } 'existing fixture SDK policy'
         Assert-Condition ((Get-Content (Join-Path $fixture 'global.json') -Raw) -ceq $originalPin) 'Existing pin was overwritten.'
     }
     Assert-EnvironmentRestored
@@ -86,8 +86,8 @@ try {
     Assert-EnvironmentRestored
     Write-Output 'PASS: environment restored after experiment failure.'
 
-    foreach ($version in @('10.0.100', '9.0.100-preview.1', 'invalid')) {
-        Assert-Throws { Set-AecsExperimentSdkPin -FixtureRoot $temporaryRoot -SdkVersion $version } 'exact stable .NET 9'
+    foreach ($version in @('9.0.100', '10.0.100-preview.1', 'invalid')) {
+        Assert-Throws { Set-AecsExperimentSdkPin -FixtureRoot $temporaryRoot -SdkVersion $version } 'exact stable .NET 10'
     }
     Write-Output 'PASS: preview, other major and malformed SDK pins rejected.'
 

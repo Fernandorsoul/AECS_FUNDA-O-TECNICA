@@ -25,7 +25,7 @@ public sealed class DockerSandboxTests : IDisposable
             new ProcessExecutionResult
             {
                 ExitCode = 0,
-                StandardOutput = "9.0.100",
+                StandardOutput = "10.0.400",
                 Duration = TimeSpan.FromMilliseconds(25)
             },
             new ProcessExecutionResult { ExitCode = 1 });
@@ -74,7 +74,7 @@ public sealed class DockerSandboxTests : IDisposable
         {
             Runtime = "docker",
             RuntimeVersion = "29.1.2",
-            Image = "mcr.microsoft.com/dotnet/sdk:9.0",
+            Image = "mcr.microsoft.com/dotnet/sdk:10.0",
             ImageDigest = SandboxExecutionProfile.DefaultImage.Split('@')[1],
             NetworkMode = "none",
             CpuLimit = "0.75",

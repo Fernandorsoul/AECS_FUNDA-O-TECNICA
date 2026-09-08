@@ -491,7 +491,7 @@ public sealed class DockerSandboxE2ETests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                   <ItemGroup>
@@ -535,7 +535,7 @@ public sealed class DockerSandboxE2ETests
             await File.WriteAllTextAsync(path, $"""
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                   </PropertyGroup>
                   <Target Name="WriteSyntheticTrx" BeforeTargets="VSTest">
                     <MakeDir Directories="$(VSTestResultsDirectory)" />

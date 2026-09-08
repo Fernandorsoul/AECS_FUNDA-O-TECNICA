@@ -26,13 +26,13 @@ function Invoke-AecsExperimentToolchain {
             throw 'The selected dotnet cannot resolve the repository SDK policy.'
         }
         $sdkVersion = ($versionOutput -join "`n").Trim()
-        if ($sdkVersion -notmatch '^9\.0\.\d+$') {
-            throw "A stable .NET 9 SDK is required; resolved '$sdkVersion'."
+        if ($sdkVersion -notmatch '^10\.0\.\d+$') {
+            throw "A stable .NET 10 SDK is required; resolved '$sdkVersion'."
         }
         $runtimes = @(& $executable --list-runtimes)
         if ($LASTEXITCODE -ne 0 -or
-            -not ($runtimes -match '^Microsoft\.NETCore\.App 8\.0\.\d+ \[')) {
-            throw 'The selected dotnet installation must contain a stable .NET 8 runtime.'
+            -not ($runtimes -match '^Microsoft\.NETCore\.App 10\.0\.\d+ \[')) {
+            throw 'The selected dotnet installation must contain a stable .NET 10 runtime.'
         }
         & $Action ([pscustomobject]@{
             dotnetPath = $executable
@@ -59,8 +59,8 @@ function Set-AecsExperimentSdkPin {
         [Parameter(Mandatory)][string] $SdkVersion
     )
 
-    if ($SdkVersion -notmatch '^9\.0\.\d+$') {
-        throw 'The fixture requires an exact stable .NET 9 SDK version.'
+    if ($SdkVersion -notmatch '^10\.0\.\d+$') {
+        throw 'The fixture requires an exact stable .NET 10 SDK version.'
     }
     $pinPath = Join-Path $FixtureRoot 'global.json'
     if (Test-Path -LiteralPath $pinPath) {

@@ -54,8 +54,8 @@ capabilities, gates ou promoção da execução operacional fixa.
 
 ## Limitações declaradas
 
-- A matriz vigente ainda usa projetos `net8.0`, SDK .NET 9 estável e runtime .NET 8; a migração para
-  .NET 10 LTS é obrigatória antes do release piloto final.
+- A baseline #95 iniciou em projetos `net8.0` e SDK .NET 9; a issue #96 migra produto, CI e sandbox
+  para .NET 10 LTS antes do release piloto final.
 - A baseline é de protótipo experimental, não de produto pronto para produção.
 - `Verified` comprova apenas o contrato e os gates executados; não prova requisitos que não foram
   declarados no contrato.
@@ -109,4 +109,3 @@ O release piloto só deve ser versionado quando:
 4. falhas críticas, corrupção de evidência, timeout, orçamento e divergência de baseline tiverem
    testes ou relatórios publicados;
 5. limitações residuais estiverem explícitas no release notes.
-
