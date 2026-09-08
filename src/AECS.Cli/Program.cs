@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -55,8 +57,384 @@ else if (command == "history")
     return await RunHistory(args[1..]);
 else if (command == "adaptive-report")
     return await RunAdaptiveReport(args[1..]);
+else if (command == "doctor")
+    return await RunDoctor(args[1..]);
 else
     return await RunSingle(args);
+
+static async Task<int> RunDoctor(string[] args)
+{
+    const string usage =
+        "Usage: aecs doctor [--repo <path>] [--format <text|json>] " +
+        RuntimeCliOptions.Usage;
+    string? repositoryPath = null;
+    var format = "text";
+    var runtimeOptions = new RuntimeCliOptions();
+    var invalidArgument = false;
+
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--repo" && index + 1 < args.Length)
+            repositoryPath = args[++index];
+        else if (args[index] == "--format" && index + 1 < args.Length)
+            format = args[++index];
+        else if (runtimeOptions.TryConsume(args, ref index))
+        {
+        }
+        else
+            invalidArgument = true;
+    }
+
+    if (invalidArgument || format is not ("text" or "json"))
+    {
+        Console.WriteLine(usage);
+        return 1;
+    }
+
+    var checks = new List<DoctorCheck>();
+    ResolvedAecsRuntimeConfiguration? resolved = null;
+    try
+    {
+        resolved = AecsRuntimeConfigurationResolver.Resolve(runtimeOptions);
+        checks.Add(DoctorCheck.Ready(
+            "runtime-config",
+            "Runtime configuration resolved with secrets redacted."));
+    }
+    catch (Exception ex)
+    {
+        checks.Add(DoctorCheck.ConfigurationInvalid(
+            "runtime-config",
+            $"Runtime configuration failed closed: {ex.Message}"));
+    }
+
+    await AddDotnetCheckAsync(checks);
+    await AddProcessCheckAsync(checks, "git", "git", ["--version"], required: true);
+
+    if (!string.IsNullOrWhiteSpace(repositoryPath))
+    {
+        var fullPath = Path.GetFullPath(repositoryPath);
+        checks.Add(Directory.Exists(fullPath)
+            ? DoctorCheck.Ready("repository", $"Repository path exists: {fullPath}")
+            : DoctorCheck.DependencyAbsent("repository", $"Repository path does not exist: {fullPath}"));
+        if (Directory.Exists(fullPath))
+            await AddProcessCheckAsync(
+                checks,
+                "repository-git",
+                "git",
+                ["-C", fullPath, "rev-parse", "--show-toplevel"],
+                required: true);
+    }
+
+    if (resolved is not null)
+    {
+        var configuration = resolved.Effective;
+        AddWritableDirectoryCheck(
+            checks,
+            "evidence-keys",
+            configuration.EvidenceKeyDirectory.Value,
+            required: true);
+
+        if (configuration.EvidenceBackend.Value == "json")
+        {
+            AddWritableDirectoryCheck(
+                checks,
+                "evidence-json",
+                configuration.EvidenceJsonRoot.Value,
+                required: true);
+        }
+        else if (configuration.EvidenceBackend.Value == "postgres")
+        {
+            checks.Add(configuration.PostgreSqlConnection.Configured
+                ? DoctorCheck.Ready("evidence-postgres", "PostgreSQL connection string is configured and redacted.")
+                : DoctorCheck.ConfigurationInvalid("evidence-postgres", "PostgreSQL evidence store requires a configured connection string."));
+        }
+
+        await AddDockerCheckAsync(checks);
+        await AddDockerImageCheckAsync(checks, SandboxExecutionProfile.DefaultImage);
+
+        if (configuration.AgentMode.Value == "mock")
+        {
+            checks.Add(DoctorCheck.Ready("provider", "Mock provider selected; no model service required."));
+        }
+        else
+        {
+            await AddOllamaCheckAsync(checks, configuration.OllamaBaseUrl.Value);
+        }
+
+        checks.Add(configuration.CloudFallbackEnabled.Value
+            ? configuration.CloudCredential.Configured && configuration.CloudRepositoryContextAllowed.Value
+                ? DoctorCheck.Ready("cloud-fallback", "Cloud fallback is enabled with credential present and repository context allowed.")
+                : DoctorCheck.ConfigurationInvalid("cloud-fallback", "Cloud fallback is enabled but credential or repository-context consent is missing.")
+            : DoctorCheck.Ready("cloud-fallback", "Cloud fallback is disabled by policy."));
+    }
+
+    var summary = SummaryStatus(checks);
+
+    if (format == "json")
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            schemaVersion = "aecs.doctor/v1",
+            status = summary,
+            checks = checks.Select(check => new
+            {
+                check.Id,
+                status = StatusCode(check.Status),
+                required = check.Required,
+                check.Message
+            })
+        }, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        }));
+    }
+    else
+    {
+        Console.WriteLine($"AECS DOCTOR: {summary}");
+        foreach (var check in checks)
+        {
+            var requirement = check.Required ? "required" : "optional";
+            Console.WriteLine(
+                $"  {check.Id.PadRight(18)} {StatusCode(check.Status),-24} {requirement}  {check.Message}");
+        }
+    }
+
+    return summary == "ready" ? 0 : 1;
+}
+
+static async Task AddDotnetCheckAsync(List<DoctorCheck> checks)
+{
+    var result = await RunDiagnosticProcessAsync("dotnet", ["--version"]);
+    if (!result.Started)
+    {
+        checks.Add(DoctorCheck.DependencyAbsent("dotnet", "dotnet executable was not found."));
+        return;
+    }
+
+    var version = result.StandardOutput.Trim();
+    if (!result.Succeeded || string.IsNullOrWhiteSpace(version))
+    {
+        checks.Add(DoctorCheck.ServiceUnavailable(
+            "dotnet",
+            $"dotnet --version failed: {ShortDiagnostic(result)}"));
+        return;
+    }
+
+    checks.Add(version.StartsWith("10.0.", StringComparison.Ordinal) &&
+        !version.Contains("preview", StringComparison.OrdinalIgnoreCase)
+        ? DoctorCheck.Ready("dotnet", $"Stable .NET 10 SDK resolved: {version}.")
+        : DoctorCheck.ConfigurationInvalid("dotnet", $"Expected stable .NET 10 SDK, resolved '{version}'."));
+}
+
+static async Task AddProcessCheckAsync(
+    List<DoctorCheck> checks,
+    string id,
+    string fileName,
+    IReadOnlyList<string> arguments,
+    bool required)
+{
+    var result = await RunDiagnosticProcessAsync(fileName, arguments);
+    if (!result.Started)
+    {
+        checks.Add(DoctorCheck.DependencyAbsent(id, $"{fileName} executable was not found.", required));
+        return;
+    }
+
+    checks.Add(result.Succeeded
+        ? DoctorCheck.Ready(id, FirstLine(result.StandardOutput), required)
+        : DoctorCheck.ServiceUnavailable(id, ShortDiagnostic(result), required));
+}
+
+static async Task AddDockerCheckAsync(List<DoctorCheck> checks)
+{
+    await AddProcessCheckAsync(
+        checks,
+        "docker",
+        "docker",
+        ["version", "--format", "{{.Server.Version}}"],
+        required: true);
+}
+
+static async Task AddDockerImageCheckAsync(
+    List<DoctorCheck> checks,
+    string image)
+{
+    var result = await RunDiagnosticProcessAsync(
+        "docker",
+        ["image", "inspect", image, "--format", "{{index .RepoDigests 0}}"]);
+    if (!result.Started)
+    {
+        checks.Add(DoctorCheck.DependencyAbsent(
+            "docker-image",
+            "Docker executable was not found; staged image was not inspected.",
+            required: true));
+        return;
+    }
+
+    checks.Add(result.Succeeded
+        ? DoctorCheck.Ready("docker-image", $"Pinned staged image is present: {FirstLine(result.StandardOutput)}")
+        : DoctorCheck.ServiceUnavailable("docker-image", $"Pinned staged image is unavailable locally: {ShortDiagnostic(result)}"));
+}
+
+static async Task AddOllamaCheckAsync(List<DoctorCheck> checks, string baseUrl)
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+    try
+    {
+        var endpoint = new Uri(new Uri(baseUrl.TrimEnd('/') + "/"), "api/tags");
+        using var response = await client.GetAsync(endpoint);
+        if (!response.IsSuccessStatusCode)
+        {
+            checks.Add(DoctorCheck.ServiceUnavailable(
+                "provider",
+                $"Ollama endpoint returned HTTP {(int)response.StatusCode}.",
+                required: true));
+            return;
+        }
+
+        var body = await response.Content.ReadAsStringAsync();
+        var hasR0R1 = body.Contains("qwen2.5-coder:7b", StringComparison.OrdinalIgnoreCase);
+        var hasR2Plus = body.Contains("qwen2.5-coder:14b", StringComparison.OrdinalIgnoreCase);
+        if (hasR0R1 && hasR2Plus)
+        {
+            checks.Add(DoctorCheck.Ready("provider", "Ollama is reachable and required AECS models are listed."));
+        }
+        else
+        {
+            checks.Add(DoctorCheck.DependencyAbsent(
+                "provider",
+                "Ollama is reachable, but qwen2.5-coder:7b and/or qwen2.5-coder:14b were not listed.",
+                required: true));
+        }
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException)
+    {
+        checks.Add(DoctorCheck.ServiceUnavailable(
+            "provider",
+            $"Ollama endpoint is unavailable: {ex.Message}",
+            required: true));
+    }
+}
+
+static void AddWritableDirectoryCheck(
+    List<DoctorCheck> checks,
+    string id,
+    string path,
+    bool required)
+{
+    try
+    {
+        var fullPath = Path.GetFullPath(path);
+        var probeDirectory = Directory.Exists(fullPath)
+            ? fullPath
+            : Directory.GetParent(fullPath)?.FullName;
+        if (probeDirectory is null || !Directory.Exists(probeDirectory))
+        {
+            checks.Add(DoctorCheck.ConfigurationInvalid(
+                id,
+                $"Directory or parent does not exist: {fullPath}",
+                required));
+            return;
+        }
+
+        var probe = Path.Combine(probeDirectory, $".aecs-doctor-{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(probe, "probe");
+        File.Delete(probe);
+        checks.Add(DoctorCheck.Ready(id, $"Writable path available: {fullPath}", required));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+    {
+        checks.Add(DoctorCheck.ConfigurationInvalid(
+            id,
+            $"Path is not writable: {ex.Message}",
+            required));
+    }
+}
+
+static async Task<DiagnosticProcessResult> RunDiagnosticProcessAsync(
+    string fileName,
+    IReadOnlyList<string> arguments)
+{
+    try
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in arguments)
+            process.StartInfo.ArgumentList.Add(argument);
+        if (!process.Start())
+            return DiagnosticProcessResult.NotStarted();
+
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!await Task.Run(() => process.WaitForExit(3000)))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            return new DiagnosticProcessResult(true, false, -1, await stdout, await stderr, TimedOut: true);
+        }
+
+        return new DiagnosticProcessResult(
+            true,
+            process.ExitCode == 0,
+            process.ExitCode,
+            await stdout,
+            await stderr,
+            TimedOut: false);
+    }
+    catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+    {
+        return DiagnosticProcessResult.NotStarted();
+    }
+}
+
+static string StatusCode(DoctorStatus status) => status switch
+{
+    DoctorStatus.Ready => "ready",
+    DoctorStatus.DependencyAbsent => "dependency_absent",
+    DoctorStatus.ConfigurationInvalid => "configuration_invalid",
+    DoctorStatus.ServiceUnavailable => "service_unavailable",
+    _ => "configuration_invalid"
+};
+
+static string SummaryStatus(IEnumerable<DoctorCheck> checks)
+{
+    var failing = checks
+        .Where(check => check.Required && check.Status != DoctorStatus.Ready)
+        .Select(check => check.Status)
+        .ToHashSet();
+    if (failing.Contains(DoctorStatus.ConfigurationInvalid))
+        return "configuration_invalid";
+    if (failing.Contains(DoctorStatus.DependencyAbsent))
+        return "dependency_absent";
+    if (failing.Contains(DoctorStatus.ServiceUnavailable))
+        return "service_unavailable";
+    return "ready";
+}
+
+static string FirstLine(string value)
+{
+    var line = value.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .FirstOrDefault();
+    return string.IsNullOrWhiteSpace(line) ? "command completed" : line;
+}
+
+static string ShortDiagnostic(DiagnosticProcessResult result)
+{
+    if (result.TimedOut)
+        return "command timed out";
+    var text = FirstLine(result.StandardError);
+    if (text == "command completed")
+        text = FirstLine(result.StandardOutput);
+    return $"{text} (exit {result.ExitCode})";
+}
 
 static async Task<int> RunAdaptiveReport(string[] args)
 {
@@ -1132,6 +1510,9 @@ static async Task<int> RunSingle(string[] args)
             "       aecs adaptive-report --repo <path> [--limit <1-500>] " +
             "[--format <text|json>] " + EvidenceStoreSelection.Usage);
         Console.WriteLine(
+            "       aecs doctor [--repo <path>] [--format <text|json>] " +
+            RuntimeCliOptions.Usage);
+        Console.WriteLine(
             "       aecs evidence-key rotate [--runtime-config <config.json>] " +
             "[--key-directory <path>]");
         return 1;
@@ -1611,4 +1992,52 @@ static void LoadEnvFromFile(string path)
             Environment.SetEnvironmentVariable(key, value);
         }
     }
+}
+
+internal enum DoctorStatus
+{
+    Ready,
+    DependencyAbsent,
+    ConfigurationInvalid,
+    ServiceUnavailable
+}
+
+internal sealed record DoctorCheck(
+    string Id,
+    DoctorStatus Status,
+    bool Required,
+    string Message)
+{
+    public static DoctorCheck Ready(string id, string message, bool required = true) =>
+        new(id, DoctorStatus.Ready, required, message);
+
+    public static DoctorCheck DependencyAbsent(
+        string id,
+        string message,
+        bool required = true) =>
+        new(id, DoctorStatus.DependencyAbsent, required, message);
+
+    public static DoctorCheck ConfigurationInvalid(
+        string id,
+        string message,
+        bool required = true) =>
+        new(id, DoctorStatus.ConfigurationInvalid, required, message);
+
+    public static DoctorCheck ServiceUnavailable(
+        string id,
+        string message,
+        bool required = true) =>
+        new(id, DoctorStatus.ServiceUnavailable, required, message);
+}
+
+internal sealed record DiagnosticProcessResult(
+    bool Started,
+    bool Succeeded,
+    int ExitCode,
+    string StandardOutput,
+    string StandardError,
+    bool TimedOut)
+{
+    public static DiagnosticProcessResult NotStarted() =>
+        new(false, false, -1, string.Empty, string.Empty, TimedOut: false);
 }
