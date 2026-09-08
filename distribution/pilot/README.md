@@ -8,6 +8,8 @@ revisáveis por alguém que não acompanhou o desenvolvimento.
 ## Arquivos
 
 - `Create-PilotReleasePackage.ps1`: gera pacote versionado da CLI a partir do `HEAD` atual.
+- `Test-PilotReleaseRedaction.ps1`: verifica nomes/conteúdo de artefatos para segredos, chaves,
+  `.env`, connection strings e tokens antes da publicação.
 - `pilot-release-notes.template.md`: notas de release, limitações, suporte, rollback e feedback.
 - `pilot-go-no-go-checklist.md`: checklist de aceite operacional antes de publicar.
 - `../../docs/pilot-feedback-triage.md`: canal de feedback, template de bug, redaction e
@@ -32,3 +34,5 @@ revisáveis por alguém que não acompanhou o desenvolvimento.
    segredos, chaves privadas, `.env`, connection strings ou dumps com memória.
 
 Não use binários Debug, diretórios locais do desenvolvedor ou evidências sem hash no pacote final.
+O empacotador executa o scan de redaction automaticamente sobre o diretório publicado, ZIP,
+manifesto e checksums.

@@ -41,6 +41,7 @@
 ## Segurança e distribuição
 
 - [ ] Artefatos revisados para segredos/chaves privadas.
+- [ ] `Test-PilotReleaseRedaction.ps1` passou sobre ZIP, manifesto, checksums e pacote publicado.
 - [ ] Conteúdo sem licença de redistribuição excluído.
 - [ ] Backup/restauração de evidências e keyring documentados.
 - [ ] Zero defeitos críticos/altos abertos em escopo, orçamento, integridade e promoção.

@@ -37,6 +37,7 @@ $publishDir = Join-Path $outputRootFull "aecs-cli-$Version"
 $zipPath = Join-Path $outputRootFull "aecs-cli-$Version.zip"
 $manifestPath = Join-Path $outputRootFull "aecs-pilot-release-$Version.manifest.json"
 $checksumsPath = Join-Path $outputRootFull "SHA256SUMS.txt"
+$redactionScript = Join-Path $repoRoot 'distribution/pilot/Test-PilotReleaseRedaction.ps1'
 
 New-Item -ItemType Directory -Force -Path $outputRootFull | Out-Null
 if (Test-Path -LiteralPath $publishDir) {
@@ -89,6 +90,8 @@ $manifest | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $manifestPath -E
     "$zipHash  $(Split-Path -Leaf $zipPath)"
     "$((Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant())  $(Split-Path -Leaf $manifestPath)"
 ) | Set-Content -LiteralPath $checksumsPath -Encoding ascii
+
+& $redactionScript -Path @($publishDir, $zipPath, $manifestPath, $checksumsPath)
 
 Write-Output "AECS pilot package created"
 Write-Output "Version: $Version"
