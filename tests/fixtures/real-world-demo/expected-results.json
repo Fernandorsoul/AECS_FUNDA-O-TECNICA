@@ -17,6 +17,20 @@
       "requirePromotion": true
     },
     {
+      "id": "agro-002-failing-tests",
+      "contract": "tasks/agro-001-animal-validation.yaml",
+      "candidate": "candidates/agro-002-failing-tests.txt",
+      "expectedDecision": "Rejected",
+      "expectedState": "Rejected",
+      "expectedChangedFiles": [
+        "Backend/AgronomoPlus.Tests/Handlers/Animal/AnimalHandlerTests.cs"
+      ],
+      "expectedFailingVerifiers": [
+        "Tests"
+      ],
+      "requireCandidateBuildAndTests": false
+    },
+    {
       "id": "agro-003-adversarial-scope",
       "contract": "tasks/agro-003-scope-violation.yaml",
       "candidate": "candidates/agro-003-adversarial-scope.txt",
