@@ -63,6 +63,8 @@ Instalação, atualização, desinstalação e diagnóstico de pré-requisitos f
 
 A demonstração reproduzível do fluxo completo está em [Demonstração real reproduzível](docs/real-world-demo.md) e pode ser executada por `.\demos\Run-RealWorldDemo.ps1`.
 
+A matriz de recuperação, rollback, backup e ameaças residuais do piloto está em [Recuperação de falhas e integridade](docs/resilience-and-integrity.md).
+
 ## Pré-requisitos
 
 - [.NET 10 SDK LTS estável](https://dotnet.microsoft.com/download/dotnet/10.0), selecionado por `global.json` sem aceitar previews;
