@@ -9,7 +9,7 @@ public sealed class ResolvedRepositoryExecutionProfile
     public string? TargetArgument { get; init; }
 
     public IReadOnlyList<string> BuildArguments => CreateArguments("build", noBuild: false);
-    public IReadOnlyList<string> TestArguments => CreateArguments("test", noBuild: true);
+    public IReadOnlyList<string> TestArguments => CreateArguments("test", noBuild: false);
 
     private IReadOnlyList<string> CreateArguments(string command, bool noBuild)
     {
