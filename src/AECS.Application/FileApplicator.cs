@@ -67,9 +67,12 @@ public class FileApplicator
 
         foreach (var change in parsedChanges)
         {
-            var effectivePath = normalizedPrefix is null
-                ? change.FilePath
-                : $"{normalizedPrefix}/{change.FilePath}";
+            var normalizedPath = change.FilePath.Replace('\\', '/');
+            var effectivePath = normalizedPrefix is null ||
+                normalizedPath.StartsWith(normalizedPrefix + "/", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalizedPath, normalizedPrefix, StringComparison.OrdinalIgnoreCase)
+                ? normalizedPath
+                : $"{normalizedPrefix}/{normalizedPath}";
             if (!TryResolveSafePath(workspaceRoot, effectivePath, out var fullPath, out var error))
             {
                 errors.Add(error);
