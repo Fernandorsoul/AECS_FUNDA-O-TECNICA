@@ -59,6 +59,8 @@ else if (command == "adaptive-report")
     return await RunAdaptiveReport(args[1..]);
 else if (command == "doctor")
     return await RunDoctor(args[1..]);
+else if (command == "run")
+    return await RunSingle(args[1..]);
 else
     return await RunSingle(args);
 
