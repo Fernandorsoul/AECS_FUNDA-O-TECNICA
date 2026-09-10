@@ -69,3 +69,5 @@ coverage/
 
 # Local repositories used for demos and experiments
 /real-world-demo/
+sample/**/bin/
+sample/**/obj/
