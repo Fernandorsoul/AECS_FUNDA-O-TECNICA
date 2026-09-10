@@ -9,14 +9,17 @@ task:
   acceptance_evidence:
     - id: AC-001
       type: test
+      reference: "FullyQualifiedName~CustomerMapperTests"
       test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
       required: true
     - id: AC-002
       type: test
+      reference: "FullyQualifiedName~SampleProject.Tests"
       test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
       required: true
     - id: AC-003
       type: test
+      reference: "FullyQualifiedName~CustomerMapperTests"
       test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
       required: true
   scope:
@@ -72,6 +75,7 @@ task:
           - candidate.build
           - baseline.test
           - candidate.test
+          - candidate.acceptance
       resources:
         cpu_limit: "2.0"
         memory_limit: "1g"
