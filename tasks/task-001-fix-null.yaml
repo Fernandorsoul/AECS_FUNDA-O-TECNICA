@@ -48,7 +48,7 @@ task:
           phases: ["baseline.security-scan", "candidate.security-scan"]
       network:
         destinations:
-          - api.nuget.org
+          - "*"
         phases:
           - baseline.build
           - candidate.build
