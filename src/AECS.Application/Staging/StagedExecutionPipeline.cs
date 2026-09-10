@@ -296,7 +296,10 @@ public sealed class StagedExecutionPipeline
             budgetExhaustionReason = agentOutcome.BudgetExhaustionReason;
 
             var applicationResult = agentResult.Success
-                ? _fileApplicator.ApplyChanges(agentResult.StdOut, workspace.Path)
+                ? _fileApplicator.ApplyChanges(
+                    agentResult.StdOut,
+                    workspace.Path,
+                    contract.Execution.WorkingDirectory)
                 : new FileApplicatorResult
                 {
                     Success = false,

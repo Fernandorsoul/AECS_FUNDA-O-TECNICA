@@ -54,17 +54,23 @@ public class FileApplicator
         return changes;
     }
 
-    public FileApplicatorResult ApplyChanges(string modelResponse, string workspacePath)
+    public FileApplicatorResult ApplyChanges(string modelResponse, string workspacePath, string? pathPrefix = null)
     {
         var workspaceRoot = Path.GetFullPath(workspacePath);
         var parsedChanges = ParseChanges(modelResponse, workspaceRoot);
         var validatedChanges = new List<(FileChange Change, string FullPath)>();
         var errors = new List<string>();
         var seenPaths = new HashSet<string>(GetPathComparer());
+        var normalizedPrefix = string.IsNullOrWhiteSpace(pathPrefix)
+            ? null
+            : pathPrefix.Trim().Replace('\\', '/').Trim('/');
 
         foreach (var change in parsedChanges)
         {
-            if (!TryResolveSafePath(workspaceRoot, change.FilePath, out var fullPath, out var error))
+            var effectivePath = normalizedPrefix is null
+                ? change.FilePath
+                : $"{normalizedPrefix}/{change.FilePath}";
+            if (!TryResolveSafePath(workspaceRoot, effectivePath, out var fullPath, out var error))
             {
                 errors.Add(error);
                 continue;
