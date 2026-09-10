@@ -23,6 +23,10 @@ task:
     runtime: docker
     sandbox:
       network_access: true
+      cpu_limit: "2.0"
+      memory_limit: "1g"
+      process_limit: 256
+      wall_clock_seconds: 180
     capabilities:
       file_system:
         read:
@@ -55,6 +59,11 @@ task:
           - candidate.build
           - baseline.test
           - candidate.test
+      resources:
+        cpu_limit: "2.0"
+        memory_limit: "1g"
+        process_limit: 256
+        wall_clock_seconds: 180
   budget:
     tokens: 60000
     usd: 0.20
