@@ -68,7 +68,7 @@ task:
     tokens: 60000
     usd: 0.20
     retries: 1
-    wall_clock_seconds: 120
+    wall_clock_seconds: 300
     max_files_changed: 5
   verification:
     build: required
