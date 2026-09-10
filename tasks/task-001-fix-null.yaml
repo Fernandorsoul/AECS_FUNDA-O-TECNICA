@@ -17,6 +17,10 @@ task:
     security_risk: low
     database_migration: false
     external_dependency: false
+  execution:
+    working_directory: .
+    target: SampleProject.slnx
+    runtime: host
   budget:
     tokens: 60000
     usd: 0.20
