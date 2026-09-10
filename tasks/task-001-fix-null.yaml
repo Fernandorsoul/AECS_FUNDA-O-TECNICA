@@ -18,9 +18,9 @@ task:
     database_migration: false
     external_dependency: false
   execution:
-    working_directory: sample/SampleProject
+    working_directory: .
     target: SampleProject.slnx
-    runtime: host
+    runtime: docker
   budget:
     tokens: 60000
     usd: 0.20
