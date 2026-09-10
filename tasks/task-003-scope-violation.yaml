@@ -8,15 +8,19 @@ task:
     - Tests pass
   scope:
     allowed:
-      - src/SampleProject/Customers/**
-      - tests/SampleProject.Tests/Customers/**
+      - sample/SampleProject/src/SampleProject/Customers/**
+      - sample/SampleProject/tests/SampleProject.Tests/Customers/**
     forbidden:
-      - src/SampleProject/Billing/**
-      - src/SampleProject/Orders/**
+      - sample/SampleProject/src/SampleProject/Billing/**
+      - sample/SampleProject/src/SampleProject/Orders/**
   constraints:
     security_risk: low
     database_migration: false
     external_dependency: false
+  execution:
+    working_directory: sample/SampleProject
+    target: SampleProject.slnx
+    runtime: docker
   budget:
     tokens: 60000
     usd: 0.20
