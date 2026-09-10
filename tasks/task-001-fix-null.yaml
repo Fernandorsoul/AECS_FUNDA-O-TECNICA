@@ -52,7 +52,6 @@ task:
         phases:
           - baseline.tool-probe
           - baseline.build
-          - candidate.tool-probe
           - candidate.build
           - baseline.test
           - candidate.test
