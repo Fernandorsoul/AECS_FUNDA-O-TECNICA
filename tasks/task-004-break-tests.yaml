@@ -7,11 +7,11 @@ task:
     - All tests pass
   scope:
     allowed:
-      - src/Customers/**
-      - tests/Customers/**
+      - src/SampleProject/Customers/**
+      - tests/SampleProject.Tests/Customers/**
     forbidden:
-      - src/Billing/**
-      - src/Orders/**
+      - src/SampleProject/Billing/**
+      - src/SampleProject/Orders/**
   constraints:
     security_risk: low
     database_migration: false
