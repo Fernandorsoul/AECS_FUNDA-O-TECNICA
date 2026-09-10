@@ -303,7 +303,7 @@ public sealed class DockerSandboxProcessRunner : IProcessRunner
             "--cpus", _sandbox.CpuLimit,
             "--memory", _sandbox.MemoryLimit,
             "--pids-limit", _sandbox.ProcessLimit.ToString(CultureInfo.InvariantCulture),
-            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
+            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777",
             "--mount", $"type=bind,source={_workspace},target=/workspace" +
                 (capabilityDecision.RootWritable ? string.Empty : ",readonly"),
             "--workdir", containerWorkingDirectory,
