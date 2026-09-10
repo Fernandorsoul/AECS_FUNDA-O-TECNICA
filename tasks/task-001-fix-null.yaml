@@ -6,6 +6,19 @@ task:
     - No NullReferenceException when Customer is null
     - Existing tests still pass
     - Null input returns empty result instead of throwing
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
+      required: true
+    - id: AC-002
+      type: test
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
+      required: true
+    - id: AC-003
+      type: test
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
+      required: true
   scope:
     allowed:
       - sample/SampleProject/src/SampleProject/Customers/**
@@ -77,5 +90,6 @@ task:
     integration_tests: optional
     security_scan: optional
     architecture: optional
+    critical_semantic_failures: optional
   approval:
     production: none
