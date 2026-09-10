@@ -18,7 +18,7 @@ task:
     database_migration: false
     external_dependency: false
   execution:
-    working_directory: .
+    working_directory: sample/SampleProject
     target: SampleProject.slnx
     runtime: host
   budget:
