@@ -5,6 +5,17 @@ task:
   acceptance:
     - All files use new pattern
     - Tests pass
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      reference: "FullyQualifiedName~SampleProject.Tests"
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
+      required: true
+    - id: AC-002
+      type: test
+      reference: "FullyQualifiedName~SampleProject.Tests"
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerMapperTests.cs
+      required: true
   scope:
     allowed:
       - sample/SampleProject/src/SampleProject/Customers/**

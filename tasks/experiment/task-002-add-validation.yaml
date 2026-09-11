@@ -7,6 +7,27 @@ task:
     - Create rejects empty email
     - Create rejects invalid email format
     - Existing tests still pass
+  acceptance_evidence:
+    - id: AC-001
+      type: test
+      reference: "FullyQualifiedName~CustomerServiceTests"
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerServiceTests.cs
+      required: true
+    - id: AC-002
+      type: test
+      reference: "FullyQualifiedName~CustomerServiceTests"
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerServiceTests.cs
+      required: true
+    - id: AC-003
+      type: test
+      reference: "FullyQualifiedName~CustomerServiceTests"
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerServiceTests.cs
+      required: true
+    - id: AC-004
+      type: test
+      reference: "FullyQualifiedName~SampleProject.Tests"
+      test_path: sample/SampleProject/tests/SampleProject.Tests/Customers/CustomerServiceTests.cs
+      required: true
   scope:
     allowed:
       - sample/SampleProject/src/SampleProject/Customers/**
