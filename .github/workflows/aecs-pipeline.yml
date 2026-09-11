@@ -1,0 +1,116 @@
+name: AECS Pipeline
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    
+    - name: Generate NuGet assets
+      run: python scripts/fix-nuget-restore.py
+    
+    - name: Build AECS CLI
+      run: dotnet build src/AECS.Cli/AECS.Cli.csproj --no-restore -c Release
+    
+    - name: Run unit tests
+      run: dotnet test tests/AECS.UnitTests/AECS.UnitTests.csproj --no-build -c Release --logger "trx;LogFileName=test-results.trx"
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: '**/test-results.trx'
+    
+    - name: Upload AECS CLI
+      uses: actions/upload-artifact@v4
+      with:
+        name: aecs-cli
+        path: src/AECS.Cli/bin/Release/net10.0/
+
+  experiment:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Download AECS CLI
+      uses: actions/download-artifact@v4
+      with:
+        name: aecs-cli
+        path: src/AECS.Cli/bin/Release/net10.0/
+    
+    - name: Generate NuGet assets
+      run: python scripts/fix-nuget-restore.py
+    
+    - name: Create .env file
+      run: |
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+        echo "OPENAI_MODEL=${{ secrets.OPENAI_MODEL }}" >> .env
+        echo "OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}" >> .env
+    
+    - name: Run AECS experiment
+      run: |
+        dotnet src/AECS.Cli/bin/Release/net10.0/AECS.Cli.dll experiment \
+          --repo ./sample/SampleProject \
+          --tasks ./tasks/experiment \
+          --enable-cloud-fallback \
+          --allow-cloud-context
+    
+    - name: Upload experiment results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: experiment-results
+        path: |
+          ~/.local/share/AECS/evidence/
+          **/experiment-report*.json
