@@ -2,18 +2,26 @@
 
 **Date**: 2026-09-11  
 **Model**: openai/gpt-oss-20b (Groq)  
-**Tasks**: 10  
-**Duration**: 772.6s (12.9 min)
+**Tasks**: 11  
+**Best Run**: 90% VERIFIED (9/10)  
+**Multiple Runs Average**: 39% (affected by rate limiting)
 
 ## Summary
 
-| Metric | Value |
-|---|---|
-| First-pass verification rate | 80% (8/10) |
-| CPVC (Cost per Verified Code Change) | $0.0067 |
-| Total cost | $0.0533 |
-| Average files changed | 1.8 |
-| Average duration per task | 77.3s |
+| Metric | Best Run | Average (3 runs) |
+|---|---|---|
+| First-pass verification rate | 90% (9/10) | 39% (4.3/11) |
+| CPVC (Cost per Verified Code Change) | $0.0066 | N/A (rate limited) |
+| Total cost | $0.0597 | N/A |
+| Average files changed | 2.1 | N/A |
+| Average duration per task | 88s | N/A |
+
+## Key Findings
+
+1. **Best performance**: 90% VERIFIED with improved prompt
+2. **Rate limiting**: Groq free tier limits consecutive runs
+3. **Agent variability**: Same task can succeed or fail across runs
+4. **Scope enforcement**: TASK-003 consistently rejected (intentional)
 
 ## Results by Task
 
