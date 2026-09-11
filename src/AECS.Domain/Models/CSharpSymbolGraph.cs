@@ -22,7 +22,7 @@ public sealed class CSharpSymbolGraphLimits
     public const int DefaultMaxDocuments = 20_000;
     public const int DefaultMaxNodes = 200_000;
     public const int DefaultMaxEdges = 1_000_000;
-    public const int DefaultMaxDiagnostics = 2_000;
+    public const int DefaultMaxDiagnostics = 10_000;
 
     public int MaxDurationSeconds { get; init; } = DefaultMaxDurationSeconds;
     public long MaxEstimatedMemoryBytes { get; init; } = DefaultMaxEstimatedMemoryBytes;
