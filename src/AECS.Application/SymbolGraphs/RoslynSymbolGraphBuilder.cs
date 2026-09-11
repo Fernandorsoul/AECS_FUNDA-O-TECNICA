@@ -731,8 +731,25 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 }
                 if (instance is null)
                 {
-                    throw new InvalidOperationException(
-                        "No compatible .NET SDK/MSBuild instance could be detected for the baseline.");
+                    // Fallback: try RegisterDefaults which uses environment detection
+                    try
+                    {
+                        var defaultsResult = MSBuildLocator.RegisterDefaults();
+                        _registeredMsBuildPath = defaultsResult.MSBuildPath;
+                        _registeredMsBuildVersion = defaultsResult.Version.ToString();
+                        _registeredSdkVersion = ReadSdkVersion(defaultsResult);
+                        return new MsBuildRegistration(
+                            _registeredMsBuildVersion,
+                            _registeredSdkVersion,
+                            diagnostic ?? "Used RegisterDefaults fallback");
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            "No compatible .NET SDK/MSBuild instance could be detected for the baseline. " +
+                            $"Query failed: {diagnostic ?? "no instance found"}. " +
+                            $"RegisterDefaults failed: {ex.Message}");
+                    }
                 }
                 MSBuildLocator.RegisterInstance(instance);
                 _registeredMsBuildPath = instance.MSBuildPath;
