@@ -20,7 +20,7 @@ task:
     external_dependency: false
   execution:
     working_directory: sample/SampleProject
-    target: SampleProject.slnx
+    target: SampleProject.sln
     runtime: docker
   budget:
     tokens: 60000
