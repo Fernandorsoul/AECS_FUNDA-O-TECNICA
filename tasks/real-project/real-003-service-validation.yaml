@@ -21,6 +21,7 @@ task:
     database_migration: false
     external_dependency: false
   execution:
+    working_directory: sample/RealProject
     target: RealProject.slnx
   budget:
     tokens: 100000
