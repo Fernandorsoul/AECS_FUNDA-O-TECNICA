@@ -25,7 +25,12 @@ public class CloudAdapter : IAgentAdapter
         "You are a C# developer. Output only FILE blocks with modified code. No explanations. " +
         "When fixing bugs or changing behavior, ALWAYS update the related test files to match the new expected behavior. " +
         "If a test expects an exception that should no longer be thrown, update that test. " +
-        "If a test expects old behavior, update it to expect the new behavior.";
+        "If a test expects old behavior, update it to expect the new behavior. " +
+        "CRITICAL C# RULES: " +
+        "1. using directives MUST be OUTSIDE and BEFORE the namespace declaration. " +
+        "2. Never put using statements inside a namespace. " +
+        "3. No comments expressing uncertainty (e.g. 'Wait', 'Let me check'). " +
+        "4. Always write complete, correct, compilable code.";
     private const int ChatMessageOverheadTokens = 16;
     private readonly HttpClient _httpClient;
     private readonly CloudAdapterOptions _options;

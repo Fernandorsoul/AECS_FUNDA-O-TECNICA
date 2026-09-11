@@ -216,6 +216,7 @@ public class OllamaAdapter : IAgentAdapter
         sb.AppendLine("You are a C# developer. Your task is to fix or modify code files.");
         sb.AppendLine("IMPORTANT: When changing behavior, also update test files to match the new expected behavior.");
         sb.AppendLine("If a test expects an exception that should no longer be thrown, update that test.");
+        sb.AppendLine("CRITICAL C# RULES: using directives MUST be OUTSIDE and BEFORE the namespace. No uncertainty comments.");
         sb.AppendLine("You MUST output each modified file using EXACTLY this format:");
         sb.AppendLine();
         sb.AppendLine("FILE: src/Path/To/File.cs");
