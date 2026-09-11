@@ -21,7 +21,7 @@ task:
     database_migration: false
     external_dependency: false
   execution:
-    target: RealProject.sln
+    target: RealProject.slnx
   budget:
     tokens: 100000
     usd: 0.50
