@@ -16,10 +16,17 @@ public class CustomerMapperTests
     }
 
     [Fact]
-    public void MapToDisplay_NullCustomer_ThrowsNullReferenceException()
+    public void MapToDisplay_NullCustomer_ReturnsEmptyString()
     {
-        var act = () => _mapper.MapToDisplay(null!);
-        act.Should().Throw<NullReferenceException>();
+        var result = _mapper.MapToDisplay(null!);
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void MapPhone_NullCustomer_ReturnsEmptyString()
+    {
+        var result = _mapper.MapPhone(null!);
+        result.Should().BeEmpty();
     }
 
     [Fact]
