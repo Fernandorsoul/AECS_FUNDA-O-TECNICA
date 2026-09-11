@@ -37,13 +37,6 @@ task:
     working_directory: sample/SampleProject
     target: SampleProject.slnx
     runtime: docker
-    test_suites:
-      unit:
-        mode: required
-        target: tests/SampleProject.Tests/SampleProject.Tests.csproj
-      acceptance:
-        mode: required
-        target: tests/SampleProject.Tests/SampleProject.Tests.csproj
     sandbox:
       network_access: true
       cpu_limit: "2.0"
@@ -69,7 +62,7 @@ task:
           phases: ["baseline.build", "candidate.build"]
         - executable: dotnet
           argument_prefix: ["test"]
-          phases: ["baseline.test", "candidate.test", "baseline.unit-test", "candidate.unit-test", "baseline.acceptance-test", "candidate.acceptance-test", "candidate.acceptance"]
+          phases: ["baseline.test", "candidate.test", "candidate.acceptance"]
         - executable: dotnet
           argument_prefix: ["list"]
           phases: ["baseline.security-scan", "candidate.security-scan"]
@@ -82,10 +75,6 @@ task:
           - candidate.build
           - baseline.test
           - candidate.test
-          - baseline.unit-test
-          - candidate.unit-test
-          - baseline.acceptance-test
-          - candidate.acceptance-test
           - candidate.acceptance
       resources:
         cpu_limit: "2.0"
