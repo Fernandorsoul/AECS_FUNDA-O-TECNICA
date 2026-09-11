@@ -6,6 +6,8 @@ namespace AECS.Application.Verification;
 
 public class BuildVerifier : IVerifier
 {
+    private const int MaxTransientRetries = 2;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
     private readonly IProcessRunner _processRunner;
     private readonly Func<TimeSpan>? _remainingDuration;
 
@@ -40,25 +42,35 @@ public class BuildVerifier : IVerifier
                 Timeout = timeout,
                 Phase = $"{context.Phase}.build"
             };
-            var result = await _processRunner.RunAsync(request, cancellationToken);
-            context.CommandEvidence.Add(
-                ExecutionCommandEvidenceFactory.Create(context, request, result));
 
-            if (result.TimedOut || result.Cancelled)
+            ProcessExecutionResult? result = null;
+            for (var attempt = 0; attempt <= MaxTransientRetries; attempt++)
             {
-                return Error(
-                    context.AgentRunId,
-                    result.TimedOut
-                        ? "Build timed out; process tree terminated"
-                        : "Build cancelled; process tree terminated");
+                result = await _processRunner.RunAsync(request, cancellationToken);
+                context.CommandEvidence.Add(
+                    ExecutionCommandEvidenceFactory.Create(context, request, result));
+
+                if (result.TimedOut || result.Cancelled)
+                {
+                    return Error(
+                        context.AgentRunId,
+                        result.TimedOut
+                            ? "Build timed out; process tree terminated"
+                            : "Build cancelled; process tree terminated");
+                }
+
+                if (result.ExitCode == 0 || !IsTransientError(result) || attempt == MaxTransientRetries)
+                    break;
+
+                await Task.Delay(RetryDelay, cancellationToken);
             }
 
-            var output = JoinOutput(result);
+            var output = JoinOutput(result!);
             return new VerificationResult
             {
                 AgentRunId = context.AgentRunId,
                 Verifier = Name,
-                Status = result.ExitCode == 0 ? VerificationStatus.Pass : VerificationStatus.Fail,
+                Status = result!.ExitCode == 0 ? VerificationStatus.Pass : VerificationStatus.Fail,
                 Severity = result.ExitCode == 0 ? Severity.Info : Severity.Error,
                 Message = result.ExitCode == 0 ? "Build succeeded" : $"Build failed: {output}"
             };
@@ -67,6 +79,20 @@ public class BuildVerifier : IVerifier
         {
             return Error(context.AgentRunId, $"Build verifier error: {ex.Message}");
         }
+    }
+
+    private static bool IsTransientError(ProcessExecutionResult result)
+    {
+        if (result.ExitCode == 0)
+            return false;
+        var output = JoinOutput(result);
+        return output.Contains("NU1301", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("NU1302", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("NU1303", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Unable to load the service index", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Resource temporarily unavailable", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Connection refused", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("No space left on device", StringComparison.OrdinalIgnoreCase);
     }
 
     private VerificationResult Error(string agentRunId, string message) => new()
