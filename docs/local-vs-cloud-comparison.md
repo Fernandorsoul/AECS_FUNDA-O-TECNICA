@@ -8,13 +8,19 @@
 | Metric | Local (Ollama qwen2.5-coder:3b) | Cloud (Groq openai/gpt-oss-20b) |
 |---|---|---|
 | **VERIFIED** | 4/11 (36%) | 9/11 (82%) |
-| **CPVC** | $0.0043 | $0.0072 |
-| **Total cost** | $0.0171 | $0.0645 |
-| **Duration** | 1385s (23 min) | 880s (15 min) |
-| **Avg files changed** | 1.2 | 2.1 |
-| **Timeouts** | 2 | 0 |
+| **CPVC** | **$0.0033** | $0.0072 |
+| **Total cost** | **$0.0131** | $0.0645 |
+| **Duration** | 1096s (18 min) | 880s (15 min) |
+| **Avg files changed** | 2.1 | 2.1 |
+| **Timeouts** | 0 | 0 |
 
-## Detailed Results
+## Optimizations Applied
+
+1. **Improved prompt**: Step-by-step instructions for local model
+2. **Increased timeout**: 10 minutes for Ollama HttpClient
+3. **Fixed FileApplicator**: Accepts markdown header format (`### path`)
+
+## Detailed Results (Optimized Local)
 
 | Task | Module | Risk | Local | Cloud |
 |---|---|---|---|---|
