@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 520">
+  <style>
+    text { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+    .title { font-size: 14px; font-weight: 500; }
+    .body { font-size: 13px; }
+    .caption { font-size: 11px; }
+  </style>
+  
+  <!-- Background -->
+  <rect width="680" height="520" fill="#f8f9fa" rx="8"/>
+  
+  <!-- Title -->
+  <text x="340" y="30" text-anchor="middle" class="title" font-weight="600">AECS Pipeline Architecture</text>
+  
+  <!-- Input -->
+  <rect x="240" y="50" width="200" height="36" rx="8" fill="#e3f2fd" stroke="#1976d2" stroke-width="0.5"/>
+  <text x="340" y="72" text-anchor="middle" class="body" fill="#1565c0">Task Contract (YAML)</text>
+  
+  <!-- Arrow -->
+  <line x1="340" y1="86" x2="340" y2="110" stroke="#666" stroke-width="1" marker-end="url(#arrow)"/>
+  
+  <!-- Parser + Classifier -->
+  <rect x="180" y="110" width="320" height="36" rx="8" fill="#fff3e0" stroke="#f57c00" stroke-width="0.5"/>
+  <text x="340" y="132" text-anchor="middle" class="body" fill="#e65100">Parser → Risk Classifier (R0-R4)</text>
+  
+  <!-- Arrow -->
+  <line x1="340" y1="146" x2="340" y2="170" stroke="#666" stroke-width="1" marker-end="url(#arrow)"/>
+  
+  <!-- Staging -->
+  <rect x="200" y="170" width="280" height="36" rx="8" fill="#e8f5e9" stroke="#388e3c" stroke-width="0.5"/>
+  <text x="340" y="192" text-anchor="middle" class="body" fill="#2e7d32">Git Workspace (Staged)</text>
+  
+  <!-- Arrow -->
+  <line x1="340" y1="206" x2="340" y2="230" stroke="#666" stroke-width="1" marker-end="url(#arrow)"/>
+  
+  <!-- Baseline Verification -->
+  <rect x="160" y="230" width="360" height="50" rx="8" fill="#fce4ec" stroke="#c2185b" stroke-width="0.5"/>
+  <text x="340" y="250" text-anchor="middle" class="body" fill="#ad1457">Baseline Verification</text>
+  <text x="340" y="268" text-anchor="middle" class="caption" fill="#c2185b">Build + Tests + Scope</text>
+  
+  <!-- Arrow -->
+  <line x1="340" y1="280" x2="340" y2="304" stroke="#666" stroke-width="1" marker-end="url(#arrow)"/>
+  
+  <!-- Context + Agent -->
+  <rect x="140" y="304" width="400" height="50" rx="8" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="0.5"/>
+  <text x="340" y="324" text-anchor="middle" class="body" fill="#6a1b9a">Context Compiler → Agent Execution</text>
+  <text x="340" y="342" text-anchor="middle" class="caption" fill="#7b1fa2">Ollama Local / Cloud Groq / Mock</text>
+  
+  <!-- Arrow -->
+  <line x1="340" y1="354" x2="340" y2="378" stroke="#666" stroke-width="1" marker-end="url(#arrow)"/>
+  
+  <!-- File Applicator -->
+  <rect x="200" y="378" width="280" height="36" rx="8" fill="#e0f7fa" stroke="#00838f" stroke-width="0.5"/>
+  <text x="340" y="400" text-anchor="middle" class="body" fill="#006064">File Applicator → Candidate</text>
+  
+  <!-- Arrow -->
+  <line x1="340" y1="414" x2="340" y2="438" stroke="#666" stroke-width="1" marker-end="url(#arrow)"/>
+  
+  <!-- Candidate Verification -->
+  <rect x="120" y="438" width="440" height="50" rx="8" fill="#fff8e1" stroke="#f9a825" stroke-width="0.5"/>
+  <text x="340" y="458" text-anchor="middle" class="body" fill="#f57f17">Candidate Verification</text>
+  <text x="340" y="476" text-anchor="middle" class="caption" fill="#f9a825">Build + Tests + Scope + Budget + Acceptance</text>
+  
+  <!-- Decision Output -->
+  <rect x="240" y="500" width="200" height="0" rx="8" fill="#e8eaf6" stroke="#3f51b5" stroke-width="0.5"/>
+  
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
+    </marker>
+  </defs>
+</svg>
