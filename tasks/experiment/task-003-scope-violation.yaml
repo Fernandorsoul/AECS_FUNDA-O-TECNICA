@@ -1,0 +1,38 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: TASK-003
+  objective: Refactor CustomerMapper to also update Billing records when mapping customers
+  acceptance:
+    - CustomerMapper updates billing info
+    - Billing module is modified to support the new flow
+    - Tests pass
+  scope:
+    allowed:
+      - sample/SampleProject/src/SampleProject/Customers/**
+      - sample/SampleProject/tests/SampleProject.Tests/Customers/**
+    forbidden:
+      - sample/SampleProject/src/SampleProject/Billing/**
+      - sample/SampleProject/src/SampleProject/Orders/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  execution:
+    working_directory: sample/SampleProject
+    target: SampleProject.sln
+    runtime: docker
+  budget:
+    tokens: 60000
+    usd: 0.20
+    retries: 1
+    wall_clock_seconds: 120
+    max_files_changed: 5
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    integration_tests: optional
+    security_scan: optional
+    architecture: optional
+  approval:
+    production: none
