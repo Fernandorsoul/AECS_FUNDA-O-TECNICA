@@ -33,7 +33,7 @@ public static class ExperimentReportFormatter
         // Task details
         foreach (var result in report.Results)
         {
-            var costRecord = report.CostRecords.SingleOrDefault(record =>
+            var costRecord = report.CostRecords.FirstOrDefault(record =>
                 record.RunKey == result.RunKey);
             var cost = costRecord?.EffectiveCostUsd is { } effectiveCost
                 ? $"${effectiveCost:F4} ({costRecord.CostBasis})"
