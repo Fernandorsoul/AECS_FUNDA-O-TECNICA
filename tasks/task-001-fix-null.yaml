@@ -37,6 +37,13 @@ task:
     working_directory: sample/SampleProject
     target: SampleProject.slnx
     runtime: docker
+    test_suites:
+      unit:
+        mode: required
+        target: tests/SampleProject.Tests/SampleProject.Tests.csproj
+      acceptance:
+        mode: required
+        target: tests/SampleProject.Tests/SampleProject.Tests.csproj
     sandbox:
       network_access: true
       cpu_limit: "2.0"
