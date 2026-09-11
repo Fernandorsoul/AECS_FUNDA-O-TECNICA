@@ -22,6 +22,8 @@ task:
   execution:
     working_directory: sample/RealProject
     target: RealProject.slnx
+    sandbox:
+      network_access: true
   budget:
     tokens: 80000
     usd: 0.30
