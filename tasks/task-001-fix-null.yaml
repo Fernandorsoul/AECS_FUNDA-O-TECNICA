@@ -1,10 +1,10 @@
 schema_version: aecs.task-contract/v1
 task:
   id: TASK-001
-  objective: Fix NullReferenceException in CustomerMapper when input is null
+  objective: Fix NullReferenceException in CustomerMapper when input is null. Update both source code and tests to return empty string instead of throwing.
   acceptance:
     - No NullReferenceException when Customer is null
-    - Existing tests still pass
+    - Update tests to expect empty string instead of exception
     - Null input returns empty result instead of throwing
   acceptance_evidence:
     - id: AC-001
