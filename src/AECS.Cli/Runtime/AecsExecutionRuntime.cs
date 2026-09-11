@@ -46,6 +46,20 @@ public sealed class AecsExecutionRuntime : IDisposable
             {
                 agent = new MockAgentAdapter();
             }
+            else if (configuration.AgentMode.Value == "cloud" || configuration.CloudFallbackEnabled.Value)
+            {
+                // Cloud-only mode: skip Ollama entirely, use CloudAdapter directly
+                var cloudClient = new HttpClient();
+                clients.Add(cloudClient);
+                agent = new CloudAdapter(cloudClient, new CloudAdapterOptions
+                {
+                    ApiKey = resolved.CloudApiKey,
+                    BaseUrl = configuration.CloudBaseUrl.Value,
+                    Model = configuration.CloudModel.Value,
+                    ContextWindowTokens = configuration.CloudContextWindowTokens.Value,
+                    MaxTokens = configuration.CloudMaxOutputTokens.Value
+                });
+            }
             else
             {
                 var localClient = new HttpClient();
@@ -54,25 +68,6 @@ public sealed class AecsExecutionRuntime : IDisposable
                     localClient,
                     configuration.OllamaBaseUrl.Value,
                     configuration.OllamaContextWindowTokens.Value);
-            }
-
-            if (configuration.CloudFallbackEnabled.Value)
-            {
-                var cloudClient = new HttpClient();
-                clients.Add(cloudClient);
-                var cloud = new CloudAdapter(cloudClient, new CloudAdapterOptions
-                {
-                    ApiKey = resolved.CloudApiKey,
-                    BaseUrl = configuration.CloudBaseUrl.Value,
-                    Model = configuration.CloudModel.Value,
-                    ContextWindowTokens = configuration.CloudContextWindowTokens.Value,
-                    MaxTokens = configuration.CloudMaxOutputTokens.Value
-                });
-                var allowedRisks = configuration.CloudAllowedRisks.Value.ToHashSet();
-                agent = new FallbackAdapter(
-                    agent,
-                    cloud,
-                    authorizeFallback: request => allowedRisks.Contains(request.Risk));
             }
 
             var store = CreateEvidenceStore(resolved);
