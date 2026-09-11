@@ -22,7 +22,10 @@ public class CloudAdapterOptions
 public class CloudAdapter : IAgentAdapter
 {
     private const string SystemPrompt =
-        "You are a C# developer. Output only FILE blocks with modified code. No explanations.";
+        "You are a C# developer. Output only FILE blocks with modified code. No explanations. " +
+        "When fixing bugs or changing behavior, ALWAYS update the related test files to match the new expected behavior. " +
+        "If a test expects an exception that should no longer be thrown, update that test. " +
+        "If a test expects old behavior, update it to expect the new behavior.";
     private const int ChatMessageOverheadTokens = 16;
     private readonly HttpClient _httpClient;
     private readonly CloudAdapterOptions _options;
@@ -257,6 +260,7 @@ public class CloudAdapter : IAgentAdapter
     {
         var sb = new StringBuilder();
         sb.AppendLine("Your task is to fix or modify C# code files.");
+        sb.AppendLine("IMPORTANT: When changing behavior, also update test files to match the new expected behavior.");
         sb.AppendLine("Output each modified file using EXACTLY this format:");
         sb.AppendLine();
         sb.AppendLine("FILE: src/Path/To/File.cs");
