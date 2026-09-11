@@ -523,7 +523,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
             throw new EvidenceIntegrityException(
                 "Context manifest references a C# symbol graph that is absent from the evidence.");
         }
-        if (symbolGraph is not null)
+        if (symbolGraph is not null && symbolGraph.LoadSucceeded)
         {
             var nodeIds = symbolGraph.Nodes?.Select(node => node.Id).ToHashSet(
                 StringComparer.Ordinal) ?? [];
