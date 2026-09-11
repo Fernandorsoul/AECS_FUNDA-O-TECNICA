@@ -489,7 +489,7 @@ public class TaskContractParser
             throw new InvalidOperationException(
                 $"Capability write path must be a safe workspace directory pattern ending in '/**': '{path}'.");
         }
-        if (normalized.Contains('*') && normalized is not "**/bin/**" and not "**/obj/**")
+        if (normalized.Contains('*') && normalized is not "**/bin/**" and not "**/obj/**" and not ".aecs-verification/**")
         {
             throw new InvalidOperationException(
                 $"Unsupported wildcard capability write path: '{path}'.");
