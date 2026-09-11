@@ -62,7 +62,7 @@ public sealed class AecsExecutionRuntime : IDisposable
             }
             else
             {
-                var localClient = new HttpClient();
+                var localClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
                 clients.Add(localClient);
                 agent = new OllamaAdapter(
                     localClient,
