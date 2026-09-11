@@ -42,7 +42,7 @@ task:
       cpu_limit: "2.0"
       memory_limit: "1g"
       process_limit: 256
-      wall_clock_seconds: 180
+      wall_clock_seconds: 300
     capabilities:
       file_system:
         read:
@@ -80,12 +80,12 @@ task:
         cpu_limit: "2.0"
         memory_limit: "1g"
         process_limit: 256
-        wall_clock_seconds: 180
+        wall_clock_seconds: 300
   budget:
     tokens: 60000
     usd: 0.20
     retries: 1
-    wall_clock_seconds: 300
+    wall_clock_seconds: 600
     max_files_changed: 5
   verification:
     build: required
