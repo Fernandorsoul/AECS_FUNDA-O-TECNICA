@@ -19,6 +19,8 @@ task:
     security_risk: low
     database_migration: false
     external_dependency: false
+  execution:
+    target: RealProject.sln
   budget:
     tokens: 80000
     usd: 0.30
