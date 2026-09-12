@@ -21,8 +21,7 @@ task:
   execution:
     working_directory: sample/RealProject
     target: RealProject.slnx
-    sandbox:
-      network_access: true
+    runtime: host
     capabilities:
       file_system:
         read:
@@ -48,14 +47,8 @@ task:
           argument_prefix: ["list"]
           phases: ["baseline.security-scan", "candidate.security-scan"]
       network:
-        destinations:
-          - "api.nuget.org"
-          - "nuget.org"
-        phases:
-          - "baseline.build"
-          - "candidate.build"
-          - "baseline.test"
-          - "candidate.test"
+        destinations: []
+        phases: []
       resources:
         wall_clock_seconds: 300
   budget:
