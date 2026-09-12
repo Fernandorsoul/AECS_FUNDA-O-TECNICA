@@ -9,11 +9,11 @@ task:
     - All CustomerMapperTests pass
   scope:
     allowed:
-      - src/RealProject/Customers/**
-      - tests/RealProject.Tests/Customers/**
+      - sample/RealProject/src/RealProject/Customers/**
+      - sample/RealProject/tests/RealProject.Tests/Customers/**
     forbidden:
-      - src/RealProject/Orders/**
-      - src/RealProject/Billing/**
+      - sample/RealProject/src/RealProject/Orders/**
+      - sample/RealProject/src/RealProject/Billing/**
   constraints:
     security_risk: low
     database_migration: false

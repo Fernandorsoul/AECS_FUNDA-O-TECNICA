@@ -10,11 +10,11 @@ task:
     - All OrderCalculatorTests pass
   scope:
     allowed:
-      - src/RealProject/Orders/**
-      - tests/RealProject.Tests/Orders/**
+      - sample/RealProject/src/RealProject/Orders/**
+      - sample/RealProject/tests/RealProject.Tests/Orders/**
     forbidden:
-      - src/RealProject/Customers/**
-      - src/RealProject/Billing/**
+      - sample/RealProject/src/RealProject/Customers/**
+      - sample/RealProject/src/RealProject/Billing/**
   constraints:
     security_risk: low
     database_migration: false
