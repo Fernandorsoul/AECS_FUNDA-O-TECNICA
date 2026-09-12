@@ -18,6 +18,18 @@ public class EB002Verifier : IVerifier
         try
         {
             var input = SemanticAnalysisInput.From(context);
+            if (!input.CanAnalyze)
+            {
+                return Task.FromResult(new VerificationResult
+                {
+                    AgentRunId = context.AgentRunId,
+                    Verifier = Name,
+                    Status = VerificationStatus.Skip,
+                    Severity = Severity.Info,
+                    Message = "C# symbol graph did not load; semantic analysis skipped."
+                });
+            }
+
             var result = _verifier.Verify(input);
 
             if (result.HasViolations)

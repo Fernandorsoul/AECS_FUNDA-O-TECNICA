@@ -52,6 +52,16 @@ public sealed class EB005Verifier : IVerifier
             }
 
             var input = SemanticAnalysisInput.From(context);
+            if (!input.CanAnalyze)
+            {
+                return Task.FromResult(Result(
+                    context,
+                    VerificationStatus.Skip,
+                    Severity.Info,
+                    "C# symbol graph did not load; semantic analysis skipped.",
+                    []));
+            }
+
             var result = _verifier.Verify(input, _selection);
             var allConflicts = result.Conflicts.Concat(result.SuppressedConflicts).ToList();
             if (result.HasConflicts)

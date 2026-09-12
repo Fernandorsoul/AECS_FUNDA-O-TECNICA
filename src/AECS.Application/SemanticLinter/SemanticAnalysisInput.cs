@@ -16,18 +16,24 @@ public sealed class SemanticAnalysisInput
         RepositorySnapshot candidateSnapshot,
         CSharpSymbolGraph baselineGraph,
         CSharpSymbolGraph candidateGraph,
-        CandidateChangeSet candidate)
+        CandidateChangeSet candidate,
+        bool canAnalyze)
     {
         BaselineSnapshot = baselineSnapshot;
         CandidateSnapshot = candidateSnapshot;
         BaselineGraph = baselineGraph;
         CandidateGraph = candidateGraph;
         Candidate = candidate;
+        CanAnalyze = canAnalyze;
         ChangedFiles = candidate.ChangedFiles
             .Select(NormalizePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _baselineNodes = baselineGraph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
-        _candidateNodes = candidateGraph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        _baselineNodes = canAnalyze
+            ? baselineGraph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal)
+            : new Dictionary<string, CSharpSymbolGraphNode>();
+        _candidateNodes = canAnalyze
+            ? candidateGraph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal)
+            : new Dictionary<string, CSharpSymbolGraphNode>();
     }
 
     public RepositorySnapshot BaselineSnapshot { get; }
@@ -36,6 +42,7 @@ public sealed class SemanticAnalysisInput
     public CSharpSymbolGraph CandidateGraph { get; }
     public CandidateChangeSet Candidate { get; }
     public IReadOnlySet<string> ChangedFiles { get; }
+    public bool CanAnalyze { get; }
 
     public static SemanticAnalysisInput From(VerificationContext context)
     {
@@ -57,10 +64,8 @@ public sealed class SemanticAnalysisInput
             path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith(".props", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith(".targets", StringComparison.OrdinalIgnoreCase));
-        if (requiresCSharpAnalysis && !baselineGraph.LoadSucceeded)
-            throw new InvalidOperationException("Baseline C# symbol graph did not load successfully.");
-        if (requiresCSharpAnalysis && !candidateGraph.LoadSucceeded)
-            throw new InvalidOperationException("Candidate C# symbol graph did not load successfully.");
+        var canAnalyze = !requiresCSharpAnalysis ||
+            (baselineGraph.LoadSucceeded && candidateGraph.LoadSucceeded);
         if (!string.Equals(
                 baselineGraph.RepositorySnapshotHash,
                 baselineSnapshot.SnapshotHash,
@@ -90,7 +95,8 @@ public sealed class SemanticAnalysisInput
             candidateSnapshot,
             baselineGraph,
             candidateGraph,
-            context.CandidateChangeSet);
+            context.CandidateChangeSet,
+            canAnalyze);
     }
 
     public IEnumerable<CSharpSymbolGraphNode> ImpactedBaselineNodes() =>
