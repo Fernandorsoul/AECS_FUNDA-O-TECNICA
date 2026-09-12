@@ -716,16 +716,8 @@ public sealed class StagedExecutionPipeline
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (contract.Verification.Build)
             required.Add("Build");
-        if (contract.Execution.TestSuites is null)
-        {
-            if (contract.Verification.UnitTests || contract.Verification.IntegrationTests)
-                required.Add("Tests");
-        }
-        else
-        {
-            foreach (var suite in contract.Execution.TestSuites.RequiredSuites)
-                required.Add(TestSuiteVerifier.NameFor(suite.Category));
-        }
+        // Tests are not required in baseline — failing baseline tests are expected
+        // for bug-fix tasks. Tests are verified on the candidate after agent changes.
         if (contract.Verification.SecurityScan)
             required.Add(SecurityScanVerifier.VerifierName);
         return required;
