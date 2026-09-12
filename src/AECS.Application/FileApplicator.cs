@@ -20,7 +20,7 @@ public class FileApplicator
 {
     // Accepts both "FILE: path" and "### path" (markdown header) formats
     private static readonly Regex FileBlockRegex = new(
-        @"(?:FILE:\s*|#{1,6}\s+)(.+?\.\w+)\s*\r?\n```(?:\w*)\r?\n(.*?)```",
+        @"(?:FILE:\s*|#{1,6}\s+)([^\r\n]+?\.\w+)\s*\r?\n```(?:\w*)\r?\n(.*?)```",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     private static readonly Regex WindowsAbsolutePathRegex = new(
