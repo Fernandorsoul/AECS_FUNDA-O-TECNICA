@@ -24,6 +24,18 @@ task:
     target: RealProject.slnx
     sandbox:
       network_access: true
+    capabilities:
+      network:
+        destinations:
+          - "api.nuget.org"
+          - "nuget.org"
+        phases:
+          - "baseline.build"
+          - "candidate.build"
+          - "baseline.test"
+          - "candidate.test"
+      resources:
+        wall_clock_seconds: 300
   budget:
     tokens: 80000
     usd: 0.30
