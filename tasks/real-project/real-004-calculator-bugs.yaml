@@ -25,6 +25,13 @@ task:
     sandbox:
       network_access: true
     capabilities:
+      file_system:
+        read:
+          - "**"
+        write:
+          - "**/bin/**"
+          - "**/obj/**"
+          - ".aecs-verification/**"
       network:
         destinations:
           - "api.nuget.org"
