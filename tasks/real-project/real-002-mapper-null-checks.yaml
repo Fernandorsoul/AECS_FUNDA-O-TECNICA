@@ -31,6 +31,22 @@ task:
           - "**/bin/**"
           - "**/obj/**"
           - ".aecs-verification/**"
+      processes:
+        - executable: "git"
+          argument_prefix: ["--version"]
+          phases: ["baseline.tool-probe"]
+        - executable: "dotnet"
+          argument_prefix: ["--version"]
+          phases: ["baseline.tool-probe"]
+        - executable: "dotnet"
+          argument_prefix: ["build"]
+          phases: ["baseline.build", "candidate.build"]
+        - executable: "dotnet"
+          argument_prefix: ["test"]
+          phases: ["baseline.test", "candidate.test", "candidate.acceptance"]
+        - executable: "dotnet"
+          argument_prefix: ["list"]
+          phases: ["baseline.security-scan", "candidate.security-scan"]
       network:
         destinations:
           - "api.nuget.org"
