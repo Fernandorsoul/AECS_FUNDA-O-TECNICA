@@ -534,7 +534,7 @@ public sealed class StagedExecutionPipeline
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             return new AdaptiveShadowRecommendation
             {

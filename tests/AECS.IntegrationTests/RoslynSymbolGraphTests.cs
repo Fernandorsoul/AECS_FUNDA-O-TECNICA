@@ -391,8 +391,7 @@ public sealed class RoslynSymbolGraphTests
             Timeout = TimeSpan.FromSeconds(30)
         }, CancellationToken.None);
         return result.Succeeded && result.StandardOutput.Split('\n').Any(line =>
-            line.TrimStart().StartsWith("10.", StringComparison.Ordinal) &&
-            !line.Contains("preview", StringComparison.OrdinalIgnoreCase));
+            line.TrimStart().StartsWith("10.", StringComparison.Ordinal));
     }
 
     private sealed class SymbolGraphFixture : IAsyncDisposable

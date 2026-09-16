@@ -901,7 +901,7 @@ public class TaskContractParserTests
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
 
-        contracts.Should().HaveCount(22);
+        contracts.Should().HaveCount(33);
         foreach (var path in contracts)
         {
             TaskContract contract;
@@ -948,8 +948,8 @@ public class TaskContractParserTests
 
         result.Id.Should().Be("TASK-001");
         result.Objective.Should().Contain("NullReferenceException");
-        result.Scope.Allowed.Should().Contain("src/Customers/**");
-        result.Scope.Forbidden.Should().Contain("src/Billing/**");
+        result.Scope.Allowed.Should().Contain("sample/SampleProject/src/SampleProject/Customers/**");
+        result.Scope.Forbidden.Should().Contain("sample/SampleProject/src/SampleProject/Billing/**");
     }
 
     private static string FindRepositoryRoot()

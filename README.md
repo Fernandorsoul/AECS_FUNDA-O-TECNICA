@@ -488,6 +488,17 @@ distribution/            # Empacotamento, notas e checklist do release piloto
 - [Índice de ADRs](docs/adr/README.md) — decisões arquiteturais aceitas;
 - [Fundação técnica v0.1](AECS_Fundacao_Tecnica_v0.1.md) — tese, visão de longo prazo e roadmap original.
 
+## Segurança e hardening
+
+O FileApplicator, que aplica respostas do agente no filesystem, passou por reforço de segurança:
+
+- **Validação de path traversal** — segmentos `..` e `.` são rejeitados antes de resolver o caminho final; paths absolutos (Unix e Windows) são bloqueados explicitamente; paths dentro de `.git` são recusados; o caminho resolvido é verificado contra escape do workspace com comparação case-insensitive em Windows.
+- **Regex de extração** — o padrão que extrai blocos `FILE:` da resposta do modelo não exige extensão de arquivo, evitando que paths adversariais sem extensão (como `/etc/passwd`) passem despercebidos.
+- **Normalização de prefixo** — quando `working_directory` é `"."`, o prefixo é normalizado para vazio, evitando paths como `./src/file.txt` que seriam falsamente rejeitados pelo detector de traversal.
+- **Atomicidade** — se qualquer path falhar na validação, nenhum arquivo é escrito (all-or-nothing).
+
+O `.env` contém apenas placeholders; chaves reais nunca devem ser versionadas. O `.gitignore` exclui `**/.env*` e garante que `.env.example` permaneça rastreável.
+
 ## Limitações conhecidas
 
 - a promoção é deliberadamente manual ou autorizada por uma referência de política e deixa as mudanças staged, sem criar commit;

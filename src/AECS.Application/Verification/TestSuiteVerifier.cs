@@ -79,6 +79,7 @@ public sealed class TestSuiteVerifier : IVerifier
             Directory.CreateDirectory(resultsDirectory);
 
             var arguments = execution.TestArguments.ToList();
+            arguments.Add("--no-build");
             arguments.AddRange(_profile.Arguments);
             arguments.Add("--logger");
             arguments.Add("trx");

@@ -93,7 +93,7 @@ public sealed class EB005Verifier : IVerifier
             return Task.FromResult(Result(
                 context,
                 VerificationStatus.Error,
-                Severity.Warning,
+                Severity.Critical,
                 $"EB005 verifier error: {ex.Message}",
                 []));
         }

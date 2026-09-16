@@ -91,7 +91,7 @@ public sealed class RuntimeConfigurationTests : IDisposable
         var json = AecsRuntimeConfigurationResolver.ToJson(runtime.Configuration);
         var text = AecsRuntimeConfigurationResolver.ToText(runtime.Configuration);
 
-        runtime.AgentAdapter.Should().BeOfType<FallbackAdapter>();
+        runtime.AgentAdapter.Should().BeOfType<CloudAdapter>();
         jarvis.RuntimeConfiguration.Should().BeSameAs(runtime.Configuration);
         runtime.Configuration.CloudCredential.Configured.Should().BeTrue();
         runtime.Configuration.CloudAllowedRisks.Value.Should().Equal(RiskLevel.R0, RiskLevel.R2);

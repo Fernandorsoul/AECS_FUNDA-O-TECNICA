@@ -344,10 +344,6 @@ public class OllamaAdapter : IAgentAdapter
         // If no FILE: markers found, try to extract from code block headers
         if (files.Count == 0)
         {
-            var codeBlockRegex = new System.Text.RegularExpressions.Regex(
-                @"```\w*\s*\n(.*?)\n```",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
-
             // Look for file paths in the response text
             var pathRegex = new System.Text.RegularExpressions.Regex(
                 @"(?:src|tests?|lib)/[\w/]+\.\w+");

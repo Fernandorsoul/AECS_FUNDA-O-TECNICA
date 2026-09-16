@@ -15,8 +15,6 @@ public class KernelDecision
 
 public class ControlKernel
 {
-    private readonly BudgetEnforcer _budgetEnforcer = new();
-    private readonly ScopeEnforcer _scopeEnforcer = new();
     private readonly CircuitBreaker _circuitBreaker = new();
 
     public KernelDecision ValidateExecution(

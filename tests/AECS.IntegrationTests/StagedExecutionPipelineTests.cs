@@ -600,6 +600,16 @@ public sealed class StagedExecutionPipelineTests
                 WorkingDirectory = "Backend",
                 Target = "Fixture.csproj"
             });
+        contract = new TaskContract
+        {
+            Id = contract.Id,
+            Objective = contract.Objective,
+            Scope = new ScopeDefinition { Allowed = ["Backend/src/**"] },
+            Budget = contract.Budget,
+            Execution = contract.Execution,
+            Verification = contract.Verification,
+            Approval = contract.Approval
+        };
 
         var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
         var result = await new StagedExecutionPipeline(

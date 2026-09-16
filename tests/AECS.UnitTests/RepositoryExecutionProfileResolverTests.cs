@@ -31,7 +31,7 @@ public sealed class RepositoryExecutionProfileResolverTests : IDisposable
 
         result.WorkingDirectory.Should().Be(Path.Combine(_root, "Backend"));
         result.BuildArguments.Should().Equal("build", "Fixture.sln");
-        result.TestArguments.Should().Equal("test", "Fixture.sln", "--no-build");
+        result.TestArguments.Should().Equal("test", "Fixture.sln");
     }
 
     [Theory]

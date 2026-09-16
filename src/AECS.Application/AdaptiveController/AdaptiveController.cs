@@ -207,9 +207,9 @@ public sealed class AdaptiveController : IAdaptiveShadowController
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
-                diagnostics.Add("An evidence record changed after authentication and was omitted.");
+                diagnostics.Add($"Evidence record skipped: {ex.GetType().Name} - {ex.Message}");
             }
         }
         return new AuthenticatedHistory(
