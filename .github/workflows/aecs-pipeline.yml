@@ -27,21 +27,8 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
     
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    
-    - name: Cache NuGet packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-    
-    - name: Generate NuGet assets
-      run: python scripts/fix-nuget-restore.py
+    - name: Restore
+      run: dotnet restore AECS.slnx
     
     - name: Build AECS CLI
       run: dotnet build src/AECS.Cli/AECS.Cli.csproj --no-restore -c Release
@@ -78,19 +65,11 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
     
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    
     - name: Download AECS CLI
       uses: actions/download-artifact@v4
       with:
         name: aecs-cli
         path: src/AECS.Cli/bin/Release/net10.0/
-    
-    - name: Generate NuGet assets
-      run: python scripts/fix-nuget-restore.py
     
     - name: Create .env file
       run: |
