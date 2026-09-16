@@ -287,3 +287,75 @@ A solução é um monólito modular conforme o [ADR-002](adr/ADR-002-modular-mon
 - a interface da CLI ainda pode mudar sem compatibilidade retroativa.
 
 Essas limitações não reabrem a trust boundary: uma capacidade ausente que é declarada obrigatória deve falhar fechado, nunca ser presumida como aprovada.
+
+## Constraint Continuity e evolução modular do harness
+
+**Estado atual:** auditoria P0 concluída em 2026-09-16, commit `21b59a4`, branch `dev`.
+
+### Constraint Continuity (Constraint Ledger)
+
+| Conceito do Ledger | Estado no AECS | Lacuna |
+|---|---|---|
+| ConstraintRecord (identidade, tipo, valor) | `TaskConstraints` é um POCO plano com 3 campos (`SecurityRisk`, `DatabaseMigration`, `ExternalDependency`). Sem identidade, sem versionamento por campo. | **Lacuna total** |
+| ConstraintLedger (histórico append-only) | Não existe. `HistoricalDecision` tem versionamento mas é para decisões (ADRs, incidentes), não para restrições de tarefa. | **Lacuna total** |
+| Rastreamento de requisitos | `AcceptanceCriterion` tem ID/descrição mas sem revisão, proveniência ou rastreamento cross-execução. | **Lacuna total** |
+| Versionamento de restrições | Apenas `ContractFingerprint` SHA-256 do contrato inteiro. Sem hash ou versão por restrição individual. | **Lacuna total** |
+| Substituição (supersede) | `HistoricalDecision` tem `ValidFrom`/`ValidUntil` para decisões. Não se aplica a restrições de tarefa. | **Lacuna total** |
+| Autoridade | `ExecutionCapabilityPolicy.Authority` existe para capabilities. `HistoricalDecision.Authority` para decisões. Nenhuma para restrições de tarefa. | **Lacuna total** |
+| Detecção de conflitos | `HistoricalConflictEvidence` rastreia conflitos entre decisões e símbolos. Sem equivalente para restrições. | **Lacuna total** |
+| Hash de restrições | Apenas `ContractFingerprint` do contrato inteiro. | **Lacuna total** |
+
+**Ponto de extensão identificado:** O `HistoricalDecision` (src/AECS.Domain/Models/HistoricalDecision.cs) é o analog mais próximo — tem versionamento, autoridade, revisão, supressão, conflitos e hash de conteúdo. Pode servir de base arquitetural para o Constraint Ledger, estendendo o padrão para restrições de tarefa.
+
+### Modular Harness Evolution
+
+| Conceito | Estado no AECS | Lacuna |
+|---|---|---|
+| HarnessManifest (classe) | Não existe. `ExperimentDatasetManifest` é o mais próximo mas descreve estrutura do experimento, não composição de módulos. | **Lacuna total** |
+| Variantes de harness | `ExperimentVariantDefinition` existe mas varia apenas `contextStrategy`. Sem suporte a agent loop, observation, tools ou completion. | **Parcial** |
+| Módulos pluggables | Não existem como conceito unificado. Interfaces isoladas: `IExecutionController` (2 impls), `ICompiledContextGate` (1 impl), `ContextSelectionMode` enum (2 valores). | **Parcial** |
+| Estratégia de contexto | Implementada via `ContextSelectionMode` enum (`GraphRanked`, `NaivePathOrder`). Configurável por variante em datasets JSON. | **Implementado** |
+| Versionamento do harness | `ExperimentEnvironment.HarnessVersion`/`HarnessRevision` capturados da assembly. | **Implementado** |
+| Comparação pareada A/B | Robusta com CI, critérios de morte e conclusão determinística. Limitada ao eixo context strategy. | **Implementado** |
+| Recomendação adaptativa | `AdaptiveController` em shadow mode. Recomenda modelo/budget/context-strategy. Não altera estrutura do harness. | **Shadow only** |
+| Auto-modificação | Explicitamente bloqueada pelo plano. | **Bloqueado por design** |
+
+### Interfaces de extensão existentes
+
+| Interface | Arquivo | Implementações | Elegível para módulo de harness |
+|---|---|---|---|
+| `IExecutionController` | `src/AECS.Domain/Interfaces/IExecutionController.cs` | `FixedModelExecutionController`, `AdaptiveOfflineExecutionController` | Agent Loop |
+| `ICompiledContextGate` | `src/AECS.Application/ContextCompiler/CompiledContextGate.cs` | `RequiredContextPathsGate` | Context Management |
+| `ContextSelectionMode` | `src/AECS.Application/ContextCompiler/ContextSelector.cs` | `GraphRanked`, `NaivePathOrder` | Context Management |
+| `IAdaptiveOfflineArmExecutor` | `src/AECS.Application/AdaptiveController/AdaptiveOfflineRunner.cs` | `DelegatingAdaptiveOfflineArmExecutor` | Agent Loop |
+| `IStagedProcessRunnerFactory` | `src/AECS.Domain/Interfaces/IStagedProcessRunnerFactory.cs` | `DockerStagedProcessRunnerFactory`, `DefaultStagedProcessRunnerFactory` | Tool Use |
+
+### Verificadores e evidência
+
+- 17 verificadores implementados via `IVerifier`, todos reportam `VerificationResult` individual.
+- Evidência é task-level (um `ExecutionEvidence` por execução), não constraint-level.
+- `AcceptanceCriterionResult` é o rastreamento mais granular — por critério, não por restrição.
+- Envelope assinado com RSA-PSS/SHA-256, cadeia append-only de promoção/replay.
+- Nenhum campo `ConstraintHash` ou `ConstraintRevision` em `ExecutionEvidence`.
+
+### Documentação elegível encontrada
+
+| Arquivo | Escopo | Atualizado? |
+|---|---|---|
+| `docs/architecture.md` | Arquitetura executável geral | **Sim** — seção adicionada |
+| `docs/task-contract.md` | Referência do TaskContract | Não modificado (sem conteúdo de ledger ainda) |
+| `docs/historical-decision-registry.md` | Sistema de decisões históricas | Não modificado (analog, não o ledger em si) |
+| `docs/experiment-harness.md` | Harness experimental | Não modificado |
+| `AGENTS.md` | Não existe | N/A |
+| `CLAUDE.md` | Não existe | N/A |
+
+### Próximos passos (P1-P6)
+
+| Fase | Entrega | Dependência |
+|---|---|---|
+| P1 | Constraint Ledger versionado — criar `ConstraintRecord`, `ConstraintSetRef`, resolvedor, testes de vigência/autoridade/substituição/conflito | P0 concluído |
+| P2 | Integração contexto/verificação/evidência — hash do ledger na evidência, restrições obrigatórias bloqueiam violações | P1 |
+| P3 | Corpus multi-turn — casos progressivos com medição por turno | P1 |
+| P4 | Harness Manifest/variantes — pelo menos 2 variantes reprodutíveis sem mudar gates de segurança | P1 |
+| P5 | Experimento controlado — comparação pareada A/B/C/D | P4 |
+| P6 | (Opcional) Propostas automáticas de evolução — após P0-P5, isolamento, avaliação independente, promoção humana | P5 |
