@@ -30,8 +30,8 @@ jobs:
     - name: Restore
       run: dotnet restore AECS.slnx
     
-    - name: Build AECS CLI
-      run: dotnet build src/AECS.Cli/AECS.Cli.csproj --no-restore -c Release
+    - name: Build
+      run: dotnet build AECS.slnx --no-restore -c Release
     
     - name: Run unit tests
       run: dotnet test tests/AECS.UnitTests/AECS.UnitTests.csproj --no-build -c Release --logger "trx;LogFileName=test-results.trx"

@@ -551,7 +551,7 @@ public sealed class StagedExecutionPipeline
                 RecommendedPlan = Snapshot(fixedPlan),
                 Justification =
                     "Shadow analysis failed closed; the deterministic fixed plan is recommended.",
-                Diagnostics = ["Adaptive shadow history was unavailable and was not used."]
+                Diagnostics = [$"Adaptive shadow unavailable: {ex.GetType().Name}: {ex.Message}"]
             };
         }
     }
