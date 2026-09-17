@@ -531,116 +531,208 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                 StringComparer.Ordinal) ?? [];
             var snapshotProjects = snapshot?.Projects.Select(project => project.Path).ToHashSet(
                 StringComparer.Ordinal) ?? [];
-            if (symbolGraph.SchemaVersion != CSharpSymbolGraphSchema.GraphVersion ||
-                !CSharpSymbolGraphSchema.IsSupportedStrategyVersion(
-                    symbolGraph.StrategyVersion) ||
-                snapshot is null ||
-                !FixedTimeTextEquals(
-                    symbolGraph.RepositorySnapshotHash,
-                    snapshot.SnapshotHash) ||
-                !string.Equals(
-                    symbolGraph.BaselineCommit,
-                    evidence.Baseline.Commit,
-                    StringComparison.Ordinal) ||
-                !IsSha256(symbolGraph.GraphHash) ||
-                string.IsNullOrWhiteSpace(symbolGraph.CompilerVersion) ||
-                string.IsNullOrWhiteSpace(symbolGraph.MsBuildVersion) ||
-                string.IsNullOrWhiteSpace(symbolGraph.SdkVersion) ||
-                symbolGraph.Limits is null ||
-                symbolGraph.GlobalProperties is null ||
-                symbolGraph.Projects is null ||
-                symbolGraph.Nodes is null ||
-                symbolGraph.Edges is null ||
-                symbolGraph.Diagnostics is null ||
-                !ValidSymbolGraphLimits(symbolGraph.Limits) ||
-                !FixedTimeTextEquals(
-                    symbolGraph.GraphHash,
-                    CSharpSymbolGraphFingerprint.Create(symbolGraph)) ||
-                symbolGraph.Projects.Count > symbolGraph.Limits.MaxProjects ||
-                symbolGraph.Nodes.Count > symbolGraph.Limits.MaxNodes ||
-                symbolGraph.Edges.Count > symbolGraph.Limits.MaxEdges ||
-                symbolGraph.Diagnostics.Count > symbolGraph.Limits.MaxDiagnostics ||
-                symbolGraph.Nodes.Count(node => node.Kind == "file") >
-                    symbolGraph.Limits.MaxDocuments ||
-                symbolGraph.Projects.Select(project => project.Id)
-                    .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Projects.Count ||
-                symbolGraph.Projects.Any(project =>
-                    project.Id != CSharpSymbolGraphFingerprint.StableProjectId(project.Path) ||
-                    !IsSha256(project.Hash) ||
-                    !IsSafeRepositoryPath(project.Path) ||
-                    !snapshotProjects.Contains(project.Path) ||
-                    project.TargetFrameworks is null ||
-                    project.PreprocessorSymbols is null ||
-                    project.ProjectReferences is null ||
-                    project.ProjectReferences.Any(reference =>
-                        !IsSafeRepositoryPath(reference) ||
-                        !snapshotProjects.Contains(reference)) ||
-                    !FixedTimeTextEquals(
-                        project.Hash,
-                        CSharpSymbolGraphFingerprint.CreateProject(project))) ||
-                symbolGraph.Nodes.Select(node => node.Id)
-                    .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Nodes.Count ||
-                symbolGraph.Nodes.Any(node =>
-                    node.Id != CSharpSymbolGraphFingerprint.StableNodeId(node) ||
-                    !IsSha256(node.Hash) ||
-                    node.Kind is not ("project" or "file" or "namespace" or "type" or "member") ||
-                    node.FilePaths is null ||
-                    node.Modifiers is null ||
-                    node.Arity < 0 ||
-                    (!string.IsNullOrEmpty(node.ProjectPath) &&
-                        (!IsSafeRepositoryPath(node.ProjectPath) ||
-                            !snapshotProjects.Contains(node.ProjectPath))) ||
-                    node.FilePaths.Any(path =>
-                        !IsSafeRepositoryPath(path) || !snapshotFiles.Contains(path)) ||
-                    (!string.IsNullOrEmpty(node.SourceHash) && !IsGitHash(node.SourceHash)) ||
-                    (!string.IsNullOrEmpty(node.ContainingNodeId) &&
-                        !nodeIds.Contains(node.ContainingNodeId)) ||
-                    !FixedTimeTextEquals(
-                        node.Hash,
-                        CSharpSymbolGraphFingerprint.CreateNode(node))) ||
-                symbolGraph.Edges.Select(edge => edge.Id)
-                    .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Edges.Count ||
-                symbolGraph.Edges.Any(edge =>
-                    !edge.Id.StartsWith("CSE-", StringComparison.Ordinal) ||
-                    !IsSha256(edge.Hash) ||
-                    edge.Kind is not ("contains" or "declares" or "inherits" or "implements" or
-                        "project-reference" or "references" or "constructs") ||
-                    !nodeIds.Contains(edge.FromNodeId) ||
-                    !nodeIds.Contains(edge.ToNodeId) ||
-                    edge.Id != CSharpSymbolGraphFingerprint.StableEdgeId(
-                        edge.Kind,
-                        edge.FromNodeId,
-                        edge.ToNodeId) ||
-                    !FixedTimeTextEquals(
-                        edge.Hash,
-                        CSharpSymbolGraphFingerprint.CreateEdge(edge))) ||
-                symbolGraph.Diagnostics.Select(diagnostic => diagnostic.Id)
-                    .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Diagnostics.Count ||
-                symbolGraph.Diagnostics.Any(diagnostic =>
-                    diagnostic.Id != CSharpSymbolGraphFingerprint.StableDiagnosticId(diagnostic) ||
-                    string.IsNullOrWhiteSpace(diagnostic.Source) ||
-                    string.IsNullOrWhiteSpace(diagnostic.Severity) ||
-                    string.IsNullOrWhiteSpace(diagnostic.Code) ||
-                    diagnostic.Line < 0 ||
-                    diagnostic.Column < 0 ||
-                    (!string.IsNullOrEmpty(diagnostic.ProjectPath) &&
-                        !IsSafeRepositoryPath(diagnostic.ProjectPath)) ||
-                    (!string.IsNullOrEmpty(diagnostic.FilePath) &&
-                        !IsSafeRepositoryPath(diagnostic.FilePath))) ||
-                !string.IsNullOrEmpty(evidence.ContextManifest.SymbolGraphHash) &&
-                    (!symbolGraph.LoadSucceeded ||
-                     !string.Equals(
-                         evidence.ContextManifest.SemanticIndex,
-                         "roslyn-symbol-graph",
-                         StringComparison.Ordinal) ||
-                     !FixedTimeTextEquals(
-                         evidence.ContextManifest.SymbolGraphHash,
-                         symbolGraph.GraphHash)))
+            var failure = FirstSymbolGraphViolation(
+                evidence,
+                symbolGraph,
+                snapshot,
+                nodeIds,
+                snapshotFiles,
+                snapshotProjects);
+            if (failure is not null)
             {
                 throw new EvidenceIntegrityException(
-                    "C# symbol graph is incomplete, inconsistent, or has an unsupported schema.");
+                    $"C# symbol graph is incomplete, inconsistent, or has an unsupported schema: {failure}");
             }
         }
+    }
+
+    private static string? FirstSymbolGraphViolation(
+        ExecutionEvidence evidence,
+        CSharpSymbolGraph symbolGraph,
+        RepositorySnapshot? snapshot,
+        IReadOnlySet<string> nodeIds,
+        IReadOnlySet<string> snapshotFiles,
+        IReadOnlySet<string> snapshotProjects)
+    {
+        if (symbolGraph.SchemaVersion != CSharpSymbolGraphSchema.GraphVersion)
+            return $"schema version '{symbolGraph.SchemaVersion}' != '{CSharpSymbolGraphSchema.GraphVersion}'";
+        if (!CSharpSymbolGraphSchema.IsSupportedStrategyVersion(symbolGraph.StrategyVersion))
+            return $"unsupported strategy version '{symbolGraph.StrategyVersion}'";
+        if (snapshot is null)
+            return "repository snapshot is absent";
+        if (!FixedTimeTextEquals(symbolGraph.RepositorySnapshotHash, snapshot.SnapshotHash))
+            return "repository snapshot hash mismatch";
+        if (!string.Equals(symbolGraph.BaselineCommit, evidence.Baseline.Commit,
+                StringComparison.Ordinal))
+            return $"baseline commit '{symbolGraph.BaselineCommit}' != evidence '{evidence.Baseline.Commit}'";
+        if (!IsSha256(symbolGraph.GraphHash))
+            return "graph hash is not sha256";
+        if (string.IsNullOrWhiteSpace(symbolGraph.CompilerVersion))
+            return "compiler version is empty";
+        if (string.IsNullOrWhiteSpace(symbolGraph.MsBuildVersion))
+            return "msbuild version is empty";
+        if (string.IsNullOrWhiteSpace(symbolGraph.SdkVersion))
+            return "sdk version is empty";
+        if (symbolGraph.Limits is null)
+            return "limits are null";
+        if (symbolGraph.GlobalProperties is null)
+            return "global properties are null";
+        if (symbolGraph.Projects is null)
+            return "projects are null";
+        if (symbolGraph.Nodes is null)
+            return "nodes are null";
+        if (symbolGraph.Edges is null)
+            return "edges are null";
+        if (symbolGraph.Diagnostics is null)
+            return "diagnostics are null";
+        if (!ValidSymbolGraphLimits(symbolGraph.Limits))
+            return "limits fail validation";
+        if (!FixedTimeTextEquals(
+                symbolGraph.GraphHash,
+                CSharpSymbolGraphFingerprint.Create(symbolGraph)))
+            return "graph hash does not match recomputed fingerprint";
+        if (symbolGraph.Projects.Count > symbolGraph.Limits.MaxProjects)
+            return $"project count {symbolGraph.Projects.Count} exceeds limit";
+        if (symbolGraph.Nodes.Count > symbolGraph.Limits.MaxNodes)
+            return $"node count {symbolGraph.Nodes.Count} exceeds limit";
+        if (symbolGraph.Edges.Count > symbolGraph.Limits.MaxEdges)
+            return $"edge count {symbolGraph.Edges.Count} exceeds limit";
+        if (symbolGraph.Diagnostics.Count > symbolGraph.Limits.MaxDiagnostics)
+            return $"diagnostic count {symbolGraph.Diagnostics.Count} exceeds limit";
+        if (symbolGraph.Nodes.Count(node => node.Kind == "file") >
+            symbolGraph.Limits.MaxDocuments)
+            return "file node count exceeds document limit";
+        if (symbolGraph.Projects.Select(project => project.Id)
+            .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Projects.Count)
+            return "duplicate project ids";
+
+        foreach (var project in symbolGraph.Projects)
+        {
+            if (project.Id != CSharpSymbolGraphFingerprint.StableProjectId(project.Path))
+                return $"project id mismatch for '{project.Path}'";
+            if (!IsSha256(project.Hash))
+                return $"project hash is not sha256 for '{project.Path}'";
+            if (!IsSafeRepositoryPath(project.Path))
+                return $"unsafe project path '{project.Path}'";
+            if (!snapshotProjects.Contains(project.Path))
+                return $"project '{project.Path}' is not in the repository snapshot";
+            if (project.TargetFrameworks is null)
+                return $"project '{project.Path}' has null target frameworks";
+            if (project.PreprocessorSymbols is null)
+                return $"project '{project.Path}' has null preprocessor symbols";
+            if (project.ProjectReferences is null)
+                return $"project '{project.Path}' has null project references";
+            foreach (var reference in project.ProjectReferences)
+            {
+                if (!IsSafeRepositoryPath(reference))
+                    return $"unsafe project reference '{reference}' in '{project.Path}'";
+                if (!snapshotProjects.Contains(reference))
+                    return $"project reference '{reference}' of '{project.Path}' is not in the snapshot";
+            }
+            if (!FixedTimeTextEquals(project.Hash, CSharpSymbolGraphFingerprint.CreateProject(project)))
+                return $"project hash mismatch for '{project.Path}'";
+        }
+
+        if (symbolGraph.Nodes.Select(node => node.Id)
+            .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Nodes.Count)
+            return "duplicate node ids";
+
+        foreach (var node in symbolGraph.Nodes)
+        {
+            if (node.Id != CSharpSymbolGraphFingerprint.StableNodeId(node))
+                return $"node id mismatch for '{node.Name}'";
+            if (!IsSha256(node.Hash))
+                return $"node hash is not sha256 for '{node.Name}'";
+            if (node.Kind is not ("project" or "file" or "namespace" or "type" or "member"))
+                return $"invalid node kind '{node.Kind}'";
+            if (node.FilePaths is null)
+                return $"node '{node.Name}' has null file paths";
+            if (node.Modifiers is null)
+                return $"node '{node.Name}' has null modifiers";
+            if (node.Arity < 0)
+                return $"node '{node.Name}' has negative arity";
+            if (!string.IsNullOrEmpty(node.ProjectPath) &&
+                (!IsSafeRepositoryPath(node.ProjectPath) ||
+                 !snapshotProjects.Contains(node.ProjectPath)))
+                return $"node '{node.Name}' has unsafe or unknown project path '{node.ProjectPath}'";
+            foreach (var path in node.FilePaths)
+            {
+                if (!IsSafeRepositoryPath(path) || !snapshotFiles.Contains(path))
+                    return $"node '{node.Name}' references unsafe or unknown file '{path}'";
+            }
+            if (!string.IsNullOrEmpty(node.SourceHash) && !IsGitHash(node.SourceHash))
+                return $"node '{node.Name}' has invalid source hash";
+            if (!string.IsNullOrEmpty(node.ContainingNodeId) && !nodeIds.Contains(node.ContainingNodeId))
+                return $"node '{node.Name}' references unknown containing node '{node.ContainingNodeId}'";
+            if (!FixedTimeTextEquals(node.Hash, CSharpSymbolGraphFingerprint.CreateNode(node)))
+                return $"node hash mismatch for '{node.Name}'";
+        }
+
+        if (symbolGraph.Edges.Select(edge => edge.Id)
+            .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Edges.Count)
+            return "duplicate edge ids";
+
+        foreach (var edge in symbolGraph.Edges)
+        {
+            if (!edge.Id.StartsWith("CSE-", StringComparison.Ordinal))
+                return $"edge id '{edge.Id}' lacks CSE- prefix";
+            if (!IsSha256(edge.Hash))
+                return $"edge hash is not sha256 for '{edge.Id}'";
+            if (edge.Kind is not ("contains" or "declares" or "inherits" or "implements" or
+                    "project-reference" or "references" or "constructs"))
+                return $"invalid edge kind '{edge.Kind}'";
+            if (!nodeIds.Contains(edge.FromNodeId))
+                return $"edge '{edge.Id}' references unknown from-node '{edge.FromNodeId}'";
+            if (!nodeIds.Contains(edge.ToNodeId))
+                return $"edge '{edge.Id}' references unknown to-node '{edge.ToNodeId}'";
+            if (edge.Id != CSharpSymbolGraphFingerprint.StableEdgeId(
+                    edge.Kind, edge.FromNodeId, edge.ToNodeId))
+                return $"edge id mismatch for '{edge.Id}'";
+            if (!FixedTimeTextEquals(edge.Hash, CSharpSymbolGraphFingerprint.CreateEdge(edge)))
+                return $"edge hash mismatch for '{edge.Id}'";
+        }
+
+        if (symbolGraph.Diagnostics.Select(diagnostic => diagnostic.Id)
+            .Distinct(StringComparer.Ordinal).Count() != symbolGraph.Diagnostics.Count)
+            return "duplicate diagnostic ids";
+
+        foreach (var diagnostic in symbolGraph.Diagnostics)
+        {
+            if (diagnostic.Id != CSharpSymbolGraphFingerprint.StableDiagnosticId(diagnostic))
+                return $"diagnostic id mismatch for '{diagnostic.Code}'";
+            if (string.IsNullOrWhiteSpace(diagnostic.Source))
+                return $"diagnostic '{diagnostic.Code}' has empty source";
+            if (string.IsNullOrWhiteSpace(diagnostic.Severity))
+                return $"diagnostic '{diagnostic.Code}' has empty severity";
+            if (string.IsNullOrWhiteSpace(diagnostic.Code))
+                return "diagnostic has empty code";
+            if (diagnostic.Line < 0)
+                return $"diagnostic '{diagnostic.Code}' has negative line";
+            if (diagnostic.Column < 0)
+                return $"diagnostic '{diagnostic.Code}' has negative column";
+            if (!string.IsNullOrEmpty(diagnostic.ProjectPath) &&
+                !IsSafeRepositoryPath(diagnostic.ProjectPath))
+                return $"diagnostic '{diagnostic.Code}' has unsafe project path";
+            if (!string.IsNullOrEmpty(diagnostic.FilePath) &&
+                !IsSafeRepositoryPath(diagnostic.FilePath))
+                return $"diagnostic '{diagnostic.Code}' has unsafe file path";
+        }
+
+        if (!string.IsNullOrEmpty(evidence.ContextManifest.SymbolGraphHash))
+        {
+            if (!string.Equals(
+                    evidence.ContextManifest.SemanticIndex,
+                    "roslyn-symbol-graph",
+                    StringComparison.Ordinal))
+                return $"context semantic index '{evidence.ContextManifest.SemanticIndex}' " +
+                    "does not match graph hash presence";
+            if (!FixedTimeTextEquals(
+                    evidence.ContextManifest.SymbolGraphHash,
+                    symbolGraph.GraphHash))
+                return "context manifest symbol graph hash mismatch";
+        }
+
+        return null;
     }
 
     private static void ValidateAdaptiveShadowEvidence(ExecutionEvidence evidence)
