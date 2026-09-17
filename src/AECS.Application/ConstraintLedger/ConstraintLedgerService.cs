@@ -24,6 +24,21 @@ public sealed class ConstraintLedgerService
     {
         var sealedRecord = ConstraintRecordContract.Seal(record);
 
+        var sameIdentity = _records.FirstOrDefault(r => r.Id == sealedRecord.Id);
+        if (sameIdentity is not null)
+        {
+            if (string.Equals(
+                    sameIdentity.ContentHash,
+                    sealedRecord.ContentHash,
+                    StringComparison.Ordinal))
+            {
+                return sameIdentity;
+            }
+
+            throw new InvalidOperationException(
+                $"Constraint id '{sealedRecord.Id}' already exists with different content.");
+        }
+
         var existing = _records
             .Where(r => r.RequirementKey == sealedRecord.RequirementKey &&
                         r.Status is ConstraintStatus.Active or ConstraintStatus.PendingVerification)
@@ -182,6 +197,42 @@ public sealed class ConstraintLedgerService
         _records.FirstOrDefault(r => r.Id == id);
 
     /// <summary>
+    /// Appends already-adjudicated history records (superseded/revoked trail)
+    /// without re-running ingest authority rules. Seals are re-validated.
+    /// </summary>
+    public void AppendHistory(IEnumerable<ConstraintRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        foreach (var record in records)
+        {
+            var sealedRecord = ConstraintRecordContract.Seal(record);
+            if (_records.Any(r => r.Id == sealedRecord.Id))
+            {
+                continue;
+            }
+
+            _records.Add(sealedRecord);
+        }
+    }
+
+    /// <summary>
+    /// Appends persisted conflicts without re-detection.
+    /// </summary>
+    public void AppendConflicts(IEnumerable<ConstraintConflict> conflicts)
+    {
+        ArgumentNullException.ThrowIfNull(conflicts);
+        foreach (var conflict in conflicts)
+        {
+            if (_conflicts.Any(c => c.Id == conflict.Id))
+            {
+                continue;
+            }
+
+            _conflicts.Add(conflict);
+        }
+    }
+
+    /// <summary>
     /// Returns all revisions of a constraint by its RequirementKey.
     /// </summary>
     public IReadOnlyList<ConstraintRecord> GetHistory(string requirementKey) =>
@@ -293,7 +344,7 @@ public sealed class ConstraintLedgerService
         if (old is null || old.Status != ConstraintStatus.Active)
             return;
 
-        var superseded = new ConstraintRecord
+        var superseded = ConstraintRecordContract.Seal(new ConstraintRecord
         {
             SchemaVersion = old.SchemaVersion,
             Id = old.Id,
@@ -309,11 +360,10 @@ public sealed class ConstraintLedgerService
             SupersedesId = old.SupersedesId,
             VerifierName = old.VerifierName,
             RepositorySnapshotId = old.RepositorySnapshotId,
-            ContentHash = old.ContentHash,
             ValidFrom = old.ValidFrom,
             ValidUntil = DateTime.UtcNow,
             CreatedAt = old.CreatedAt
-        };
+        });
 
         var index = _records.FindIndex(r => r.Id == oldId);
         if (index >= 0)

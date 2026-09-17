@@ -10,6 +10,32 @@ public static class ConstraintLedgerSchema
     public const string SetRefVersion = "aecs.constraint-set/v1";
     public const string ConflictVersion = "aecs.constraint-conflict/v1";
     public const string EvidenceVersion = "aecs.constraint-ledger-evidence/v1";
+    public const string StoreVersion = "aecs.constraint-ledger-store/v1";
+}
+
+/// <summary>
+/// Durable snapshot of cross-turn ledger state: human/historical records and
+/// conflicts that must survive sessions. Contract-projected records are
+/// re-derived each run and are intentionally excluded from persistence.
+/// </summary>
+public sealed class ConstraintLedgerSnapshot
+{
+    public string SchemaVersion { get; init; } = ConstraintLedgerSchema.StoreVersion;
+    public string RepositoryKey { get; init; } = string.Empty;
+    public List<ConstraintRecord> Records { get; init; } = [];
+    public List<ConstraintConflict> Conflicts { get; init; } = [];
+    public DateTime SavedAt { get; init; } = DateTime.UtcNow;
+}
+
+public static class ConstraintLedgerPersistence
+{
+    /// <summary>
+    /// Origins that may be persisted across turns. Contract-projected and
+    /// runtime-recomputed records are re-derived every run; only explicit
+    /// human/historical authority survives in the store (plan §4.1).
+    /// </summary>
+    public static bool IsPersistable(ConstraintOrigin origin) =>
+        origin is ConstraintOrigin.HumanOverride or ConstraintOrigin.HistoricalDecision;
 }
 
 public enum ConstraintKind

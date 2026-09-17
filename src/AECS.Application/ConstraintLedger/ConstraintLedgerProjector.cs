@@ -19,17 +19,31 @@ public static class ConstraintLedgerProjector
 
     public static ConstraintLedgerService Build(TaskContract contract, string repositorySnapshotId)
     {
+        var service = new ConstraintLedgerService();
+        Build(contract, repositorySnapshotId, service);
+        return service;
+    }
+
+    /// <summary>
+    /// Projects the contract into an existing ledger service (ingest order:
+    /// projected records first so persisted higher-authority records loaded
+    /// afterwards can supersede them).
+    /// </summary>
+    public static void Build(
+        TaskContract contract,
+        string repositorySnapshotId,
+        ConstraintLedgerService service)
+    {
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(repositorySnapshotId);
+        ArgumentNullException.ThrowIfNull(service);
 
-        var service = new ConstraintLedgerService();
         foreach (var record in Project(contract, repositorySnapshotId))
         {
             service.Ingest(record);
         }
 
         service.DetectConflicts();
-        return service;
     }
 
     public static IEnumerable<ConstraintRecord> Project(

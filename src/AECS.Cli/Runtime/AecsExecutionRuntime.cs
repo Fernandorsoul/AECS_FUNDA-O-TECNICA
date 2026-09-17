@@ -20,11 +20,13 @@ public sealed class AecsExecutionRuntime : IDisposable
         IAgentAdapter agentAdapter,
         IExecutionEvidenceStore evidenceStore,
         string cloudApiKey,
-        List<HttpClient>? httpClients = null)
+        List<HttpClient>? httpClients = null,
+        IConstraintLedgerStore? constraintLedgerStore = null)
     {
         Configuration = configuration;
         AgentAdapter = agentAdapter;
         EvidenceStore = evidenceStore;
+        ConstraintLedgerStore = constraintLedgerStore;
         _cloudApiKey = cloudApiKey;
         _httpClients = httpClients ?? [];
     }
@@ -32,6 +34,7 @@ public sealed class AecsExecutionRuntime : IDisposable
     public EffectiveAecsRuntimeConfiguration Configuration { get; }
     public IAgentAdapter AgentAdapter { get; }
     public IExecutionEvidenceStore EvidenceStore { get; }
+    public IConstraintLedgerStore? ConstraintLedgerStore { get; }
     internal string CloudApiKey => _cloudApiKey;
 
     public static AecsExecutionRuntime Create(ResolvedAecsRuntimeConfiguration resolved)
@@ -71,12 +74,15 @@ public sealed class AecsExecutionRuntime : IDisposable
             }
 
             var store = CreateEvidenceStore(resolved);
+            var ledgerStore = new JsonConstraintLedgerStore(
+                configuration.EvidenceJsonRoot.Value);
             return new AecsExecutionRuntime(
                 configuration,
                 agent,
                 store,
                 resolved.CloudApiKey,
-                clients);
+                clients,
+                ledgerStore);
         }
         catch
         {
@@ -170,7 +176,8 @@ public sealed class AecsExecutionRuntime : IDisposable
             stagedProcessRunnerFactory: CreateStagedProcessRunnerFactory(processRunner),
             executionController: executionController,
             adaptiveRoutingPolicy: CreateAdaptiveRoutingPolicy(),
-            compiledContextGate: compiledContextGate);
+            compiledContextGate: compiledContextGate,
+            constraintLedgerStore: ConstraintLedgerStore);
     }
 
     private AdaptiveRoutingPolicy CreateAdaptiveRoutingPolicy() => new()

@@ -61,6 +61,7 @@ public sealed class StagedExecutionPipeline
     private readonly IAdaptiveShadowController? _adaptiveShadowController;
     private readonly AdaptiveRoutingPolicy _adaptiveRoutingPolicy;
     private readonly ICompiledContextGate? _compiledContextGate;
+    private readonly IConstraintLedgerStore? _constraintLedgerStore;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -77,7 +78,8 @@ public sealed class StagedExecutionPipeline
         IExecutionController? executionController = null,
         IAdaptiveShadowController? adaptiveShadowController = null,
         AdaptiveRoutingPolicy? adaptiveRoutingPolicy = null,
-        ICompiledContextGate? compiledContextGate = null)
+        ICompiledContextGate? compiledContextGate = null,
+        IConstraintLedgerStore? constraintLedgerStore = null)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -100,6 +102,7 @@ public sealed class StagedExecutionPipeline
                 : null);
         _adaptiveRoutingPolicy = adaptiveRoutingPolicy ?? AdaptiveRoutingPolicy.Disabled;
         _compiledContextGate = compiledContextGate;
+        _constraintLedgerStore = constraintLedgerStore;
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -192,9 +195,32 @@ public sealed class StagedExecutionPipeline
             baseline,
             CancellationToken.None);
 
-        var constraintLedger = ConstraintLedgerProjector.Build(
+        var constraintLedger = new ConstraintLedgerService();
+        ConstraintLedgerProjector.Build(
             contract,
-            repositorySnapshot.SnapshotHash);
+            repositorySnapshot.SnapshotHash,
+            constraintLedger);
+        if (_constraintLedgerStore is not null)
+        {
+            var persisted = await _constraintLedgerStore.LoadAsync(
+                baseline.RepositoryPath,
+                cancellationToken);
+            if (persisted is not null)
+            {
+                constraintLedger.AppendHistory(persisted.Records.Where(record =>
+                    record.Status is not (ConstraintStatus.Active or
+                        ConstraintStatus.PendingVerification)));
+                foreach (var record in persisted.Records.Where(record =>
+                    record.Status is ConstraintStatus.Active or
+                        ConstraintStatus.PendingVerification))
+                {
+                    constraintLedger.Ingest(record);
+                }
+
+                constraintLedger.AppendConflicts(persisted.Conflicts);
+            }
+        }
+
         var constraintSet = constraintLedger.CreateSetRef();
 
         var baselineFailures = RequiredBaselineFailures(
@@ -432,6 +458,18 @@ public sealed class StagedExecutionPipeline
         ValidateCommandEnvironments(
             contract.Execution,
             baselineCommands.Concat(candidateCommands));
+
+        if (_constraintLedgerStore is not null)
+        {
+            await _constraintLedgerStore.SaveAsync(
+                baseline.RepositoryPath,
+                new ConstraintLedgerSnapshot
+                {
+                    Records = constraintLedger.AllRecords.ToList(),
+                    Conflicts = constraintLedger.AllConflicts.ToList()
+                },
+                CancellationToken.None);
+        }
 
         var agentRun = new AgentRun
         {
