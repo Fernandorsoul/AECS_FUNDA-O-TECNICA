@@ -57,6 +57,43 @@ public sealed class FileApplicatorSecurityTests : IDisposable
             .Should().Be("candidate");
     }
 
+    [Fact]
+    public void ApplyChanges_MarkdownHeaderWithFilePrefix_CapturesOnlyThePath()
+    {
+        var response = "### FILE: src/allowed.txt\n```text\ncandidate\n```";
+
+        var result = _applicator.ApplyChanges(response, _workspace);
+
+        result.Success.Should().BeTrue();
+        result.AppliedChanges.Should().ContainSingle()
+            .Which.FilePath.Should().Be("src/allowed.txt");
+        File.ReadAllText(Path.Combine(_workspace, "src", "allowed.txt"))
+            .Should().Be("candidate");
+    }
+
+    [Fact]
+    public void ApplyChanges_MarkdownHeaderWithoutFilePrefix_WritesPath()
+    {
+        var response = "### src/allowed.txt\n```text\ncandidate\n```";
+
+        var result = _applicator.ApplyChanges(response, _workspace);
+
+        result.Success.Should().BeTrue();
+        result.AppliedChanges.Should().ContainSingle()
+            .Which.FilePath.Should().Be("src/allowed.txt");
+    }
+
+    [Fact]
+    public void ApplyChanges_MarkdownHeaderWithFilePrefix_RejectsAdversarialPath()
+    {
+        var response = "### FILE: ../outside.txt\n```text\ncandidate\n```";
+
+        var result = _applicator.ApplyChanges(response, _workspace);
+
+        result.Success.Should().BeFalse();
+        result.AppliedChanges.Should().BeEmpty();
+    }
+
     public void Dispose()
     {
         var resolved = Path.GetFullPath(_testRoot);
