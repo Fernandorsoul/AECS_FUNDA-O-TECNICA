@@ -1086,12 +1086,23 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
                 return existing;
             }
 
+            string containingId;
             if (symbol.ContainingType is not null)
-                AddSymbolNode(symbol.ContainingType, currentProjectPath, maps);
+            {
+                containingId = AddSymbolNode(symbol.ContainingType, currentProjectPath, maps)?.Id
+                    ?? string.Empty;
+            }
             else if (symbol.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace)
-                AddSymbolNode(containingNamespace, currentProjectPath, maps);
-
-            var containingId = ContainingNodeId(symbol, projectPath, assemblyName);
+            {
+                containingId = AddSymbolNode(containingNamespace, currentProjectPath, maps)?.Id
+                    ?? string.Empty;
+            }
+            else
+            {
+                containingId = string.IsNullOrWhiteSpace(projectPath)
+                    ? string.Empty
+                    : CSharpSymbolGraphFingerprint.StableNodeId($"project|{projectPath}");
+            }
             var node = new CSharpSymbolGraphNode
             {
                 Id = nodeId,
@@ -1331,38 +1342,6 @@ public sealed partial class RoslynSymbolGraphBuilder : ICSharpSymbolGraphBuilder
             _snapshotFiles.TryGetValue(candidate, out var file) && file.Language == "C#"
                 ? file.Path
                 : string.Empty;
-
-        private static string ContainingNodeId(
-            ISymbol symbol,
-            string projectPath,
-            string assemblyName)
-        {
-            if (symbol.ContainingType is not null)
-                return SymbolNodeId(symbol.ContainingType, projectPath, assemblyName);
-            if (symbol.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace)
-                return SymbolNodeId(containingNamespace, projectPath, assemblyName);
-            return string.IsNullOrWhiteSpace(projectPath)
-                ? string.Empty
-                : CSharpSymbolGraphFingerprint.StableNodeId($"project|{projectPath}");
-        }
-
-        private static string SymbolNodeId(
-            ISymbol symbol,
-            string projectPath,
-            string assemblyName)
-        {
-            var kind = symbol.Kind switch
-            {
-                SymbolKind.Namespace => "namespace",
-                SymbolKind.NamedType => "type",
-                _ => "member"
-            };
-            var documentationId = DocumentationCommentId.CreateDeclarationId(symbol) ?? string.Empty;
-            var display = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
-            return CSharpSymbolGraphFingerprint.StableNodeId(
-                $"{kind}|{projectPath}|{assemblyName}|" +
-                (string.IsNullOrWhiteSpace(documentationId) ? display : documentationId));
-        }
 
         private static List<string> Modifiers(ISymbol symbol)
         {
