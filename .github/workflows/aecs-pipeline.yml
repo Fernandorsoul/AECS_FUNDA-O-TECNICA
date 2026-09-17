@@ -53,38 +53,54 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
-    
+    env:
+      CLOUD_KEY_SET: ${{ secrets.OPENAI_API_KEY != '' }}
+
     steps:
     - name: Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
-    
+
     - name: Download AECS CLI
       uses: actions/download-artifact@v4
       with:
         name: aecs-cli
         path: src/AECS.Cli/bin/Release/net10.0/
-    
+
     - name: Create .env file
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+        OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       run: |
-        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
-        echo "OPENAI_MODEL=${{ secrets.OPENAI_MODEL }}" >> .env
-        echo "OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}" >> .env
-    
-    - name: Run AECS experiment
+        echo "OPENAI_API_KEY=${OPENAI_API_KEY}" > .env
+        echo "OPENAI_MODEL=${OPENAI_MODEL}" >> .env
+        echo "OPENAI_BASE_URL=${OPENAI_BASE_URL}" >> .env
+
+    - name: Run AECS experiment (cloud fallback)
+      if: env.CLOUD_KEY_SET == 'true'
       run: |
         dotnet src/AECS.Cli/bin/Release/net10.0/AECS.Cli.dll experiment \
           --repo ./sample/SampleProject \
           --tasks ./tasks/experiment \
           --enable-cloud-fallback \
           --allow-cloud-context
-    
+
+    - name: Run AECS experiment (mock — no cloud secret)
+      if: env.CLOUD_KEY_SET != 'true'
+      run: |
+        echo "OPENAI_API_KEY secret not configured; running experiment in mock mode."
+        dotnet src/AECS.Cli/bin/Release/net10.0/AECS.Cli.dll experiment \
+          --repo ./sample/SampleProject \
+          --tasks ./tasks/experiment \
+          --mock
+
     - name: Upload experiment results
       uses: actions/upload-artifact@v4
       if: always()
@@ -93,3 +109,4 @@ jobs:
         path: |
           ~/.local/share/AECS/evidence/
           **/experiment-report*.json
+        if-no-files-found: warn
