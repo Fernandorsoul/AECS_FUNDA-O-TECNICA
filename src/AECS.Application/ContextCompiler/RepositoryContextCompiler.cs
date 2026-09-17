@@ -70,7 +70,8 @@ public sealed class RepositoryContextCompiler
         string baselineCommit,
         ContextCompilationOptions? options = null,
         CSharpSymbolGraph? symbolGraph = null,
-        AgentContextProfile? agentProfile = null)
+        AgentContextProfile? agentProfile = null,
+        IReadOnlyList<ConstraintRecord>? constraints = null)
     {
         var resolvedRoot = Path.GetFullPath(workspacePath);
         options ??= _defaultOptions ?? ContextCompilationOptions.FromBudget(contract.Budget);
@@ -124,7 +125,12 @@ public sealed class RepositoryContextCompiler
         var headerFits = effectiveTokenLimit > 0 &&
             header.Length <= characterLimit &&
             tokenCounter.CountTokens(header) <= effectiveTokenLimit;
-        var prompt = new StringBuilder(headerFits ? header : string.Empty);
+        var constraintSection = BuildConstraintSection(constraints);
+        var prompt = new StringBuilder(constraintSection);
+        if (headerFits)
+        {
+            prompt.Append(header);
+        }
 
         var codeContext = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var fileManifests = new List<ContextFileManifest>();
@@ -248,8 +254,20 @@ public sealed class RepositoryContextCompiler
 
         var promptText = prompt.ToString();
         var estimatedTokens = tokenCounter.CountTokens(promptText);
-        if (estimatedTokens > effectiveTokenLimit || promptText.Length > characterLimit)
+        var obligationTokens = constraintSection.Length == 0
+            ? 0
+            : tokenCounter.CountTokens(constraintSection);
+        if (estimatedTokens - obligationTokens > effectiveTokenLimit ||
+            promptText.Length - constraintSection.Length > characterLimit)
+        {
             throw new InvalidOperationException("Compiled context exceeded its effective adapter budget.");
+        }
+
+        // Manifest metrics describe the selected repository context. The constraint
+        // obligation section is authoritative regardless of budget and is tracked
+        // separately via the evidence ConstraintSet.
+        var selectedTextLength = promptText.Length - constraintSection.Length;
+        var selectedTokenCount = estimatedTokens - obligationTokens;
 
         var omittedFileCount = selections.Count(selection => selection.Decision == "omitted");
         var draft = new ContextManifest
@@ -279,8 +297,8 @@ public sealed class RepositoryContextCompiler
             MaxFileTokens = perFileTokenLimit,
             MaxTokens = effectiveTokenLimit,
             MaxCharacters = characterLimit,
-            EstimatedTokens = estimatedTokens,
-            TotalCharacters = promptText.Length,
+            EstimatedTokens = selectedTokenCount,
+            TotalCharacters = selectedTextLength,
             EligibleFileCount = package.EligibleFileCount,
             OmittedFileCount = omittedFileCount,
             Truncated = selections.Any(selection => selection.Decision != "included"),
@@ -336,6 +354,40 @@ public sealed class RepositoryContextCompiler
         prompt.AppendLine($"Dependency depth: {dependencyDepth}");
         prompt.AppendLine();
         return prompt.ToString();
+    }
+
+    private static string BuildConstraintSection(
+        IReadOnlyList<ConstraintRecord>? constraints)
+    {
+        if (constraints is null || constraints.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        const int maxLines = 40;
+        const int maxDescriptionLength = 160;
+        var builder = new StringBuilder();
+        builder.AppendLine("## ACTIVE CONSTRAINTS (authoritative — must be honored)");
+        foreach (var constraint in constraints
+                     .OrderBy(constraint => constraint.RequirementKey, StringComparer.Ordinal)
+                     .Take(maxLines))
+        {
+            var description = constraint.Description.Length > maxDescriptionLength
+                ? constraint.Description[..maxDescriptionLength] + "..."
+                : constraint.Description;
+            builder.AppendLine(
+                $"- [{constraint.Kind}/{constraint.Verifiability}] " +
+                $"{constraint.RequirementKey} (rev {constraint.Revision}): {description}");
+        }
+
+        if (constraints.Count > maxLines)
+        {
+            builder.AppendLine(
+                $"- ... and {constraints.Count - maxLines} more active constraint(s)");
+        }
+
+        builder.AppendLine();
+        return builder.ToString();
     }
 
     private static string BuildFilePrefix(

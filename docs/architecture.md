@@ -290,22 +290,45 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 ## Constraint Continuity e evolução modular do harness
 
-**Estado atual:** auditoria P0 concluída em 2026-09-16, commit `21b59a4`, branch `dev`.
+**Estado atual:** P0 (auditoria) + P1 (Constraint Ledger versionado) + P2 (integração contexto/verificação/evidência) **implementados e verificados com testes** — 2026-09-17, branch `dev`.
 
 ### Constraint Continuity (Constraint Ledger)
 
-| Conceito do Ledger | Estado no AECS | Lacuna |
-|---|---|---|
-| ConstraintRecord (identidade, tipo, valor) | `TaskConstraints` é um POCO plano com 3 campos (`SecurityRisk`, `DatabaseMigration`, `ExternalDependency`). Sem identidade, sem versionamento por campo. | **Lacuna total** |
-| ConstraintLedger (histórico append-only) | Não existe. `HistoricalDecision` tem versionamento mas é para decisões (ADRs, incidentes), não para restrições de tarefa. | **Lacuna total** |
-| Rastreamento de requisitos | `AcceptanceCriterion` tem ID/descrição mas sem revisão, proveniência ou rastreamento cross-execução. | **Lacuna total** |
-| Versionamento de restrições | Apenas `ContractFingerprint` SHA-256 do contrato inteiro. Sem hash ou versão por restrição individual. | **Lacuna total** |
-| Substituição (supersede) | `HistoricalDecision` tem `ValidFrom`/`ValidUntil` para decisões. Não se aplica a restrições de tarefa. | **Lacuna total** |
-| Autoridade | `ExecutionCapabilityPolicy.Authority` existe para capabilities. `HistoricalDecision.Authority` para decisões. Nenhuma para restrições de tarefa. | **Lacuna total** |
-| Detecção de conflitos | `HistoricalConflictEvidence` rastreia conflitos entre decisões e símbolos. Sem equivalente para restrições. | **Lacuna total** |
-| Hash de restrições | Apenas `ContractFingerprint` do contrato inteiro. | **Lacuna total** |
+**Fonte de verdade das restrições:** `src/AECS.Domain/Models/ConstraintLedger.cs` (`ConstraintRecord`, `ConstraintSetRef`, `ConstraintConflict`, `ConstraintLedgerVerificationEvidence`, `ConstraintRecordContract.Seal/Validate`).
 
-**Ponto de extensão identificado:** O `HistoricalDecision` (src/AECS.Domain/Models/HistoricalDecision.cs) é o analog mais próximo — tem versionamento, autoridade, revisão, supressão, conflitos e hash de conteúdo. Pode servir de base arquitetural para o Constraint Ledger, estendendo o padrão para restrições de tarefa.
+**Projeção contrato→ledger:** `src/AECS.Application/ConstraintLedger/ConstraintLedgerProjector.cs` — converte um `TaskContract` em `ConstraintRecord`s determinísticos (IDs derivados de SHA-256, timestamps fixos em `DateTime.UnixEpoch`): escopo permitido/proibido → `ScopeBoundary` (verificador `Scope`), budget → `BudgetLimit` (`Budget`), verificações habilitadas → `VerificationRequirement` (`Build`/`Tests`/suites/`SecurityScan`/`EB001`), aceite → `AcceptanceCriterion` (`AcceptanceCriteria`), aprovação humana/migração/dependência externa → `Manual` (pending review). Mesmo contrato + mesmo snapshot ⇒ mesmo hash do conjunto.
+
+**Resolução de vigência, conflitos e autoridade:** `src/AECS.Application/ConstraintLedger/ConstraintLedgerService.cs` — ingest com auto-supersede por autoridade/revisão, `Supersede` explícito com trilha histórica, `Revoke` exige autoridade ≥, `DetectConflicts` para chaves duplicadas de mesma autoridade, `CreateSetRef` com hash canônico SHA-256.
+
+**Verificação independente:** `src/AECS.Application/Verification/ConstraintLedgerVerifier.cs` (gate `ConstraintLedger`, exigido pelo `DecisionEngine`):
+- restrições `Deterministic` são avaliadas contra o resultado do verificador nomeado — qualquer status ≠ Pass, verificador ausente ou conflito não resolvido ⇒ **Fail/Critical → Rejected**;
+- restrições `Manual`/`Assisted`/`ProcessInvariant` ⇒ assessment `PendingReview` (**nunca** `Satisfied` por inferência) ⇒ `DecisionEngine` emite **HumanReviewRequired** quando é o único pendente;
+- resultado carrega `ConstraintLedgerVerificationEvidence` (set id/revision/hash, assessment por requisito).
+
+**Integração com Context Compiler e plano:** `RepositoryContextCompiler.Compile(..., constraints)` prepõe a seção `## ACTIVE CONSTRAINTS (authoritative)` ao prompt — orçamento de tokens não elimina obrigações (seção isenta do teto; métricas do manifest cobrem só o contexto selecionado). `StagedExecutionPipeline` projeta o ledger após o snapshot baseline, injeta as restrições no contexto e roda o verificador por último (após acceptance).
+
+**Evidência assinada:** `ExecutionEvidence.ConstraintSet` (`ConstraintSetRef`) + `ExecutionEvidence.ConstraintRecords` (registros ativos) + `VerificationResult.ConstraintLedger`. `AuthenticatedEvidenceEnvelopeCodec.ValidateConstraintEvidence` valida formato, contagens e recomputa `CreateSetHash(records) == set.CanonicalSha256` (fail-closed). `PublishAsync` recomputa o hash do conjunto antes de persistir e aborta se ele mudou no meio da execução (revalidação, §4.3.4).
+
+**Replay:** `ExecutionReplayService` reconstrói o ledger a partir de `ConstraintRecords`/`ConstraintSet` originais e reproduce o gate `ConstraintLedger`.
+
+**Testes:** `ConstraintLedgerTests` (24, P1), `ConstraintLedgerProjectorTests` (6), `ConstraintLedgerVerifierTests` (6), `DecisionEngineTests` (violação→Rejected, pending→HumanReview, ausente→Rejected), `RepositoryContextCompilerTests.Compile_IncludesConstraintObligations_EvenWhenBudgetIsTight`, mais as integrações de pipeline/replay/evidência (round-trip do set pelo codec).
+
+**Não verificado / pendências:**
+- Persistência cross-sessão do ledger (hoje em memória, derivado por execução do contrato) — P3.
+- Captura de sinais de invariantes de processo *durante* a execução no sandbox (§4.3.7).
+- `Assisted` sem runner automatizado — permanece `PendingReview`.
+
+| Conceito do Ledger | Estado no AECS |
+|---|---|
+| ConstraintRecord / versionamento / ContentHash | **Implementado (P1)** |
+| ConstraintSetRef + hash canônico na evidência | **Implementado (P2)** |
+| Autoridade, supersede, revoke, conflitos | **Implementado (P1)** |
+| Verificação determinística bloqueante + pending manual | **Implementado (P2)** |
+| Visão curta no Context Compiler | **Implementado (P2)** |
+| Revalidação no meio da execução | **Implementado (P2)** |
+| Persistência entre turnos (multi-turn) | **Proposto (P3)** |
+
+**Ponto de extensão arquitetural:** padrão espelhado de `HistoricalDecision` (versionamento, autoridade, review, ContentHash) — ver `docs/historical-decision-registry.md`.
 
 ### Modular Harness Evolution
 
@@ -332,11 +355,10 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 ### Verificadores e evidência
 
-- 17 verificadores implementados via `IVerifier`, todos reportam `VerificationResult` individual.
-- Evidência é task-level (um `ExecutionEvidence` por execução), não constraint-level.
-- `AcceptanceCriterionResult` é o rastreamento mais granular — por critério, não por restrição.
-- Envelope assinado com RSA-PSS/SHA-256, cadeia append-only de promoção/replay.
-- Nenhum campo `ConstraintHash` ou `ConstraintRevision` em `ExecutionEvidence`.
+- 18 verificadores implementados via `IVerifier` + gate dedicado `ConstraintLedger` (último da cadeia do candidate), todos reportam `VerificationResult` individual.
+- Evidência é task-level (um `ExecutionEvidence` por execução) com binding constraint-level via `ConstraintSet` + `ConstraintRecords` + assessments por requisito no resultado do `ConstraintLedger`.
+- `AcceptanceCriterionResult` é o rastreamento mais granular por critério de aceite.
+- Envelope assinado com RSA-PSS/SHA-256, cadeia append-only de promoção/replay; validação fail-closed do conjunto de restrições no codec.
 
 ### Documentação elegível encontrada
 
@@ -351,11 +373,11 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 ### Próximos passos (P1-P6)
 
-| Fase | Entrega | Dependência |
+| Fase | Entrega | Estado |
 |---|---|---|
-| P1 | Constraint Ledger versionado — criar `ConstraintRecord`, `ConstraintSetRef`, resolvedor, testes de vigência/autoridade/substituição/conflito | P0 concluído |
-| P2 | Integração contexto/verificação/evidência — hash do ledger na evidência, restrições obrigatórias bloqueiam violações | P1 |
-| P3 | Corpus multi-turn — casos progressivos com medição por turno | P1 |
-| P4 | Harness Manifest/variantes — pelo menos 2 variantes reprodutíveis sem mudar gates de segurança | P1 |
-| P5 | Experimento controlado — comparação pareada A/B/C/D | P4 |
-| P6 | (Opcional) Propostas automáticas de evolução — após P0-P5, isolamento, avaliação independente, promoção humana | P5 |
+| P1 | Constraint Ledger versionado — `ConstraintRecord`, `ConstraintSetRef`, resolvedor, testes de vigência/autoridade/substituição/conflito | **Concluído** |
+| P2 | Integração contexto/verificação/evidência — hash do ledger na evidência, restrições obrigatórias bloqueiam violações | **Concluído** |
+| P3 | Corpus multi-turn — casos progressivos com medição por turno (persistência do ledger entre sessões) | Próximo |
+| P4 | Harness Manifest/variantes — pelo menos 2 variantes reprodutíveis sem mudar gates de segurança | Proposto |
+| P5 | Experimento controlado — comparação pareada A/B/C/D | Proposto |
+| P6 | (Opcional) Propostas automáticas de evolução — após P0-P5, isolamento, avaliação independente, promoção humana | Bloqueado por design até P5 |

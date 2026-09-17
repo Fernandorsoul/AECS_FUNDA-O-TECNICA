@@ -9,6 +9,7 @@ public static class ConstraintLedgerSchema
     public const string RecordVersion = "aecs.constraint-record/v1";
     public const string SetRefVersion = "aecs.constraint-set/v1";
     public const string ConflictVersion = "aecs.constraint-conflict/v1";
+    public const string EvidenceVersion = "aecs.constraint-ledger-evidence/v1";
 }
 
 public enum ConstraintKind
@@ -246,4 +247,48 @@ public static class ConstraintRecordContract
             ValidUntil = source.ValidUntil,
             CreatedAt = source.CreatedAt
         };
+}
+
+/// <summary>
+/// Outcome of evaluating a single active constraint during a run.
+/// PendingReview is never reported as satisfied by inference (plan §4.1).
+/// </summary>
+public enum ConstraintAssessmentOutcome
+{
+    Satisfied,
+    Violated,
+    PendingReview
+}
+
+public sealed class ConstraintAssessment
+{
+    public string RequirementKey { get; init; } = string.Empty;
+    public int Revision { get; init; }
+    public ConstraintKind Kind { get; init; }
+    public ConstraintVerifiability Verifiability { get; init; }
+    public string? VerifierName { get; init; }
+    public ConstraintAssessmentOutcome Outcome { get; init; }
+    public string Detail { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// Per-requirement evaluation evidence carried by the ConstraintLedger verifier
+/// result and sealed inside the execution evidence envelope.
+/// </summary>
+public sealed class ConstraintLedgerVerificationEvidence
+{
+    public string SchemaVersion { get; init; } = ConstraintLedgerSchema.EvidenceVersion;
+    public string SetId { get; init; } = string.Empty;
+    public int SetRevision { get; init; }
+    public string SetCanonicalSha256 { get; init; } = string.Empty;
+    public int ActiveCount { get; init; }
+    public int UnresolvedConflictCount { get; init; }
+    public List<ConstraintAssessment> Assessments { get; init; } = [];
+    public DateTime EvaluatedAt { get; init; } = DateTime.UtcNow;
+
+    public bool HasViolations => UnresolvedConflictCount > 0 ||
+        Assessments.Any(assessment => assessment.Outcome == ConstraintAssessmentOutcome.Violated);
+
+    public bool HasPendingReview =>
+        Assessments.Any(assessment => assessment.Outcome == ConstraintAssessmentOutcome.PendingReview);
 }

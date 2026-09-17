@@ -1,3 +1,4 @@
+using AECS.Application.ConstraintLedger;
 using AECS.Application.ContextCompiler;
 using AECS.Domain.Models;
 using FluentAssertions;
@@ -314,6 +315,41 @@ public class RepositoryContextCompilerTests
 
         action.Should().Throw<InvalidOperationException>()
             .WithMessage("*cannot traverse directories*");
+    }
+
+    [Fact]
+    public void Compile_IncludesConstraintObligations_EvenWhenBudgetIsTight()
+    {
+        using var repository = new TemporaryContextRepository();
+        repository.Write(
+            "src/Allowed.cs",
+            "namespace Demo; public class Allowed { /*" + new string('x', 1_500) + "*/ }");
+        var contract = Contract(
+            objective: "Change Allowed",
+            allowed: ["src/**"],
+            forbidden: ["src/Forbidden/**"]);
+        var constraints = ConstraintLedgerProjector
+            .Project(contract, "sha256:snapshot")
+            .ToList();
+        var options = new ContextCompilationOptions
+        {
+            MaxTokens = 650,
+            MaxCharacters = 1_000,
+            MaxFileCharacters = 300
+        };
+
+        var result = _compiler.Compile(
+            repository.Path,
+            contract,
+            "baseline-123",
+            options,
+            constraints: constraints);
+
+        result.Prompt.Should().StartWith("## ACTIVE CONSTRAINTS");
+        result.Prompt.Should().Contain("budget.limits");
+        result.Prompt.Should().Contain("scope.forbidden");
+        result.Manifest.EstimatedTokens.Should().BeLessThanOrEqualTo(650);
+        result.Manifest.TotalCharacters.Should().BeLessThanOrEqualTo(1_000);
     }
 
     private static TaskContract Contract(

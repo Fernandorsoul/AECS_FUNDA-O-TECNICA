@@ -33,7 +33,8 @@ public class DecisionEngineTests
         Result("Build"),
         Result("Tests"),
         Result("Scope"),
-        Result("Budget")
+        Result("Budget"),
+        Result(ConstraintLedgerVerifier.Name)
     ];
 
     private static VerificationResult Result(
@@ -205,6 +206,81 @@ public class DecisionEngineTests
     }
 
     [Fact]
+    public void Decide_LedgerViolation_IsRejectedEvenWhenOtherGatesPass()
+    {
+        var results = AllRequiredPass();
+        var index = results.FindIndex(result =>
+            result.Verifier == ConstraintLedgerVerifier.Name);
+        results[index] = new VerificationResult
+        {
+            Verifier = ConstraintLedgerVerifier.Name,
+            Status = VerificationStatus.Fail,
+            Severity = Severity.Critical,
+            Message = "Constraint violations"
+        };
+
+        var decision = _engine.Decide(results, CreateContract());
+
+        decision.Decision.Should().Be(TaskDecision.Rejected);
+        decision.Failures.Should().Contain(failure =>
+            failure.Contains(ConstraintLedgerVerifier.Name));
+    }
+
+    [Fact]
+    public void Decide_LedgerPendingReview_ReturnsHumanReviewRequired()
+    {
+        var results = AllRequiredPass();
+        var index = results.FindIndex(result =>
+            result.Verifier == ConstraintLedgerVerifier.Name);
+        results[index] = new VerificationResult
+        {
+            Verifier = ConstraintLedgerVerifier.Name,
+            Status = VerificationStatus.Pass,
+            Severity = Severity.Warning,
+            Message = "pending manual review",
+            ConstraintLedger = new ConstraintLedgerVerificationEvidence
+            {
+                SetId = "set-1",
+                SetRevision = 1,
+                SetCanonicalSha256 =
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                ActiveCount = 1,
+                Assessments =
+                [
+                    new ConstraintAssessment
+                    {
+                        RequirementKey = "approval.production",
+                        Revision = 1,
+                        Kind = ConstraintKind.ApprovalRequirement,
+                        Verifiability = ConstraintVerifiability.Manual,
+                        Outcome = ConstraintAssessmentOutcome.PendingReview,
+                        Detail = "Requires Manual review"
+                    }
+                ]
+            }
+        };
+
+        var decision = _engine.Decide(results, CreateContract());
+
+        decision.Decision.Should().Be(TaskDecision.HumanReviewRequired);
+        decision.Reason.Should().Contain("approval.production");
+    }
+
+    [Fact]
+    public void Decide_MissingConstraintLedgerResult_ReturnsRejected()
+    {
+        var results = AllRequiredPass();
+        results.RemoveAll(result =>
+            result.Verifier == ConstraintLedgerVerifier.Name);
+
+        var decision = _engine.Decide(results, CreateContract());
+
+        decision.Decision.Should().Be(TaskDecision.Rejected);
+        decision.Failures.Should().Contain(failure =>
+            failure.Contains(ConstraintLedgerVerifier.Name) && failure.Contains("missing"));
+    }
+
+    [Fact]
     public void Decide_VersionedSuites_BlockOnlyRequiredCategory()
     {
         var contract = new TaskContract
@@ -231,6 +307,7 @@ public class DecisionEngineTests
         {
             Result("AgentSuccess"), Result("Application"), Result("NonEmptyChange"),
             Result("Scope"), Result("Budget"), Result(TestSuiteVerifier.UnitName),
+            Result(ConstraintLedgerVerifier.Name),
             Result(TestSuiteVerifier.IntegrationName, VerificationStatus.Fail)
         };
 

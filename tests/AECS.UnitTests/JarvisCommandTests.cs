@@ -1,5 +1,6 @@
 using AECS.Application;
 using AECS.Application.Classification;
+using AECS.Application.Verification;
 using AECS.Cli.Jarvis;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
@@ -53,7 +54,8 @@ public class JarvisCommandTests
             new() { Verifier = "Build", Status = VerificationStatus.Pass },
             new() { Verifier = "Tests", Status = VerificationStatus.Pass },
             new() { Verifier = "Scope", Status = VerificationStatus.Pass },
-            new() { Verifier = "Budget", Status = VerificationStatus.Pass }
+            new() { Verifier = "Budget", Status = VerificationStatus.Pass },
+            new() { Verifier = ConstraintLedgerVerifier.Name, Status = VerificationStatus.Pass }
         };
 
         var contract = new TaskContract

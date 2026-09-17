@@ -74,6 +74,30 @@ public class DecisionEngine
             };
         }
 
+        var pendingConstraints = results
+            .Where(result => string.Equals(
+                result.Verifier,
+                ConstraintLedgerVerifier.Name,
+                StringComparison.OrdinalIgnoreCase))
+            .Select(result => result.ConstraintLedger)
+            .Where(evidence => evidence is not null && evidence.HasPendingReview)
+            .SelectMany(evidence => evidence!.Assessments)
+            .Where(assessment =>
+                assessment.Outcome == ConstraintAssessmentOutcome.PendingReview)
+            .Select(assessment => assessment.RequirementKey)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (pendingConstraints.Count > 0)
+        {
+            return new DecisionResult
+            {
+                Decision = TaskDecision.HumanReviewRequired,
+                TargetState = TaskState.HumanReviewRequired,
+                Reason = "All deterministic verifiers passed but constraints pending " +
+                    $"manual review: {string.Join(", ", pendingConstraints)}"
+            };
+        }
+
         if (contract.Approval.Production == ApprovalLevel.Human)
         {
             return new DecisionResult
@@ -100,7 +124,8 @@ public class DecisionEngine
             "Application",
             "NonEmptyChange",
             "Scope",
-            "Budget"
+            "Budget",
+            ConstraintLedgerVerifier.Name
         };
 
         if (contract.Verification.Build)

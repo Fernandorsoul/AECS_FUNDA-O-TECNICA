@@ -20,7 +20,8 @@ public sealed class ExecutionReplayService
             "EB001-Architecture", "EB002-Pattern",
             "EB003-BreakingChange", "EB004-MissingChange",
             "EB005-HistoricalConflict", SecurityScanVerifier.VerifierName,
-            AcceptanceCriteriaVerifier.Name
+            AcceptanceCriteriaVerifier.Name,
+            ConstraintLedgerVerifier.Name
         ],
         StringComparer.OrdinalIgnoreCase);
 
@@ -281,6 +282,8 @@ public sealed class ExecutionReplayService
                 DateTime.UtcNow),
             BaselineSecurityFingerprints(baselineResults),
             acceptanceCriteria,
+            original.ConstraintRecords,
+            original.ConstraintSet,
             cancellationToken);
 
         var tools = CompareTools(original.BaselineCommands, baselineCommands);
@@ -497,6 +500,8 @@ public sealed class ExecutionReplayService
         HistoricalDecisionSelection historicalSelection,
         IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteria,
+        IReadOnlyList<ConstraintRecord>? originalConstraints,
+        ConstraintSetRef? originalConstraintSet,
         CancellationToken cancellationToken)
     {
         var results = new List<VerificationResult>();
@@ -609,6 +614,18 @@ public sealed class ExecutionReplayService
                 cancellationToken);
             acceptanceCriteria.AddRange(acceptance.Criteria);
             results.Add(acceptance.AggregateResult);
+        }
+
+        if (originalConstraints is not null && originalConstraintSet is not null)
+        {
+            var ledger = new ConstraintLedger.ConstraintLedgerService();
+            foreach (var record in originalConstraints)
+            {
+                ledger.Ingest(record);
+            }
+
+            results.Add(await new ConstraintLedgerVerifier(ledger, originalConstraintSet)
+                .VerifyAsync(context, results, cancellationToken));
         }
 
         return results;

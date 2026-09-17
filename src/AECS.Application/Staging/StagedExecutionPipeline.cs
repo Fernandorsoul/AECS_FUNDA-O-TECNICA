@@ -1,5 +1,6 @@
 using AECS.Application.Classification;
 using AECS.Application.AdaptiveController;
+using AECS.Application.ConstraintLedger;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
 using AECS.Application.ControlKernel;
@@ -191,6 +192,11 @@ public sealed class StagedExecutionPipeline
             baseline,
             CancellationToken.None);
 
+        var constraintLedger = ConstraintLedgerProjector.Build(
+            contract,
+            repositorySnapshot.SnapshotHash);
+        var constraintSet = constraintLedger.CreateSetRef();
+
         var baselineFailures = RequiredBaselineFailures(
             contract,
             baselineVerificationResults);
@@ -234,7 +240,9 @@ public sealed class StagedExecutionPipeline
                 [],
                 baselineDecision,
                 stateMachine,
-                budgetScope);
+                budgetScope,
+                constraintLedger,
+                constraintSet);
         }
 
         stateMachine.TransitionTo(TaskState.Running);
@@ -273,7 +281,8 @@ public sealed class StagedExecutionPipeline
                 contract,
                 baseline.Commit,
                 symbolGraph: symbolGraph,
-                agentProfile: contextProfile);
+                agentProfile: contextProfile,
+                constraints: constraintLedger.GetActive());
             contextManifest = compiledContext.Manifest;
             _compiledContextGate?.EnsureAccepted(contract, compiledContext);
 
@@ -340,7 +349,9 @@ public sealed class StagedExecutionPipeline
                 agentResult.FailureKind is AgentFailureKind.Cancelled or AgentFailureKind.BudgetExceeded
                     ? CancellationToken.None
                     : budgetScope.Token,
-                () => budgetScope.RemainingDuration);
+                () => budgetScope.RemainingDuration,
+                constraintLedger,
+                constraintSet);
             decision = _decisionEngine.Decide(verificationResults, contract);
             decision = ApplyTerminalExecutionState(
                 decision,
@@ -372,7 +383,9 @@ public sealed class StagedExecutionPipeline
             candidateCommands,
             decision,
             stateMachine,
-            budgetScope);
+            budgetScope,
+            constraintLedger,
+            constraintSet);
     }
 
     private async Task<StagedExecutionResult> PublishAsync(
@@ -397,11 +410,25 @@ public sealed class StagedExecutionPipeline
         List<ExecutionCommandEvidence> candidateCommands,
         DecisionResult decision,
         TaskStateMachine stateMachine,
-        ExecutionBudgetScope budgetScope)
+        ExecutionBudgetScope budgetScope,
+        ConstraintLedgerService constraintLedger,
+        ConstraintSetRef constraintSet)
     {
         await _workspaceManager.EnsureBaselineUnchangedAsync(
             baseline,
             CancellationToken.None);
+        var refreshedSet = constraintLedger.CreateSetRef();
+        if (!string.Equals(
+                refreshedSet.CanonicalSha256,
+                constraintSet.CanonicalSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Constraint set changed during execution; derived plans and context " +
+                $"must be revalidated (captured {constraintSet.CanonicalSha256}, " +
+                $"now {refreshedSet.CanonicalSha256}).");
+        }
+
         ValidateCommandEnvironments(
             contract.Execution,
             baselineCommands.Concat(candidateCommands));
@@ -471,6 +498,8 @@ public sealed class StagedExecutionPipeline
                 DecidedAt = DateTime.UtcNow
             },
             AdaptiveShadow = adaptiveShadow,
+            ConstraintSet = constraintSet,
+            ConstraintRecords = constraintLedger.GetActive().ToList(),
             StateTransitions = stateMachine.History
                 .Select(item => $"{item.From}->{item.To}@{item.At:O}")
                 .ToList()
@@ -744,7 +773,9 @@ public sealed class StagedExecutionPipeline
         IReadOnlySet<string> baselineSecurityFingerprints,
         List<AcceptanceCriterionResult> acceptanceCriteriaResults,
         CancellationToken cancellationToken,
-        Func<TimeSpan> remainingDuration)
+        Func<TimeSpan> remainingDuration,
+        ConstraintLedgerService constraintLedger,
+        ConstraintSetRef constraintSet)
     {
         var results = new List<VerificationResult>();
         var prerequisites = new IVerifier[]
@@ -866,6 +897,9 @@ public sealed class StagedExecutionPipeline
             acceptanceCriteriaResults.AddRange(acceptance.Criteria);
             results.Add(acceptance.AggregateResult);
         }
+
+        results.Add(await new ConstraintLedgerVerifier(constraintLedger, constraintSet)
+            .VerifyAsync(context, results, cancellationToken));
 
         return results;
     }

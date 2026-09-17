@@ -35,6 +35,10 @@ public class ExecutionEvidence
     public FinalDecisionRecord FinalDecision { get; init; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AdaptiveShadowEvidence? AdaptiveShadow { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ConstraintSetRef? ConstraintSet { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ConstraintRecord>? ConstraintRecords { get; init; }
     public List<CandidatePromotionEvidence> Promotions { get; init; } = [];
     public List<string> StateTransitions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

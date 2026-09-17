@@ -430,6 +430,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         ValidateSemanticEvidence(evidence);
         ValidateHistoricalEvidence(evidence);
         ValidateAdaptiveShadowEvidence(evidence);
+        ValidateConstraintEvidence(evidence);
 
         var snapshot = evidence.RepositorySnapshot;
         if (snapshot is not null &&
@@ -733,6 +734,70 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         }
 
         return null;
+    }
+
+    private static void ValidateConstraintEvidence(ExecutionEvidence evidence)
+    {
+        var set = evidence.ConstraintSet;
+        var records = evidence.ConstraintRecords;
+        if (set is null && records is null)
+        {
+            return;
+        }
+
+        if (set is null ||
+            records is null ||
+            set.SchemaVersion != ConstraintLedgerSchema.SetRefVersion ||
+            string.IsNullOrWhiteSpace(set.Id) ||
+            set.Revision < 0 ||
+            set.ActiveCount < 0 ||
+            !IsSha256(set.CanonicalSha256) ||
+            records.Count != set.ActiveCount ||
+            records.Any(record =>
+                record.Status != ConstraintStatus.Active ||
+                !IsSha256(record.ContentHash)))
+        {
+            throw new EvidenceIntegrityException(
+                "Constraint set evidence is incomplete, inconsistent, or has an unsupported schema.");
+        }
+
+        if (!FixedTimeTextEquals(
+                set.CanonicalSha256,
+                ConstraintLedgerFingerprint.CreateSetHash(records)))
+        {
+            throw new EvidenceIntegrityException(
+                "Constraint set hash does not match its recorded records.");
+        }
+
+        foreach (var result in evidence.VerificationResults)
+        {
+            var ledgerEvidence = result.ConstraintLedger;
+            if (ledgerEvidence is null)
+            {
+                continue;
+            }
+
+            if (ledgerEvidence.SchemaVersion != ConstraintLedgerSchema.EvidenceVersion ||
+                string.IsNullOrWhiteSpace(ledgerEvidence.SetId) ||
+                !IsSha256(ledgerEvidence.SetCanonicalSha256) ||
+                ledgerEvidence.ActiveCount < 0 ||
+                ledgerEvidence.UnresolvedConflictCount < 0 ||
+                ledgerEvidence.Assessments is null ||
+                ledgerEvidence.Assessments.Any(assessment =>
+                    string.IsNullOrWhiteSpace(assessment.RequirementKey) ||
+                    assessment.Revision <= 0 ||
+                    !Enum.IsDefined(assessment.Kind) ||
+                    !Enum.IsDefined(assessment.Verifiability) ||
+                    !Enum.IsDefined(assessment.Outcome)) ||
+                !FixedTimeTextEquals(
+                    ledgerEvidence.SetCanonicalSha256,
+                    set.CanonicalSha256))
+            {
+                throw new EvidenceIntegrityException(
+                    "Constraint ledger verification evidence is incomplete, inconsistent, " +
+                    "or has an unsupported schema.");
+            }
+        }
     }
 
     private static void ValidateAdaptiveShadowEvidence(ExecutionEvidence evidence)

@@ -196,6 +196,11 @@ public class RejectionFlowTests
                 new VerificationResult { Verifier = "NonEmptyChange", Status = VerificationStatus.Pass },
                 new VerificationResult { Verifier = "Build", Status = VerificationStatus.Pass },
                 new VerificationResult { Verifier = "Tests", Status = VerificationStatus.Pass },
+                new VerificationResult
+                {
+                    Verifier = AECS.Application.Verification.ConstraintLedgerVerifier.Name,
+                    Status = VerificationStatus.Pass
+                },
                 scopeResult,
                 budgetResult
             ],
