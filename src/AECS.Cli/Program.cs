@@ -296,9 +296,9 @@ static async Task AddOllamaCheckAsync(List<DoctorCheck> checks, string baseUrl)
         }
 
         var body = await response.Content.ReadAsStringAsync();
-        var hasR0R1 = body.Contains("qwen2.5-coder:7b", StringComparison.OrdinalIgnoreCase);
-        var hasR2Plus = body.Contains("qwen2.5-coder:14b", StringComparison.OrdinalIgnoreCase);
-        if (hasR0R1 && hasR2Plus)
+        var hasR0 = body.Contains("qwen2.5-coder:1.5b", StringComparison.OrdinalIgnoreCase);
+        var hasR1Plus = body.Contains("qwen2.5-coder:3b", StringComparison.OrdinalIgnoreCase);
+        if (hasR0 && hasR1Plus)
         {
             checks.Add(DoctorCheck.Ready("provider", "Ollama is reachable and required AECS models are listed."));
         }
@@ -306,7 +306,7 @@ static async Task AddOllamaCheckAsync(List<DoctorCheck> checks, string baseUrl)
         {
             checks.Add(DoctorCheck.DependencyAbsent(
                 "provider",
-                "Ollama is reachable, but qwen2.5-coder:7b and/or qwen2.5-coder:14b were not listed.",
+                "Ollama is reachable, but qwen2.5-coder:1.5b and/or qwen2.5-coder:3b were not listed.",
                 required: true));
         }
     }

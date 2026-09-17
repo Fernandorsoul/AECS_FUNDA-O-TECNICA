@@ -31,7 +31,7 @@ public sealed class StagedExecutionPipelineTests
             Contract(),
             CancellationToken.None);
 
-        result.Model.Should().Be("qwen2.5-coder:7b");
+        result.Model.Should().Be("qwen2.5-coder:3b");
         agent.LastRequest!.Model.Should().Be(result.Model);
         result.AdaptiveShadow.Should().NotBeNull();
         result.AdaptiveShadow!.Recommendation.DataStatus.Should()
@@ -55,7 +55,7 @@ public sealed class StagedExecutionPipelineTests
         var result = await pipeline.RunAsync(repository.Path, Contract(), CancellationToken.None);
 
         result.Decision.Decision.Should().Be(TaskDecision.Verified);
-        result.Model.Should().Be("qwen2.5-coder:7b");
+        result.Model.Should().Be("qwen2.5-coder:3b");
         agent.LastRequest.Should().NotBeNull();
         agent.LastRequest!.Model.Should().Be(result.Model);
         result.AdaptiveShadow.Should().NotBeNull();
