@@ -290,7 +290,7 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 ## Constraint Continuity e evolução modular do harness
 
-**Estado atual:** P0 (auditoria) + P1 (Constraint Ledger versionado) + P2 (integração contexto/verificação/evidência) **implementados e verificados com testes** — 2026-09-17, branch `dev`.
+**Estado atual:** P0 (auditoria) + P1 (Constraint Ledger versionado) + P2 (integração contexto/verificação/evidência) + P3 (continuidade multi-turn) + P4 (Harness Manifest) **implementados e verificados com testes** — 2026-09-17, branch `dev`.
 
 ### Constraint Continuity (Constraint Ledger)
 
@@ -338,16 +338,15 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 ### Modular Harness Evolution
 
-| Conceito | Estado no AECS | Lacuna |
-|---|---|---|
-| HarnessManifest (classe) | Não existe. `ExperimentDatasetManifest` é o mais próximo mas descreve estrutura do experimento, não composição de módulos. | **Lacuna total** |
-| Variantes de harness | `ExperimentVariantDefinition` existe mas varia apenas `contextStrategy`. Sem suporte a agent loop, observation, tools ou completion. | **Parcial** |
-| Módulos pluggables | Não existem como conceito unificado. Interfaces isoladas: `IExecutionController` (2 impls), `ICompiledContextGate` (1 impl), `ContextSelectionMode` enum (2 valores). | **Parcial** |
-| Estratégia de contexto | Implementada via `ContextSelectionMode` enum (`GraphRanked`, `NaivePathOrder`). Configurável por variante em datasets JSON. | **Implementado** |
-| Versionamento do harness | `ExperimentEnvironment.HarnessVersion`/`HarnessRevision` capturados da assembly. | **Implementado** |
-| Comparação pareada A/B | Robusta com CI, critérios de morte e conclusão determinística. Limitada ao eixo context strategy. | **Implementado** |
-| Recomendação adaptativa | `AdaptiveController` em shadow mode. Recomenda modelo/budget/context-strategy. Não altera estrutura do harness. | **Shadow only** |
-| Auto-modificação | Explicitamente bloqueada pelo plano. | **Bloqueado por design** |
+| Conceito | Estado no AECS |
+|---|---|
+| HarnessManifest (classe) | **Implementado (P4)** — `src/AECS.Domain/Models/HarnessManifest.cs` (`aecs.harness/v1`), identidade por hash canônico; `HarnessManifestContract` valida módulos/estratégias/parâmetros via allowlist |
+| Variantes de harness | **Implementado (P4)** — toda variante do Experiment Harness ganha manifesto derivado (`HarnessVariantBinding.ForVariant`) gravado no resultado (`HarnessManifestHash`/`HarnessVariantId`/`HarnessSecurityBaseline`) |
+| Módulos pluggables | Declarados no manifesto (agent-loop, context, observation, tool-use, completion); P4 permite variação apenas de `context` |
+| Estratégia de contexto | `naive-path-order` vs `graph-ranked` — duas variantes reprodutíveis com hashes distintos |
+| Gates não-evoluíveis | `aecs.immutable-gates/v1` fixa trust-boundary + ConstraintLedger + verificadores obrigatórios; `tool-use.policyRef=immutable-approved-policy`; `completion=required-verifiers` — candidatos não alteram gates |
+| Comparação pareada A/B | Existente (dataset v2-v4), agora com identidade de manifesto por run |
+| Auto-modificação | Explicitamente bloqueada pelo plano e pelo allowlist do manifesto |
 
 ### Interfaces de extensão existentes
 
@@ -384,6 +383,6 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 | P1 | Constraint Ledger versionado — `ConstraintRecord`, `ConstraintSetRef`, resolvedor, testes de vigência/autoridade/substituição/conflito | **Concluído** |
 | P2 | Integração contexto/verificação/evidência — hash do ledger na evidência, restrições obrigatórias bloqueiam violações | **Concluído** |
 | P3 | Corpus multi-turn — casos progressivos com medição por turno (persistência do ledger entre sessões) | **Concluído** |
-| P4 | Harness Manifest/variantes — pelo menos 2 variantes reprodutíveis sem mudar gates de segurança | Proposto |
-| P5 | Experimento controlado — comparação pareada A/B/C/D | Proposto |
+| P4 | Harness Manifest/variantes — pelo menos 2 variantes reprodutíveis sem mudar gates de segurança | **Concluído** |
+| P5 | Experimento controlado — comparação pareada A/B/C/D (Ledger × variante) | Próximo |
 | P6 | (Opcional) Propostas automáticas de evolução — após P0-P5, isolamento, avaliação independente, promoção humana | Bloqueado por design até P5 |

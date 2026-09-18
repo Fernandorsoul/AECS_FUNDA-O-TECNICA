@@ -29,6 +29,12 @@ public class TaskExperimentResult
     public string ActualContextStrategy { get; init; } = string.Empty;
     public string ContextStrategyVersion { get; init; } = string.Empty;
     public string ContextManifestHash { get; init; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HarnessManifestHash { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HarnessVariantId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HarnessSecurityBaseline { get; init; }
     public List<ExperimentContextFile> IncludedContext { get; init; } = [];
     public int? Seed { get; init; }
     public Dictionary<string, string> Parameters { get; init; } =

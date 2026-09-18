@@ -286,7 +286,10 @@ public sealed class ExperimentRunner
         ExperimentRunDefinition definition,
         StagedExecutionResult execution,
         ExperimentResultStatus status,
-        string failure) => new()
+        string failure)
+    {
+        var harness = HarnessVariantBinding.ForVariantOrNull(definition.Variant);
+        return new()
         {
             RunKey = definition.RunKey,
             Status = status,
@@ -303,6 +306,9 @@ public sealed class ExperimentRunner
             ActualContextStrategy = execution.ContextManifest.Strategy,
             ContextStrategyVersion = execution.ContextManifest.StrategyVersion,
             ContextManifestHash = execution.ContextManifest.ManifestHash,
+            HarnessManifestHash = harness?.ManifestHash,
+            HarnessVariantId = harness is null ? null : definition.Variant.Id,
+            HarnessSecurityBaseline = harness?.SecurityBaseline,
             IncludedContext = IncludedContext(execution.ContextManifest),
             Seed = definition.EffectiveSeed,
             Parameters = new Dictionary<string, string>(
@@ -361,12 +367,16 @@ public sealed class ExperimentRunner
             FinishedAtUtc = execution.AgentRun.FinishedAt ??
                 execution.AgentAttempts.LastOrDefault()?.FinishedAt
         };
+    }
 
     private static TaskExperimentResult Failure(
         ExperimentRunDefinition definition,
         TaskContract contract,
         ExperimentResultStatus status,
-        string failure) => new()
+        string failure)
+    {
+        var harness = HarnessVariantBinding.ForVariantOrNull(definition.Variant);
+        return new()
         {
             RunKey = definition.RunKey,
             Status = status,
@@ -379,6 +389,9 @@ public sealed class ExperimentRunner
             RequestedModel = definition.Variant.Model,
             ContextStrategy = definition.Variant.ContextStrategy,
             ContextConfiguration = definition.Variant.Context,
+            HarnessManifestHash = harness?.ManifestHash,
+            HarnessVariantId = harness is null ? null : definition.Variant.Id,
+            HarnessSecurityBaseline = harness?.SecurityBaseline,
             Seed = definition.EffectiveSeed,
             Parameters = new Dictionary<string, string>(
                 definition.Variant.Parameters,
@@ -397,6 +410,7 @@ public sealed class ExperimentRunner
                 ? DateTime.UtcNow
                 : null
         };
+    }
 
     private static TaskExperimentResult MapLegacy(StagedExecutionResult execution) => new()
         {

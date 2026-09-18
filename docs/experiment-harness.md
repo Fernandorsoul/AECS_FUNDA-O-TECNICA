@@ -68,6 +68,33 @@ a segunda usa o ranqueamento semântico normal. Em v3/v4, cada tarefa também de
 `requiredContextPaths`. A variante graph-ranked é rejeitada depois da compilação do contexto e
 antes da chamada ao provider se qualquer caminho obrigatório estiver ausente.
 
+## Harness Manifest (P4)
+
+Cada run de variante registra agora um **Harness Manifest** versionado (`aecs.harness/v1`) e
+imutável — identidade por hash canônico SHA-256 do conteúdo (`ManifestHash`):
+
+- Derivado automaticamente da definição real da variante por
+  `HarnessVariantBinding.ForVariant` (`src/AECS.Application/Experiments/HarnessVariantBinding.cs`);
+  gravado em `TaskExperimentResult` como `HarnessManifestHash`, `HarnessVariantId` e
+  `HarnessSecurityBaseline` (omitidos em runs legados sem variante).
+- Declara os 5 módulos do harness: `agent-loop`, `context`, `observation`, `tool-use`,
+  `completion`. No protocolo atual só o módulo `context` varia (`naive-path-order` vs
+  `graph-ranked`); os demais ficam em `baseline` / `preauthorized` /
+  `required-verifiers`.
+- `tool-use.policyRef` deve ser `immutable-approved-policy`; `completion.strategy` deve ser
+  `required-verifiers` — gates de verificação **não** são variáveis do harness.
+- `SecurityBaseline` fixa `aecs.immutable-gates/v1` (AgentSuccess, Application,
+  NonEmptyChange, Scope, Budget, Build, Tests, SecurityScan, EB001, AcceptanceCriteria,
+  **ConstraintLedger**) — variantes diferentes compartilham a mesma baseline de gates.
+- `HarnessManifestContract.Validate` rejeita: módulo desconhecido/duplicado, estratégia fora
+  do allowlist, parâmetro fora do allowlist (whitelist: só `max_tokens` e `dependency_depth`
+  no módulo `context`), `policyRef` divergente e hash adulterado.
+- Duas variantes do protocolo A/B produzem hashes distintos e reprodutíveis
+  (`tests/AECS.UnitTests/HarnessManifestTests.cs`).
+- Auto-modificação permanece fora de escopo: não existe variante cujo candidato altere
+  políticas de segurança, isolamento, critérios obrigatórios de aprovação ou sua própria
+  avaliação (plano §5.2/§5.4).
+
 ## Protocolo A/B pré-registrado
 
 Um manifesto v2, v3 ou v4 exige exatamente duas variantes e o bloco `protocol`. O loader comprova antes
