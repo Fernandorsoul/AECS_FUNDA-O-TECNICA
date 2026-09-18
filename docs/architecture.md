@@ -290,7 +290,7 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 ## Constraint Continuity e evolução modular do harness
 
-**Estado atual:** P0 (auditoria) + P1 (Constraint Ledger versionado) + P2 (integração contexto/verificação/evidência) + P3 (continuidade multi-turn) + P4 (Harness Manifest) **implementados e verificados com testes** — 2026-09-17, branch `dev`.
+**Estado atual:** P0–P5 do plano Constraint/Harness **implementados e verificados com testes** — 2026-09-17, branch `dev` (P5 = protocolo fatorial Ledger×Context; P6 opcional/bloqueado por design).
 
 ### Constraint Continuity (Constraint Ledger)
 
@@ -384,5 +384,5 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 | P2 | Integração contexto/verificação/evidência — hash do ledger na evidência, restrições obrigatórias bloqueiam violações | **Concluído** |
 | P3 | Corpus multi-turn — casos progressivos com medição por turno (persistência do ledger entre sessões) | **Concluído** |
 | P4 | Harness Manifest/variantes — pelo menos 2 variantes reprodutíveis sem mudar gates de segurança | **Concluído** |
-| P5 | Experimento controlado — comparação pareada A/B/C/D (Ledger × variante) | Próximo |
-| P6 | (Opcional) Propostas automáticas de evolução — após P0-P5, isolamento, avaliação independente, promoção humana | Bloqueado por design até P5 |
+| P5 | Experimento controlado — comparação pareada A/B/C/D (Ledger × variante) | **Concluído** — schema v5 fatorial 2×2, contrates + interação, fixture mock no CI; limites declarados (protocolo, não eficácia) |
+| P6 | (Opcional) Propostas automáticas de evolução — após P0-P5, isolamento, avaliação independente, promoção humana | Bloqueado por design até evidência suficiente + aprovação humana explícita |

@@ -1299,7 +1299,8 @@ static async Task<int> RunExperiment(string[] args)
     ExperimentReport report;
     try
     {
-        var runner = new ExperimentRunner(runtime.CreatePipeline());
+        var runner = new ExperimentRunner(variant =>
+            runtime.CreatePipeline(constraintLedgerEnabled: variant.ConstraintLedgerEnabled));
         report = await runner.RunAsync(repoPath!, taskFiles, CancellationToken.None);
     }
     catch (Exception ex)

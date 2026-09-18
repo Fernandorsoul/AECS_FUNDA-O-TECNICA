@@ -165,7 +165,8 @@ public sealed class AecsExecutionRuntime : IDisposable
         RepositoryContextCompiler? contextCompiler = null,
         IExecutionController? executionController = null,
         IAgentAdapter? agentOverride = null,
-        ICompiledContextGate? compiledContextGate = null)
+        ICompiledContextGate? compiledContextGate = null,
+        bool constraintLedgerEnabled = true)
     {
         var processRunner = new SystemProcessRunner();
         return new StagedExecutionPipeline(
@@ -177,7 +178,8 @@ public sealed class AecsExecutionRuntime : IDisposable
             executionController: executionController,
             adaptiveRoutingPolicy: CreateAdaptiveRoutingPolicy(),
             compiledContextGate: compiledContextGate,
-            constraintLedgerStore: ConstraintLedgerStore);
+            constraintLedgerStore: ConstraintLedgerStore,
+            constraintLedgerEnabled: constraintLedgerEnabled);
     }
 
     private AdaptiveRoutingPolicy CreateAdaptiveRoutingPolicy() => new()

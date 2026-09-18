@@ -1,5 +1,6 @@
 using AECS.Application.Parsing;
 using AECS.Application.Staging;
+using AECS.Application.Verification;
 using AECS.Domain.Enums;
 using AECS.Domain.Models;
 
@@ -17,6 +18,20 @@ public sealed class ExperimentRunner
         ArgumentNullException.ThrowIfNull(pipeline);
         _legacyPipeline = pipeline;
         _execute = (definition, cancellationToken) => pipeline.RunAsync(
+            definition.RepositoryPath,
+            _parser.ParseFromFile(definition.ContractPath),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Builds one pipeline per variant so experimental factors declared in the
+    /// dataset (currently ConstraintLedger on/off) are honored per arm without
+    /// weakening the runtime used outside the experiment protocol.
+    /// </summary>
+    public ExperimentRunner(Func<ExperimentVariantDefinition, StagedExecutionPipeline> pipelineFactory)
+    {
+        ArgumentNullException.ThrowIfNull(pipelineFactory);
+        _execute = (definition, cancellationToken) => pipelineFactory(definition.Variant).RunAsync(
             definition.RepositoryPath,
             _parser.ParseFromFile(definition.ContractPath),
             cancellationToken);
@@ -289,6 +304,12 @@ public sealed class ExperimentRunner
         string failure)
     {
         var harness = HarnessVariantBinding.ForVariantOrNull(definition.Variant);
+        var ledgerResult = execution.VerificationResults.FirstOrDefault(result =>
+            string.Equals(
+                result.Verifier,
+                ConstraintLedgerVerifier.Name,
+                StringComparison.OrdinalIgnoreCase));
+        var ledgerEvidence = ledgerResult?.ConstraintLedger;
         return new()
         {
             RunKey = definition.RunKey,
@@ -309,6 +330,14 @@ public sealed class ExperimentRunner
             HarnessManifestHash = harness?.ManifestHash,
             HarnessVariantId = harness is null ? null : definition.Variant.Id,
             HarnessSecurityBaseline = harness?.SecurityBaseline,
+            ConstraintLedgerEnabled = ledgerResult is not null,
+            ConstraintActiveCount = ledgerEvidence?.ActiveCount ?? 0,
+            ConstraintSatisfiedCount = ledgerEvidence?.Assessments.Count(assessment =>
+                assessment.Outcome == ConstraintAssessmentOutcome.Satisfied) ?? 0,
+            ConstraintViolatedCount = ledgerEvidence?.Assessments.Count(assessment =>
+                assessment.Outcome == ConstraintAssessmentOutcome.Violated) ?? 0,
+            ConstraintPendingReviewCount = ledgerEvidence?.Assessments.Count(assessment =>
+                assessment.Outcome == ConstraintAssessmentOutcome.PendingReview) ?? 0,
             IncludedContext = IncludedContext(execution.ContextManifest),
             Seed = definition.EffectiveSeed,
             Parameters = new Dictionary<string, string>(
@@ -503,7 +532,8 @@ public sealed class ExperimentRunner
             CostRecords = costRecords,
             CostEfficiency = ExperimentCostEfficiencyAnalyzer.Analyze(costRecords),
             CostReconciliation = reconciliationMetadata,
-            Analysis = ExperimentAnalyzer.Analyze(dataset.Manifest, ordered, comparisons)
+            Analysis = ExperimentAnalyzer.Analyze(dataset.Manifest, ordered, comparisons),
+            Factorial = ExperimentFactorialLedgerContextAnalysis.Build(dataset.Manifest, ordered)
         };
     }
 

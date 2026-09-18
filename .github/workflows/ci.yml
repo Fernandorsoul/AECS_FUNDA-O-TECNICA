@@ -157,6 +157,34 @@ jobs:
 
           test "$(find "${output_root}/runs" -name '*.json' | wc -l)" -eq 4
 
+      - name: Experiment factorial ledger/context protocol smoke
+        shell: bash
+        run: |
+          factorial_root="${RUNNER_TEMP}/aecs-experiment-factorial"
+          factorial_output="${RUNNER_TEMP}/aecs-experiment-factorial-output"
+          cp -R tests/fixtures/experiment-factorial "${factorial_root}"
+          git -C "${factorial_root}/repository" init --initial-branch main
+          git -C "${factorial_root}/repository" config user.name "AECS CI"
+          git -C "${factorial_root}/repository" config user.email "aecs-ci@example.invalid"
+          git -C "${factorial_root}/repository" add -A
+          git -C "${factorial_root}/repository" commit -m "factorial baseline"
+
+          dotnet run --project src/AECS.Cli/AECS.Cli.csproj \
+            --configuration Release --no-build -- \
+            experiment \
+            --dataset "${factorial_root}/dataset.json" \
+            --output "${factorial_output}" \
+            --allow-host-execution \
+            --evidence-root "${RUNNER_TEMP}/aecs-experiment-factorial-evidence" \
+            --key-directory "${RUNNER_TEMP}/aecs-experiment-factorial-keys"
+
+          test "$(find "${factorial_output}/runs" -name '*.json' | wc -l)" -eq 8
+          grep -q '"design": "factorial-ledger-context-2x2"' "${factorial_output}/report.json"
+          grep -q '"armId": "D"' "${factorial_output}/report.json"
+          grep -q '"name": "interaction"' "${factorial_output}/report.json"
+          grep -q '"constraintLedgerEnabled": true' "${factorial_output}/report.json"
+          grep -q '"constraintLedgerEnabled": false' "${factorial_output}/report.json"
+
       - name: Smoke test CLI
         shell: bash
         run: |

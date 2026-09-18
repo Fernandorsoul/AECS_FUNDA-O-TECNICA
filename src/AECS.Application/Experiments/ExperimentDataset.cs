@@ -16,6 +16,7 @@ public static class ExperimentDatasetSchema
     public const string ContextAbVersion = "aecs.experiment-dataset/v2";
     public const string ContextAbIntegrityVersion = "aecs.experiment-dataset/v3";
     public const string ContextAbDecisionPolicyVersion = "aecs.experiment-dataset/v4";
+    public const string FactorialLedgerContextAbVersion = "aecs.experiment-dataset/v5";
     public const string ReportVersion = "aecs.experiment-report/v5";
     public const string CheckpointVersion = "aecs.experiment-checkpoint/v1";
 }
@@ -23,6 +24,7 @@ public static class ExperimentDatasetSchema
 public static class ExperimentDesigns
 {
     public const string PairedContextAb = "paired-context-ab";
+    public const string FactorialLedgerContext2x2 = "factorial-ledger-context-2x2";
     public const string VccPerEstimatedCost = "vcc-per-estimated-cost";
 }
 
@@ -112,6 +114,7 @@ public sealed class ExperimentVariantDefinition
     public string ContextStrategy { get; init; } = string.Empty;
     public ContextCompilationOptions Context { get; init; } = new();
     public bool RequiresRealProvider { get; init; }
+    public bool ConstraintLedgerEnabled { get; init; } = true;
     public int? Seed { get; init; }
     public Dictionary<string, string> Parameters { get; init; } =
         new(StringComparer.Ordinal);
@@ -308,7 +311,8 @@ public static class ExperimentDatasetContract
                 ExperimentDatasetSchema.Version or
                 ExperimentDatasetSchema.ContextAbVersion or
                 ExperimentDatasetSchema.ContextAbIntegrityVersion or
-                ExperimentDatasetSchema.ContextAbDecisionPolicyVersion) ||
+                ExperimentDatasetSchema.ContextAbDecisionPolicyVersion or
+                ExperimentDatasetSchema.FactorialLedgerContextAbVersion) ||
             !ValidId(manifest.Id) ||
             string.IsNullOrWhiteSpace(manifest.Version) ||
             manifest.Version.Length > 100 ||
@@ -331,11 +335,70 @@ public static class ExperimentDatasetContract
             (manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbVersion ||
              manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbIntegrityVersion ||
              manifest.SchemaVersion == ExperimentDatasetSchema.ContextAbDecisionPolicyVersion) &&
-            InvalidContextAbProtocol(manifest))
+            InvalidContextAbProtocol(manifest) ||
+            manifest.SchemaVersion == ExperimentDatasetSchema.FactorialLedgerContextAbVersion &&
+            InvalidFactorialProtocol(manifest))
         {
             throw new InvalidOperationException(
                 "Experiment dataset is incomplete, unsafe, or uses an unsupported schema.");
         }
+    }
+
+    private static bool InvalidFactorialProtocol(ExperimentDatasetManifest manifest)
+    {
+        var protocol = manifest.Protocol;
+        if (protocol is null ||
+            protocol.Design != ExperimentDesigns.FactorialLedgerContext2x2 ||
+            string.IsNullOrWhiteSpace(protocol.HypothesisId) || protocol.HypothesisId.Length > 100 ||
+            string.IsNullOrWhiteSpace(protocol.Hypothesis) || protocol.Hypothesis.Length > 1000 ||
+            protocol.PrimaryMetric != ExperimentDesigns.VccPerEstimatedCost ||
+            protocol.MinimumPairedSamples < 2 ||
+            protocol.ConfidenceLevel != 0.95 ||
+            protocol.DeathCriteria is null ||
+            !double.IsFinite(protocol.DeathCriteria.MinimumRelativeImprovement) ||
+            protocol.DeathCriteria.MinimumRelativeImprovement is < -1 or > 10 ||
+            !double.IsFinite(protocol.DeathCriteria.MaximumCandidateFailureRate) ||
+            protocol.DeathCriteria.MaximumCandidateFailureRate is < 0 or > 1 ||
+            !double.IsFinite(protocol.DeathCriteria.MaximumCandidateScopeViolationRate) ||
+            protocol.DeathCriteria.MaximumCandidateScopeViolationRate is < 0 or > 1 ||
+            manifest.Variants.Count != 4 ||
+            !manifest.ReferenceVariantId.Equals("A", StringComparison.Ordinal) ||
+            manifest.Tasks.Count * manifest.Repetitions < protocol.MinimumPairedSamples)
+        {
+            return true;
+        }
+
+        var byId = manifest.Variants.ToDictionary(
+            variant => variant.Id,
+            StringComparer.Ordinal);
+        if (!byId.ContainsKey("A") || !byId.ContainsKey("B") ||
+            !byId.ContainsKey("C") || !byId.ContainsKey("D"))
+        {
+            return true;
+        }
+
+        var armA = byId["A"];
+        var armB = byId["B"];
+        var armC = byId["C"];
+        var armD = byId["D"];
+        var arms = new[] { armA, armB, armC, armD };
+        return
+            // A = baseline harness, ledger off; B = baseline harness, ledger on;
+            // C = graph-ranked harness, ledger off; D = graph-ranked harness, ledger on.
+            armA.ConstraintLedgerEnabled ||
+            armA.ContextStrategy != ContextStrategyIds.NaivePathOrder ||
+            !armB.ConstraintLedgerEnabled ||
+            armB.ContextStrategy != ContextStrategyIds.NaivePathOrder ||
+            armC.ConstraintLedgerEnabled ||
+            armC.ContextStrategy != ContextStrategyIds.GraphRanked ||
+            !armD.ConstraintLedgerEnabled ||
+            armD.ContextStrategy != ContextStrategyIds.GraphRanked ||
+            arms.Any(variant => variant.Provider != armA.Provider ||
+                !variant.Model.Equals(armA.Model, StringComparison.Ordinal) ||
+                variant.RequiresRealProvider != armA.RequiresRealProvider ||
+                variant.Seed != armA.Seed ||
+                !Equivalent(variant.Context, armA.Context) ||
+                !Equivalent(variant.Parameters, armA.Parameters));
     }
 
     private static bool InvalidContextAbProtocol(ExperimentDatasetManifest manifest)

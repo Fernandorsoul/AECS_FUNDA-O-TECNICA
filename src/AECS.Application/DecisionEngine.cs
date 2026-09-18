@@ -16,9 +16,10 @@ public class DecisionEngine
 {
     public DecisionResult Decide(
         IReadOnlyList<VerificationResult> results,
-        TaskContract contract)
+        TaskContract contract,
+        bool requireConstraintLedger = true)
     {
-        var requiredVerifiers = GetRequiredVerifiers(contract);
+        var requiredVerifiers = GetRequiredVerifiers(contract, requireConstraintLedger);
         var failures = new List<string>();
 
         foreach (var verifier in requiredVerifiers)
@@ -116,7 +117,9 @@ public class DecisionEngine
         };
     }
 
-    public static IReadOnlySet<string> GetRequiredVerifiers(TaskContract contract)
+    public static IReadOnlySet<string> GetRequiredVerifiers(
+        TaskContract contract,
+        bool includeConstraintLedger = true)
     {
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -124,9 +127,12 @@ public class DecisionEngine
             "Application",
             "NonEmptyChange",
             "Scope",
-            "Budget",
-            ConstraintLedgerVerifier.Name
+            "Budget"
         };
+        if (includeConstraintLedger)
+        {
+            required.Add(ConstraintLedgerVerifier.Name);
+        }
 
         if (contract.Verification.Build)
             required.Add("Build");

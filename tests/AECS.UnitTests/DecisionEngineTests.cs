@@ -267,6 +267,23 @@ public class DecisionEngineTests
     }
 
     [Fact]
+    public void Decide_LedgerDisabledByExperimentProtocol_DoesNotRequireLedgerResult()
+    {
+        var results = AllRequiredPass();
+        results.RemoveAll(result =>
+            result.Verifier == ConstraintLedgerVerifier.Name);
+
+        var decision = _engine.Decide(
+            results,
+            CreateContract(),
+            requireConstraintLedger: false);
+
+        decision.Decision.Should().Be(TaskDecision.Verified);
+        DecisionEngine.GetRequiredVerifiers(CreateContract(), includeConstraintLedger: false)
+            .Should().NotContain(ConstraintLedgerVerifier.Name);
+    }
+
+    [Fact]
     public void Decide_MissingConstraintLedgerResult_ReturnsRejected()
     {
         var results = AllRequiredPass();

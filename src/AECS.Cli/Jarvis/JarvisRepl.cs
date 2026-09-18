@@ -334,7 +334,8 @@ public class JarvisRepl
             return;
         }
 
-        var runner = new ExperimentRunner(_runtime.CreatePipeline());
+        var runner = new ExperimentRunner(variant =>
+            _runtime.CreatePipeline(constraintLedgerEnabled: variant.ConstraintLedgerEnabled));
         var report = await runner.RunAsync(_repoPath, taskFiles, ct);
 
         Console.WriteLine(ExperimentReportFormatter.Format(report));

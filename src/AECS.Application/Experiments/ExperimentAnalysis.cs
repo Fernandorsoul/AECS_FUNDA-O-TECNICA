@@ -100,8 +100,11 @@ public static class ExperimentAnalyzer
         IReadOnlyCollection<ExperimentPairedComparison> pairs)
     {
         var protocol = manifest.Protocol;
-        if (protocol is null)
+        if (protocol is null ||
+            manifest.SchemaVersion == ExperimentDatasetSchema.FactorialLedgerContextAbVersion)
+        {
             return null;
+        }
 
         var variants = manifest.Variants
             .Select(variant => AnalyzeVariant(

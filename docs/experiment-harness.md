@@ -95,6 +95,39 @@ imutável — identidade por hash canônico SHA-256 do conteúdo (`ManifestHash`
   políticas de segurança, isolamento, critérios obrigatórios de aprovação ou sua própria
   avaliação (plano §5.2/§5.4).
 
+## Protocolo fatorial 2×2 — Ledger × Context (P5)
+
+Schema `aecs.experiment-dataset/v5`, design `factorial-ledger-context-2x2` (plano §6). Quatro
+braços pré-registrados, fatores constantes (provider/modelo/seed/context-limits/parâmetros
+idênticos):
+
+| Braço | `constraintLedger` | `contextStrategy` |
+|---|---|---|
+| A (referência) | false | naive-path-order |
+| B | true | naive-path-order |
+| C | false | graph-ranked |
+| D | true | graph-ranked |
+
+- O loader **rejeita** qualquer atribuição de braço diferente da tabela, dataset sem os 4 ids
+  A–D ou protocolo divergente (hipótese/métrica/mínimos/limites como no A/B pareado).
+- Cada variante carrega `constraintLedger` (default `true`); o CLI materializa pipelines por
+  variante (`ExperimentRunner(Func<ExperimentVariantDefinition, StagedExecutionPipeline>)`),
+  e `StagedExecutionPipeline(constraintLedgerEnabled: false)` executa o arm **sem** projetar
+  o ledger, sem gate `ConstraintLedger`, sem `ConstraintSet` na evidência e sem gravação no
+  ledger store — a avaliação externa (trust-boundary, scope, build) permanece idêntica.
+- Todo run registra contagens do ledger (`constraintActiveCount`, `constraintSatisfiedCount`,
+  `constraintViolatedCount`, `constraintPendingReviewCount`) e `constraintLedgerEnabled`.
+- O relatório ganha `factorial` com: `armSummaries` (incluindo CRR e cobertura de verificação;
+  denominador zero ⇒ `null`/N/D), contrates pareados `ledger-effect-baseline` (B−A),
+  `ledger-effect-graph-ranked` (D−C), `harness-effect-ledger-off` (C−A),
+  `harness-effect-ledger-on` (D−B) e `interaction` ((D−C)−(B−A)), além de
+  `falseBlockCandidates` (ledger-on rejeitou com zero violações onde ledger-off verificou).
+- `Limitations` sempre declara: protocolo é validação de método — resultados com mock **não**
+  demonstram ganho; pending nunca conta como satisfied; métricas com denominador zero são N/D.
+- Fixture mock: `tests/fixtures/experiment-factorial` (2 tarefas × 4 braços × 1 repetição =
+  8 runs), executado no CI; testes unitários cobrem aceitação/rejeição do loader e a
+  semântica dos contrastes (`tests/AECS.UnitTests/ExperimentFactorialTests.cs`).
+
 ## Protocolo A/B pré-registrado
 
 Um manifesto v2, v3 ou v4 exige exatamente duas variantes e o bloco `protocol`. O loader comprova antes

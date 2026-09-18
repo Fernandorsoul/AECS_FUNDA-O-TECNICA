@@ -902,6 +902,34 @@ public sealed class StagedExecutionPipelineTests
         repository.ProcessRunner,
         new JsonExecutionEvidenceStore(repository.EvidencePath));
 
+    [Fact]
+    public async Task ConstraintLedgerDisabled_EvidenceOmitsLedgerAndDecisionDoesNotRequireIt()
+    {
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var agent = Agent.Success(Response("src/new-file.txt"));
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var pipeline = new StagedExecutionPipeline(
+            agent,
+            repository.ProcessRunner,
+            store,
+            constraintLedgerEnabled: false);
+
+        var result = await pipeline.RunAsync(
+            repository.Path,
+            Contract(),
+            CancellationToken.None);
+
+        result.Decision.Decision.Should().Be(TaskDecision.Verified);
+        result.VerificationResults.Should().NotContain(item =>
+            item.Verifier == AECS.Application.Verification.ConstraintLedgerVerifier.Name);
+        var evidence = await store.LoadAsync(result.EvidenceId, CancellationToken.None);
+        evidence.Should().NotBeNull();
+        evidence!.ConstraintSet.Should().BeNull();
+        evidence.ConstraintRecords.Should().BeNull();
+        evidence.FinalDecision.RequiredVerifiers.Should().NotContain(
+            AECS.Application.Verification.ConstraintLedgerVerifier.Name);
+    }
+
     private static TaskContract Contract(
         bool build = false,
         bool tests = false,

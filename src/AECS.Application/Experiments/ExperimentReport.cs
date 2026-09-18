@@ -35,6 +35,16 @@ public class TaskExperimentResult
     public string? HarnessVariantId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HarnessSecurityBaseline { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ConstraintLedgerEnabled { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ConstraintActiveCount { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ConstraintSatisfiedCount { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ConstraintViolatedCount { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ConstraintPendingReviewCount { get; init; }
     public List<ExperimentContextFile> IncludedContext { get; init; } = [];
     public int? Seed { get; init; }
     public Dictionary<string, string> Parameters { get; init; } =
@@ -100,6 +110,8 @@ public class ExperimentReport
     public ExperimentCostReconciliationMetadata CostReconciliation { get; init; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExperimentHypothesisAnalysis? Analysis { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExperimentFactorialLedgerContextAnalysis? Factorial { get; init; }
 
     public int TotalTasks => Results.Count;
     public int CompletedCount => Results.Count(r => r.Status == ExperimentResultStatus.Completed);

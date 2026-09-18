@@ -62,6 +62,7 @@ public sealed class StagedExecutionPipeline
     private readonly AdaptiveRoutingPolicy _adaptiveRoutingPolicy;
     private readonly ICompiledContextGate? _compiledContextGate;
     private readonly IConstraintLedgerStore? _constraintLedgerStore;
+    private readonly bool _constraintLedgerEnabled;
 
     public StagedExecutionPipeline(
         IAgentAdapter agentAdapter,
@@ -79,7 +80,8 @@ public sealed class StagedExecutionPipeline
         IAdaptiveShadowController? adaptiveShadowController = null,
         AdaptiveRoutingPolicy? adaptiveRoutingPolicy = null,
         ICompiledContextGate? compiledContextGate = null,
-        IConstraintLedgerStore? constraintLedgerStore = null)
+        IConstraintLedgerStore? constraintLedgerStore = null,
+        bool constraintLedgerEnabled = true)
     {
         _agentAdapter = agentAdapter;
         _stagedProcessRunnerFactory = stagedProcessRunnerFactory ??
@@ -103,6 +105,7 @@ public sealed class StagedExecutionPipeline
         _adaptiveRoutingPolicy = adaptiveRoutingPolicy ?? AdaptiveRoutingPolicy.Disabled;
         _compiledContextGate = compiledContextGate;
         _constraintLedgerStore = constraintLedgerStore;
+        _constraintLedgerEnabled = constraintLedgerEnabled;
         _agentExecutionCoordinator = new AgentExecutionCoordinator(
             agentAdapter,
             retryDelay,
@@ -195,33 +198,38 @@ public sealed class StagedExecutionPipeline
             baseline,
             CancellationToken.None);
 
-        var constraintLedger = new ConstraintLedgerService();
-        ConstraintLedgerProjector.Build(
-            contract,
-            repositorySnapshot.SnapshotHash,
-            constraintLedger);
-        if (_constraintLedgerStore is not null)
+        ConstraintLedgerService? constraintLedger = null;
+        ConstraintSetRef? constraintSet = null;
+        if (_constraintLedgerEnabled)
         {
-            var persisted = await _constraintLedgerStore.LoadAsync(
-                baseline.RepositoryPath,
-                cancellationToken);
-            if (persisted is not null)
+            constraintLedger = new ConstraintLedgerService();
+            ConstraintLedgerProjector.Build(
+                contract,
+                repositorySnapshot.SnapshotHash,
+                constraintLedger);
+            if (_constraintLedgerStore is not null)
             {
-                constraintLedger.AppendHistory(persisted.Records.Where(record =>
-                    record.Status is not (ConstraintStatus.Active or
-                        ConstraintStatus.PendingVerification)));
-                foreach (var record in persisted.Records.Where(record =>
-                    record.Status is ConstraintStatus.Active or
-                        ConstraintStatus.PendingVerification))
+                var persisted = await _constraintLedgerStore.LoadAsync(
+                    baseline.RepositoryPath,
+                    cancellationToken);
+                if (persisted is not null)
                 {
-                    constraintLedger.Ingest(record);
+                    constraintLedger.AppendHistory(persisted.Records.Where(record =>
+                        record.Status is not (ConstraintStatus.Active or
+                            ConstraintStatus.PendingVerification)));
+                    foreach (var record in persisted.Records.Where(record =>
+                        record.Status is ConstraintStatus.Active or
+                            ConstraintStatus.PendingVerification))
+                    {
+                        constraintLedger.Ingest(record);
+                    }
+
+                    constraintLedger.AppendConflicts(persisted.Conflicts);
                 }
-
-                constraintLedger.AppendConflicts(persisted.Conflicts);
             }
-        }
 
-        var constraintSet = constraintLedger.CreateSetRef();
+            constraintSet = constraintLedger.CreateSetRef();
+        }
 
         var baselineFailures = RequiredBaselineFailures(
             contract,
@@ -308,7 +316,7 @@ public sealed class StagedExecutionPipeline
                 baseline.Commit,
                 symbolGraph: symbolGraph,
                 agentProfile: contextProfile,
-                constraints: constraintLedger.GetActive());
+                constraints: constraintLedger?.GetActive());
             contextManifest = compiledContext.Manifest;
             _compiledContextGate?.EnsureAccepted(contract, compiledContext);
 
@@ -378,7 +386,10 @@ public sealed class StagedExecutionPipeline
                 () => budgetScope.RemainingDuration,
                 constraintLedger,
                 constraintSet);
-            decision = _decisionEngine.Decide(verificationResults, contract);
+            decision = _decisionEngine.Decide(
+                verificationResults,
+                contract,
+                requireConstraintLedger: _constraintLedgerEnabled);
             decision = ApplyTerminalExecutionState(
                 decision,
                 agentResult,
@@ -437,29 +448,32 @@ public sealed class StagedExecutionPipeline
         DecisionResult decision,
         TaskStateMachine stateMachine,
         ExecutionBudgetScope budgetScope,
-        ConstraintLedgerService constraintLedger,
-        ConstraintSetRef constraintSet)
+        ConstraintLedgerService? constraintLedger,
+        ConstraintSetRef? constraintSet)
     {
         await _workspaceManager.EnsureBaselineUnchangedAsync(
             baseline,
             CancellationToken.None);
-        var refreshedSet = constraintLedger.CreateSetRef();
-        if (!string.Equals(
-                refreshedSet.CanonicalSha256,
-                constraintSet.CanonicalSha256,
-                StringComparison.Ordinal))
+        if (constraintLedger is not null && constraintSet is not null)
         {
-            throw new InvalidOperationException(
-                "Constraint set changed during execution; derived plans and context " +
-                $"must be revalidated (captured {constraintSet.CanonicalSha256}, " +
-                $"now {refreshedSet.CanonicalSha256}).");
+            var refreshedSet = constraintLedger.CreateSetRef();
+            if (!string.Equals(
+                    refreshedSet.CanonicalSha256,
+                    constraintSet.CanonicalSha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Constraint set changed during execution; derived plans and context " +
+                    $"must be revalidated (captured {constraintSet.CanonicalSha256}, " +
+                    $"now {refreshedSet.CanonicalSha256}).");
+            }
         }
 
         ValidateCommandEnvironments(
             contract.Execution,
             baselineCommands.Concat(candidateCommands));
 
-        if (_constraintLedgerStore is not null)
+        if (_constraintLedgerStore is not null && constraintLedger is not null)
         {
             await _constraintLedgerStore.SaveAsync(
                 baseline.RepositoryPath,
@@ -530,14 +544,16 @@ public sealed class StagedExecutionPipeline
                 Reason = decision.Reason,
                 RequiredVerifiers = (baselineFailed
                         ? GetRequiredBaselineVerifiers(contract)
-                        : DecisionEngine.GetRequiredVerifiers(contract))
+                        : DecisionEngine.GetRequiredVerifiers(
+                            contract,
+                            includeConstraintLedger: constraintLedger is not null))
                     .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                     .ToList(),
                 DecidedAt = DateTime.UtcNow
             },
             AdaptiveShadow = adaptiveShadow,
             ConstraintSet = constraintSet,
-            ConstraintRecords = constraintLedger.GetActive().ToList(),
+            ConstraintRecords = constraintLedger?.GetActive().ToList(),
             StateTransitions = stateMachine.History
                 .Select(item => $"{item.From}->{item.To}@{item.At:O}")
                 .ToList()
@@ -812,8 +828,8 @@ public sealed class StagedExecutionPipeline
         List<AcceptanceCriterionResult> acceptanceCriteriaResults,
         CancellationToken cancellationToken,
         Func<TimeSpan> remainingDuration,
-        ConstraintLedgerService constraintLedger,
-        ConstraintSetRef constraintSet)
+        ConstraintLedgerService? constraintLedger,
+        ConstraintSetRef? constraintSet)
     {
         var results = new List<VerificationResult>();
         var prerequisites = new IVerifier[]
@@ -936,8 +952,11 @@ public sealed class StagedExecutionPipeline
             results.Add(acceptance.AggregateResult);
         }
 
-        results.Add(await new ConstraintLedgerVerifier(constraintLedger, constraintSet)
-            .VerifyAsync(context, results, cancellationToken));
+        if (constraintLedger is not null && constraintSet is not null)
+        {
+            results.Add(await new ConstraintLedgerVerifier(constraintLedger, constraintSet)
+                .VerifyAsync(context, results, cancellationToken));
+        }
 
         return results;
     }
