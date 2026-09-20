@@ -39,7 +39,7 @@
       "provider": "Mock",
       "model": "mock-factorial-v1",
       "contextStrategy": "naive-path-order",
-      "constraintLedger": false,
+      "constraintLedgerEnabled": false,
       "context": {
         "maxTokens": 2000,
         "maxCharacters": 8000,
@@ -55,7 +55,7 @@
       "provider": "Mock",
       "model": "mock-factorial-v1",
       "contextStrategy": "naive-path-order",
-      "constraintLedger": true,
+      "constraintLedgerEnabled": true,
       "context": {
         "maxTokens": 2000,
         "maxCharacters": 8000,
@@ -71,7 +71,7 @@
       "provider": "Mock",
       "model": "mock-factorial-v1",
       "contextStrategy": "graph-ranked",
-      "constraintLedger": false,
+      "constraintLedgerEnabled": false,
       "context": {
         "maxTokens": 2000,
         "maxCharacters": 8000,
@@ -87,7 +87,7 @@
       "provider": "Mock",
       "model": "mock-factorial-v1",
       "contextStrategy": "graph-ranked",
-      "constraintLedger": true,
+      "constraintLedgerEnabled": true,
       "context": {
         "maxTokens": 2000,
         "maxCharacters": 8000,

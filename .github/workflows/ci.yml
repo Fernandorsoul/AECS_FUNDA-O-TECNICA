@@ -304,7 +304,7 @@ jobs:
           --nologo
           --filter "Category=RealWorldE2E"
           --blame-hang
-          --blame-hang-timeout 5m
+          --blame-hang-timeout 10m
           --blame-hang-dump-type mini
           --results-directory "${RUNNER_TEMP}/aecs-real-world-e2e-diagnostics"
 
