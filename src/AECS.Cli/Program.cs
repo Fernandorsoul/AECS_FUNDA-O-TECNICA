@@ -1255,7 +1255,8 @@ static async Task<int> RunExperiment(string[] args)
                     definition.Variant.ContextStrategy == ContextStrategyIds.GraphRanked &&
                     definition.Task.RequiredContextPaths.Count > 0
                         ? new RequiredContextPathsGate(definition.Task.RequiredContextPaths)
-                        : null);
+                        : null,
+                    constraintLedgerEnabled: definition.Variant.ConstraintLedgerEnabled);
                 return await pipeline.RunAsync(
                     definition.RepositoryPath,
                     parser.ParseFromFile(definition.ContractPath),
@@ -1299,8 +1300,7 @@ static async Task<int> RunExperiment(string[] args)
     ExperimentReport report;
     try
     {
-        var runner = new ExperimentRunner(variant =>
-            runtime.CreatePipeline(constraintLedgerEnabled: variant.ConstraintLedgerEnabled));
+        var runner = new ExperimentRunner(runtime.CreatePipeline());
         report = await runner.RunAsync(repoPath!, taskFiles, CancellationToken.None);
     }
     catch (Exception ex)
