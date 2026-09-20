@@ -1,7 +1,7 @@
 schema_version: aecs.task-contract/v1
 task:
   id: EXP-F001
-  objective: Factorial protocol fixture task one
+  objective: "Create the file result.txt containing exactly the line: factorial-f001-ok"
   acceptance: []
   scope:
     allowed:
@@ -15,7 +15,7 @@ task:
     tokens: 5000
     usd: 0.01
     retries: 0
-    wall_clock_seconds: 30
+    wall_clock_seconds: 180
     max_files_changed: 1
   execution:
     runtime: host

@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "aecs.experiment-dataset/v5",
+  "id": "factorial-ledger-context-local",
+  "version": "1.0.0",
+  "repository": {
+    "path": "repository",
+    "baseline": "HEAD"
+  },
+  "repetitions": 1,
+  "referenceVariantId": "A",
+  "protocol": {
+    "design": "factorial-ledger-context-2x2",
+    "hypothesisId": "H1-LC",
+    "hypothesis": "Constraint Ledger enforcement and graph-ranked context are separable factors on a local provider; the interaction term is reported explicitly.",
+    "primaryMetric": "vcc-per-estimated-cost",
+    "minimumPairedSamples": 2,
+    "confidenceLevel": 0.95,
+    "deathCriteria": {
+      "minimumRelativeImprovement": 0,
+      "maximumCandidateFailureRate": 1,
+      "maximumCandidateScopeViolationRate": 0
+    }
+  },
+  "tasks": [
+    {
+      "id": "EXP-F001",
+      "contractPath": "EXP-F001.yaml",
+      "expectedDecision": "Verified"
+    },
+    {
+      "id": "EXP-F002",
+      "contractPath": "EXP-F002.yaml",
+      "expectedDecision": "Verified"
+    }
+  ],
+  "variants": [
+    {
+      "id": "A",
+      "provider": "Local",
+      "model": "qwen2.5-coder:3b",
+      "contextStrategy": "naive-path-order",
+      "constraintLedgerEnabled": false,
+      "context": {
+        "maxTokens": 2000,
+        "maxCharacters": 8000,
+        "maxFileCharacters": 4000,
+        "maxFileTokens": 1000,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 100,
+      "parameters": {}
+    },
+    {
+      "id": "B",
+      "provider": "Local",
+      "model": "qwen2.5-coder:3b",
+      "contextStrategy": "naive-path-order",
+      "constraintLedgerEnabled": true,
+      "context": {
+        "maxTokens": 2000,
+        "maxCharacters": 8000,
+        "maxFileCharacters": 4000,
+        "maxFileTokens": 1000,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 100,
+      "parameters": {}
+    },
+    {
+      "id": "C",
+      "provider": "Local",
+      "model": "qwen2.5-coder:3b",
+      "contextStrategy": "graph-ranked",
+      "constraintLedgerEnabled": false,
+      "context": {
+        "maxTokens": 2000,
+        "maxCharacters": 8000,
+        "maxFileCharacters": 4000,
+        "maxFileTokens": 1000,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 100,
+      "parameters": {}
+    },
+    {
+      "id": "D",
+      "provider": "Local",
+      "model": "qwen2.5-coder:3b",
+      "contextStrategy": "graph-ranked",
+      "constraintLedgerEnabled": true,
+      "context": {
+        "maxTokens": 2000,
+        "maxCharacters": 8000,
+        "maxFileCharacters": 4000,
+        "maxFileTokens": 1000,
+        "dependencyDepth": 2
+      },
+      "requiresRealProvider": true,
+      "seed": 100,
+      "parameters": {}
+    }
+  ]
+}

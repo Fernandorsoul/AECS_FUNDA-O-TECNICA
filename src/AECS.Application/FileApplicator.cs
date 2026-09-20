@@ -19,8 +19,12 @@ public class FileApplicatorResult
 public class FileApplicator
 {
     // Accepts both "FILE: path" and "### path" (markdown header) formats
+    // Accepts "FILE: path", markdown headers ("### path" / "### FILE: path"), and
+    // weaker models that put "// path.ext" as the first line inside the fence.
+    // Duplicate named groups are legal in .NET; only one alternative matches per fence.
     private static readonly Regex FileBlockRegex = new(
-        @"(?:(?:#{1,6}\s+)(?:FILE:\s*)?|FILE:\s*)([^\r\n]+?)\s*\r?\n```(?:\w*)\r?\n(.*?)```",
+        @"(?:(?:#{1,6}\s+)(?:FILE:\s*)?|FILE:\s*)(?<path>[^\r\n]+?)\s*\r?\n```(?:\w*)\r?\n(?<content>.*?)```" +
+        @"|```(?:\w*)\r?\n//\s*(?<path>[\w./\\-]+\.[A-Za-z0-9]+)\r?\n(?<content>.*?)```",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     private static readonly Regex WindowsAbsolutePathRegex = new(
@@ -36,8 +40,8 @@ public class FileApplicator
 
         foreach (Match match in FileBlockRegex.Matches(modelResponse))
         {
-            var suppliedPath = match.Groups[1].Value.Trim();
-            var content = match.Groups[2].Value.Trim();
+            var suppliedPath = match.Groups["path"].Value.Trim();
+            var content = match.Groups["content"].Value.Trim();
 
             if (string.IsNullOrEmpty(suppliedPath) || string.IsNullOrEmpty(content))
                 continue;

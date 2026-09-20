@@ -94,6 +94,31 @@ public sealed class FileApplicatorSecurityTests : IDisposable
         result.AppliedChanges.Should().BeEmpty();
     }
 
+    [Fact]
+    public void ApplyChanges_CommentFirstLineInFence_WritesFile()
+    {
+        var response = "```csharp\n// result.txt\nfactorial-ok\n```";
+
+        var result = _applicator.ApplyChanges(response, _workspace);
+
+        result.Success.Should().BeTrue();
+        result.AppliedChanges.Should().ContainSingle()
+            .Which.FilePath.Should().Be("result.txt");
+        File.ReadAllText(Path.Combine(_workspace, "result.txt"))
+            .Should().Be("factorial-ok");
+    }
+
+    [Fact]
+    public void ApplyChanges_CommentFirstLineWithTraversal_IsRejected()
+    {
+        var response = "```csharp\n// ../outside.txt\ncandidate\n```";
+
+        var result = _applicator.ApplyChanges(response, _workspace);
+
+        result.Success.Should().BeFalse();
+        result.AppliedChanges.Should().BeEmpty();
+    }
+
     public void Dispose()
     {
         var resolved = Path.GetFullPath(_testRoot);
