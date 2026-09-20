@@ -6,7 +6,7 @@
     "path": "repository",
     "baseline": "HEAD"
   },
-  "repetitions": 1,
+  "repetitions": 3,
   "referenceVariantId": "A",
   "protocol": {
     "design": "factorial-ledger-context-2x2",
