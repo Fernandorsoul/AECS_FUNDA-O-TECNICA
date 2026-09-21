@@ -321,7 +321,8 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 **Não verificado / pendências:**
 - `Assisted` sem runner automatizado — permanece `PendingReview`.
-- Rotação da chave HMAC do ledger store (hoje: criar `constraint-ledger.hmac.key` novo invalida arquivos antigos por design — fail-closed; automação de rotação não implementada).
+
+**Rotação de chaves:** `aecs evidence-key rotate` rotaciona a chave RSA de assinatura de evidência **e** a chave HMAC do ledger store (`JsonConstraintLedgerStore.RotateKey`): valida o MAC de todos os snapshots com a chave antiga antes de tocar em qualquer arquivo (arquivo plantado/tamperado aborta a rotação e a chave antiga é mantida), grava `.bak`, re-assina tudo atomicamente e remove o `.bak` no sucesso; falha no meio restaura a chave antiga (estado recuperável — `.bak` documentado para rollback manual).
 
 | Conceito do Ledger | Estado no AECS |
 |---|---|

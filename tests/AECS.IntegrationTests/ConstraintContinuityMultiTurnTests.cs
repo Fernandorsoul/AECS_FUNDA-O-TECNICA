@@ -496,6 +496,71 @@ public sealed class ConstraintContinuityMultiTurnTests : IDisposable
         covered.Should().BeEquivalentTo(["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]);
     }
 
+    private string KeyDirectory => Path.Combine(_root, "evidence", "keys");
+    private string EvidenceRoot => Path.Combine(_root, "evidence");
+
+    [Fact]
+    public async Task RotateKey_ReSignsSnapshots_ThenLoadStillSucceeds()
+    {
+        var turn1 = FreshTurn();
+        turn1.Ingest(HumanRecord("human.stand", "standing policy"));
+        await _store.SaveAsync(_repoPath, SnapshotOf(turn1), CancellationToken.None);
+
+        var first = JsonConstraintLedgerStore.RotateKey(KeyDirectory, EvidenceRoot);
+        first.ReSignedFiles.Should().Be(1);
+        first.KeyFingerprint.Should().StartWith("sha256:");
+        File.Exists(Path.Combine(KeyDirectory, JsonConstraintLedgerStore.KeyFileName + ".bak"))
+            .Should().BeFalse("backup must be removed after a successful rotation");
+
+        var loaded = await _store.LoadAsync(_repoPath, CancellationToken.None);
+        loaded.Should().NotBeNull();
+        loaded!.Records.Should().Contain(record => record.RequirementKey == "human.stand");
+
+        var second = JsonConstraintLedgerStore.RotateKey(KeyDirectory, EvidenceRoot);
+        second.KeyFingerprint.Should().NotBe(first.KeyFingerprint);
+        (await _store.LoadAsync(_repoPath, CancellationToken.None)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RotateKey_TamperedSnapshot_FailsClosed_AndKeepsOldKey()
+    {
+        var turn1 = FreshTurn();
+        turn1.Ingest(HumanRecord("human.stand", "standing policy"));
+        await _store.SaveAsync(_repoPath, SnapshotOf(turn1), CancellationToken.None);
+
+        var storePath = Directory.GetFiles(
+                Path.Combine(_root, "evidence", "constraint-ledger"),
+                "*.json")
+            .Single();
+        var json = await File.ReadAllTextAsync(storePath);
+        await File.WriteAllTextAsync(
+            storePath,
+            json.Replace("standing policy", "planted text"));
+
+        var act = () => JsonConstraintLedgerStore.RotateKey(KeyDirectory, EvidenceRoot);
+
+        var exception = act.Should().Throw<InvalidOperationException>();
+        exception.Which.Message.Should().Contain("refusing to rotate");
+        File.Exists(Path.Combine(KeyDirectory, JsonConstraintLedgerStore.KeyFileName + ".bak"))
+            .Should().BeFalse("rotation must abort before touching the key");
+
+        // Old key intact: load still fails on the tampered file (MAC), not on key loss.
+        var load = () => _store.LoadAsync(_repoPath, CancellationToken.None);
+        (await load.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Contain("MAC is invalid");
+    }
+
+    [Fact]
+    public void RotateKey_NoKeyAndNoFiles_CreatesKeyWithoutError()
+    {
+        var result = JsonConstraintLedgerStore.RotateKey(KeyDirectory, EvidenceRoot);
+
+        result.ReSignedFiles.Should().Be(0);
+        result.KeyFingerprint.Should().StartWith("sha256:");
+        File.Exists(Path.Combine(KeyDirectory, JsonConstraintLedgerStore.KeyFileName))
+            .Should().BeTrue();
+    }
+
     private static bool RegexLike(string name) =>
         name.Length > 2 && name[0] == 'R' && char.IsDigit(name[1]) && name[2] == '_';
 

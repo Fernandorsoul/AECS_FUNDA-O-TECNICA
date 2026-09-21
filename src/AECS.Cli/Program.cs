@@ -1146,6 +1146,12 @@ static int RunEvidenceKey(string[] args)
         var keyDirectory = resolved.Effective.EvidenceKeyDirectory.Value;
         var newKeyId = RsaEvidenceSignatureService.RotateKey(keyDirectory);
         Console.WriteLine($"Evidence signing key rotated: {newKeyId}");
+        var hmacRotation = JsonConstraintLedgerStore.RotateKey(
+            keyDirectory,
+            resolved.Effective.EvidenceJsonRoot.Value);
+        Console.WriteLine(
+            $"Constraint ledger HMAC key rotated: {hmacRotation.KeyFingerprint} " +
+            $"({hmacRotation.ReSignedFiles} snapshot(s) re-signed)");
         Console.WriteLine($"Trusted public keys retained in: {Path.GetFullPath(keyDirectory)}");
         return 0;
     }
@@ -1517,7 +1523,7 @@ static async Task<int> RunSingle(string[] args)
             RuntimeCliOptions.Usage);
         Console.WriteLine(
             "       aecs evidence-key rotate [--runtime-config <config.json>] " +
-            "[--key-directory <path>]");
+            "[--key-directory <path>]  (RSA signing key + ledger HMAC key)");
         return 1;
     }
 

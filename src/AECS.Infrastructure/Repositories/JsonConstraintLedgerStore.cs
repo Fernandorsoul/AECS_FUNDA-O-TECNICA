@@ -169,6 +169,122 @@ public sealed class JsonConstraintLedgerStore : IConstraintLedgerStore
         return MacPrefix + Convert.ToHexString(mac).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Rotates the HMAC key and re-signs every ledger snapshot under
+    /// <paramref name="evidenceRoot"/>. All existing files are verified with the
+    /// old key first (fail-closed: a planted/tampered file aborts rotation and
+    /// the old key is kept). The previous key is retained as
+    /// <c>constraint-ledger.hmac.key.bak</c> until every file is re-signed, so
+    /// an interrupted rotation can be rolled back manually.
+    /// </summary>
+    public static HmacRotationResult RotateKey(string keyDirectory, string evidenceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(evidenceRoot);
+
+        var keyPath = Path.Combine(keyDirectory, KeyFileName);
+        var ledgerDirectory = Path.Combine(evidenceRoot, "constraint-ledger");
+        var files = Directory.Exists(ledgerDirectory)
+            ? Directory.GetFiles(ledgerDirectory, "*.json")
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList()
+            : [];
+
+        byte[]? oldKey = File.Exists(keyPath) ? ReadKey(keyPath) : null;
+        if (files.Count > 0 && oldKey is null)
+        {
+            throw new InvalidOperationException(
+                "Constraint ledger snapshots exist but the HMAC key is missing; " +
+                "refusing to rotate an unverifiable store.");
+        }
+
+        // Phase 1 — verify every snapshot against the CURRENT key before touching anything.
+        var parsed = new List<(string Path, ConstraintLedgerSnapshot Snapshot)>();
+        foreach (var file in files)
+        {
+            var json = File.ReadAllText(file);
+            var storeFile = JsonSerializer.Deserialize<StoreFile>(json, JsonOptions);
+            if (storeFile is null ||
+                storeFile.SchemaVersion != FileSchemaVersion ||
+                storeFile.Snapshot is null ||
+                string.IsNullOrWhiteSpace(storeFile.Mac) ||
+                oldKey is null)
+            {
+                throw new InvalidOperationException(
+                    $"Constraint ledger snapshot '{Path.GetFileName(file)}' is unreadable " +
+                    "or unauthenticated; refusing to rotate.");
+            }
+
+            var expectedMac = ComputeMac(storeFile.Snapshot, oldKey);
+            if (!CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes(expectedMac),
+                    Encoding.UTF8.GetBytes(storeFile.Mac)))
+            {
+                throw new InvalidOperationException(
+                    $"Constraint ledger snapshot '{Path.GetFileName(file)}' has an " +
+                    "invalid MAC; refusing to rotate a tampered store.");
+            }
+
+            parsed.Add((file, storeFile.Snapshot));
+        }
+
+        // Phase 2 — swap the key (old key preserved as .bak) then re-sign all files.
+        var newKey = RandomNumberGenerator.GetBytes(32);
+        Directory.CreateDirectory(keyDirectory);
+        var backupPath = keyPath + ".bak";
+        if (oldKey is not null)
+        {
+            File.WriteAllText(backupPath, Convert.ToHexString(oldKey).ToLowerInvariant());
+        }
+
+        try
+        {
+            WriteKeyAtomic(keyPath, newKey);
+            foreach (var (path, snapshot) in parsed)
+            {
+                var envelope = new StoreFile
+                {
+                    SchemaVersion = FileSchemaVersion,
+                    Snapshot = snapshot,
+                    Mac = ComputeMac(snapshot, newKey)
+                };
+                var json = JsonSerializer.Serialize(envelope, JsonOptions);
+                var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, path, overwrite: true);
+            }
+
+            if (File.Exists(backupPath))
+            {
+                File.Delete(backupPath);
+            }
+        }
+        catch
+        {
+            // Roll the main key back to the old material so loads stay
+            // predictable against the majority (unmodified) files; keep .bak.
+            if (oldKey is not null)
+            {
+                WriteKeyAtomic(keyPath, oldKey);
+            }
+
+            throw;
+        }
+
+        return new HmacRotationResult(Fingerprint(newKey), parsed.Count);
+    }
+
+    private static string Fingerprint(byte[] key) =>
+        "sha256:" + Convert.ToHexString(SHA256.HashData(key)).ToLowerInvariant();
+
+    private static void WriteKeyAtomic(string path, byte[] key)
+    {
+        var hex = Convert.ToHexString(key).ToLowerInvariant();
+        var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(tempPath, hex);
+        File.Move(tempPath, path, overwrite: true);
+    }
+
     private byte[] LoadOrCreateKey()
     {
         Directory.CreateDirectory(_keyDirectory);
@@ -247,3 +363,9 @@ public sealed class JsonConstraintLedgerStore : IConstraintLedgerStore
         public string Mac { get; init; } = string.Empty;
     }
 }
+
+/// <summary>
+/// Outcome of an HMAC key rotation: the new key's public fingerprint and how
+/// many snapshots were re-signed.
+/// </summary>
+public sealed record HmacRotationResult(string KeyFingerprint, int ReSignedFiles);
