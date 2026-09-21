@@ -39,6 +39,8 @@ public class ExecutionEvidence
     public ConstraintSetRef? ConstraintSet { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ConstraintRecord>? ConstraintRecords { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TrajectoryEvidence? Trajectory { get; init; }
     public List<CandidatePromotionEvidence> Promotions { get; init; } = [];
     public List<string> StateTransitions { get; init; } = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

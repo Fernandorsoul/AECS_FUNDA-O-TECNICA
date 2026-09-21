@@ -14,5 +14,6 @@ public class VerificationContext
     public RepositorySnapshot? CandidateRepositorySnapshot { get; init; }
     public CSharpSymbolGraph? BaselineCSharpSymbolGraph { get; init; }
     public CSharpSymbolGraph? CandidateCSharpSymbolGraph { get; init; }
+    public TrajectoryEvidence? Trajectory { get; init; }
     public string SemanticAnalysisError { get; init; } = string.Empty;
 }

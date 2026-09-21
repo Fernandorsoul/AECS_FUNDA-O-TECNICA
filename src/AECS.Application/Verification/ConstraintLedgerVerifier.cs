@@ -42,7 +42,7 @@ public sealed class ConstraintLedgerVerifier
 
         foreach (var constraint in active)
         {
-            assessments.Add(Assess(constraint, priorResults));
+            assessments.Add(Assess(constraint, priorResults, context));
         }
 
         var evidence = new ConstraintLedgerVerificationEvidence
@@ -109,15 +109,17 @@ public sealed class ConstraintLedgerVerifier
 
     private static ConstraintAssessment Assess(
         ConstraintRecord constraint,
-        IReadOnlyList<VerificationResult> priorResults)
+        IReadOnlyList<VerificationResult> priorResults,
+        VerificationContext context)
     {
         switch (constraint.Verifiability)
         {
             case ConstraintVerifiability.Deterministic:
                 return AssessDeterministic(constraint, priorResults);
+            case ConstraintVerifiability.ProcessInvariant:
+                return AssessProcessInvariant(constraint, context);
             case ConstraintVerifiability.Manual:
             case ConstraintVerifiability.Assisted:
-            case ConstraintVerifiability.ProcessInvariant:
             default:
                 return new ConstraintAssessment
                 {
@@ -131,6 +133,77 @@ public sealed class ConstraintLedgerVerifier
                 };
         }
     }
+
+    /// <summary>
+    /// Process invariants with a trajectory verifier are assessed against the
+    /// execution posture captured for the run (plan §4.3.7). Only a docker
+    /// staged run can prove network isolation; host runs stay pending.
+    /// </summary>
+    private static ConstraintAssessment AssessProcessInvariant(
+        ConstraintRecord constraint,
+        VerificationContext context)
+    {
+        if (!string.Equals(
+                constraint.VerifierName,
+                TrajectoryVerifierNames.NoNetwork,
+                StringComparison.Ordinal))
+        {
+            return Pending(constraint,
+                $"ProcessInvariant without a trajectory verifier — not automatically verified");
+        }
+
+        var trajectory = context.Trajectory;
+        if (trajectory is null)
+        {
+            return Pending(constraint, "No trajectory evidence captured for this run");
+        }
+
+        if (!string.Equals(trajectory.Runtime, "docker", StringComparison.Ordinal))
+        {
+            return Pending(constraint,
+                $"Runtime '{trajectory.Runtime}' cannot prove network isolation — " +
+                "docker staging required");
+        }
+
+        if (trajectory.NetworkAllowedPhases.Count == 0 &&
+            trajectory.NetworkDestinations.Count == 0)
+        {
+            return new ConstraintAssessment
+            {
+                RequirementKey = constraint.RequirementKey,
+                Revision = constraint.Revision,
+                Kind = constraint.Kind,
+                Verifiability = constraint.Verifiability,
+                VerifierName = constraint.VerifierName,
+                Outcome = ConstraintAssessmentOutcome.Satisfied,
+                Detail = "Trajectory: docker staged with no network phases or destinations"
+            };
+        }
+
+        return new ConstraintAssessment
+        {
+            RequirementKey = constraint.RequirementKey,
+            Revision = constraint.Revision,
+            Kind = constraint.Kind,
+            Verifiability = constraint.Verifiability,
+            VerifierName = constraint.VerifierName,
+            Outcome = ConstraintAssessmentOutcome.Violated,
+            Detail = $"Trajectory granted network in phases " +
+                $"[{string.Join(", ", trajectory.NetworkAllowedPhases)}] " +
+                $"to [{string.Join(", ", trajectory.NetworkDestinations)}]"
+        };
+    }
+
+    private static ConstraintAssessment Pending(ConstraintRecord constraint, string detail) => new()
+    {
+        RequirementKey = constraint.RequirementKey,
+        Revision = constraint.Revision,
+        Kind = constraint.Kind,
+        Verifiability = constraint.Verifiability,
+        VerifierName = constraint.VerifierName,
+        Outcome = ConstraintAssessmentOutcome.PendingReview,
+        Detail = detail
+    };
 
     private static ConstraintAssessment AssessDeterministic(
         ConstraintRecord constraint,

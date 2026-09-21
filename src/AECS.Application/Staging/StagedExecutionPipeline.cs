@@ -368,7 +368,8 @@ public sealed class StagedExecutionPipeline
                 AgentResult = agentResult,
                 CandidateChangeSet = candidate,
                 CommandEvidence = candidateCommands,
-                Phase = "candidate"
+                Phase = "candidate",
+                Trajectory = TrajectoryEvidence.Capture(contract)
             };
 
             verificationResults = await VerifyAsync(
@@ -554,6 +555,7 @@ public sealed class StagedExecutionPipeline
             AdaptiveShadow = adaptiveShadow,
             ConstraintSet = constraintSet,
             ConstraintRecords = constraintLedger?.GetActive().ToList(),
+            Trajectory = TrajectoryEvidence.Capture(contract),
             StateTransitions = stateMachine.History
                 .Select(item => $"{item.From}->{item.To}@{item.At:O}")
                 .ToList()

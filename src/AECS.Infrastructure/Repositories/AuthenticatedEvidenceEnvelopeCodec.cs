@@ -431,6 +431,7 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
         ValidateHistoricalEvidence(evidence);
         ValidateAdaptiveShadowEvidence(evidence);
         ValidateConstraintEvidence(evidence);
+        ValidateTrajectoryEvidence(evidence);
 
         var snapshot = evidence.RepositorySnapshot;
         if (snapshot is not null &&
@@ -797,6 +798,29 @@ internal sealed class AuthenticatedEvidenceEnvelopeCodec
                     "Constraint ledger verification evidence is incomplete, inconsistent, " +
                     "or has an unsupported schema.");
             }
+        }
+    }
+
+    private static void ValidateTrajectoryEvidence(ExecutionEvidence evidence)
+    {
+        var trajectory = evidence.Trajectory;
+        if (trajectory is null)
+        {
+            return;
+        }
+
+        if (trajectory.SchemaVersion != TrajectoryEvidenceSchema.Version ||
+            trajectory.Runtime is not ("host" or "docker") ||
+            trajectory.NetworkAllowedPhases is null ||
+            trajectory.NetworkDestinations is null ||
+            trajectory.NetworkAllowedPhases.Any(string.IsNullOrWhiteSpace) ||
+            trajectory.NetworkDestinations.Any(string.IsNullOrWhiteSpace) ||
+            trajectory.CapturedAt == default ||
+            trajectory.CapturedAt.Kind != DateTimeKind.Utc)
+        {
+            throw new EvidenceIntegrityException(
+                "Trajectory evidence is incomplete, inconsistent, " +
+                "or has an unsupported schema.");
         }
     }
 

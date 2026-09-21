@@ -86,6 +86,14 @@ public enum ConstraintVerifiability
 }
 
 /// <summary>
+/// Well-known trajectory verifier names for ProcessInvariant constraints.
+/// </summary>
+public static class TrajectoryVerifierNames
+{
+    public const string NoNetwork = "Trajectory.NoNetwork";
+}
+
+/// <summary>
 /// A single versioned constraint with identity, provenance, and lifecycle tracking.
 /// Each revision creates a new immutable record; supersession preserves history.
 /// </summary>

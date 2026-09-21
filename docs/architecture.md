@@ -317,8 +317,9 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 **Corpus multi-turn (P3):** `tests/AECS.IntegrationTests/ConstraintContinuityMultiTurnTests.cs` cobre explicitamente os casos §4.4 R1–R8 (preservação cross-sessão, supersede com trilha, conflito bloqueante, store adulterado/origem não confiável, violação com testes OK, regra subjetiva pendente, detecção de mutação do conjunto, reprodutibilidade/distinção de revisões) + `Coverage_AllPlanCasesAreCovered` falha se um caso sumir.
 
+**Trajetória de invariantes de processo (§4.3.7):** `TrajectoryEvidence` (`aecs.trajectory/v1`) captura o postura de execução por run — runtime efetivo (`host`/`docker`) + fases/destinos de rede concedidos pela capability policy — gravado em `ExecutionEvidence.Trajectory` e exposto no `VerificationContext`. `ProcessInvariant` com `VerifierName=Trajectory.NoNetwork` é avaliado: **docker sem fases/destinos de rede ⇒ Satisfied**; docker com rede concedida ⇒ **Violated (Critical)**; runtime host ou ausência de trajetória ⇒ **PendingReview** (host não prova isolamento de rede). Outros `ProcessInvariant` sem verificador de trajetória permanecem `PendingReview`. Validação fail-closed no codec (`ValidateTrajectoryEvidence`).
+
 **Não verificado / pendências:**
-- Captura de sinais de invariantes de processo *durante* a execução no sandbox (§4.3.7).
 - `Assisted` sem runner automatizado — permanece `PendingReview`.
 - Rotação da chave HMAC do ledger store (hoje: criar `constraint-ledger.hmac.key` novo invalida arquivos antigos por design — fail-closed; automação de rotação não implementada).
 
