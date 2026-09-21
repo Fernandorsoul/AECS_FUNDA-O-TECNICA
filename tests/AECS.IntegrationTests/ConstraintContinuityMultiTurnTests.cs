@@ -239,8 +239,8 @@ public sealed class ConstraintContinuityMultiTurnTests : IDisposable
         decision.Decision.Should().Be(TaskDecision.Rejected);
     }
 
-    // R4 — text planted in a store file cannot revoke policy: corrupted seals
-    // and untrusted origins are rejected on load.
+    // R4 — text planted in a store file cannot revoke policy: MAC authentication,
+    // corrupted seals, and untrusted origins are rejected on load.
     [Fact]
     public async Task R4_TamperedStoreRecord_IsRejectedAsUntrusted()
     {
@@ -260,12 +260,52 @@ public sealed class ConstraintContinuityMultiTurnTests : IDisposable
         var act = () => _store.LoadAsync(_repoPath, CancellationToken.None);
 
         var exception = await act.Should().ThrowAsync<InvalidOperationException>();
-        exception.Which.Message.Should().Contain("inconsistent");
+        exception.Which.Message.Should().Contain("MAC is invalid");
+    }
+
+    [Fact]
+    public async Task R4_StoreWithoutMac_IsRejected()
+    {
+        var directory = Path.Combine(_root, "evidence", "constraint-ledger");
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, ComputeRepositoryKey(_repoPath) + ".json"),
+            """{"schemaVersion":"aecs.constraint-ledger-store-file/v1","snapshot":null,"mac":""}""");
+
+        var act = () => _store.LoadAsync(_repoPath, CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<InvalidOperationException>();
+        exception.Which.Message.Should().Contain("unauthenticated");
+    }
+
+    [Fact]
+    public async Task R4_MissingHmacKey_FailsClosed()
+    {
+        var turn1 = FreshTurn();
+        turn1.Ingest(HumanRecord("human.stand", "standing policy"));
+        await _store.SaveAsync(_repoPath, SnapshotOf(turn1), CancellationToken.None);
+
+        var keyPath = Path.Combine(_root, "evidence", "keys",
+            JsonConstraintLedgerStore.KeyFileName);
+        File.Exists(keyPath).Should().BeTrue("first save must create the HMAC key");
+        File.Delete(keyPath);
+
+        var act = () => _store.LoadAsync(_repoPath, CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<InvalidOperationException>();
+        exception.Which.Message.Should().Contain("HMAC key is unavailable");
     }
 
     [Fact]
     public async Task R4_UntrustedOriginInStore_IsRejected()
     {
+        // Seed the key via a legitimate save, then plant an authenticated file
+        // whose record carries an origin the allowlist forbids — the origin
+        // check must still reject even when the MAC is valid (stolen-key case).
+        var seed = FreshTurn();
+        seed.Ingest(HumanRecord("human.seed", "seed"));
+        await _store.SaveAsync(_repoPath, SnapshotOf(seed), CancellationToken.None);
+
         var planted = ConstraintRecordContract.Seal(new ConstraintRecord
         {
             Id = Guid.Parse("33333333-2222-3333-4444-555555555551"),
@@ -283,22 +323,35 @@ public sealed class ConstraintContinuityMultiTurnTests : IDisposable
             CreatedAt = ConstraintLedgerProjector.Epoch
         });
 
+        var keyHex = (await File.ReadAllTextAsync(Path.Combine(
+                _root, "evidence", "keys", JsonConstraintLedgerStore.KeyFileName)))
+            .Trim();
+        var snapshot = new ConstraintLedgerSnapshot
+        {
+            RepositoryKey = ComputeRepositoryKey(_repoPath),
+            Records = [planted],
+            Conflicts = [],
+            SavedAt = DateTime.UtcNow
+        };
+        var envelope = new
+        {
+            schemaVersion = JsonConstraintLedgerStore.FileSchemaVersion,
+            snapshot,
+            mac = JsonConstraintLedgerStore.ComputeMac(
+                snapshot,
+                Convert.FromHexString(keyHex))
+        };
         var directory = Path.Combine(_root, "evidence", "constraint-ledger");
         Directory.CreateDirectory(directory);
-        var json = System.Text.Json.JsonSerializer.Serialize(
-            new ConstraintLedgerSnapshot
-            {
-                RepositoryKey = ComputeRepositoryKey(_repoPath),
-                Records = [planted]
-            },
-            new System.Text.Json.JsonSerializerOptions
-            {
-                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            });
         await File.WriteAllTextAsync(
             Path.Combine(directory, ComputeRepositoryKey(_repoPath) + ".json"),
-            json);
+            System.Text.Json.JsonSerializer.Serialize(
+                envelope,
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                }));
 
         var act = () => _store.LoadAsync(_repoPath, CancellationToken.None);
 

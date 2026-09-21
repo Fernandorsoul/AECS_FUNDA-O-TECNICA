@@ -313,14 +313,14 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 
 **Testes:** `ConstraintLedgerTests` (24, P1), `ConstraintLedgerProjectorTests` (6), `ConstraintLedgerVerifierTests` (6), `DecisionEngineTests` (violação→Rejected, pending→HumanReview, ausente→Rejected), `RepositoryContextCompilerTests.Compile_IncludesConstraintObligations_EvenWhenBudgetIsTight`, mais as integrações de pipeline/replay/evidência (round-trip do set pelo codec).
 
-**Persistência entre turnos (P3):** `IConstraintLedgerStore` (Domain.Interfaces) + `JsonConstraintLedgerStore` (Infrastructure) — snapshot por repositório em `<evidence-root>/constraint-ledger/<sha256(repo)>.json`. No início do pipeline o ledger é montado como: records projetados do contrato → records persistidos carregados (`Active` via `Ingest` com regras de autoridade, histórico via `AppendHistory`) → conflitos; no `PublishAsync` o estado é salvo (após a checagem de revalidação). **Só persistem** origens `HumanOverride` e `HistoricalDecision` (`ConstraintLedgerPersistence.IsPersistable`) — records projetados do contrato são re-derivados a cada execução. `LoadAsync` valida seal (`ConstraintRecordContract`) e allowlist de origem: arquivo corrompido ou origem não confiável ⇒ exceção, política permanece (caso R4). `SupersedeInternal` re-sella o record (Status/ValidUntil mudam ⇒ novo `ContentHash`).
+**Persistência entre turnos (P3):** `IConstraintLedgerStore` (Domain.Interfaces) + `JsonConstraintLedgerStore` (Infrastructure) — snapshot por repositório em `<evidence-root>/constraint-ledger/<sha256(repo)>.json`. No início do pipeline o ledger é montado como: records projetados do contrato → records persistidos carregados (`Active` via `Ingest` com regras de autoridade, histórico via `AppendHistory`) → conflitos; no `PublishAsync` o estado é salvo (após a checagem de revalidação). **Só persistem** origens `HumanOverride` e `HistoricalDecision` (`ConstraintLedgerPersistence.IsPersistable`) — records projetados do contrato são re-derivados a cada execução. **Autenticação (HMAC):** cada arquivo é um envelope `aecs.constraint-ledger-store-file/v1` com `HMAC-SHA256` (prefixo `hmac-sha256:`) sobre o snapshot canônico, chave de 256 bits em `<evidence-key-directory>/constraint-ledger.hmac.key` (criada no primeiro save). `LoadAsync` falha fechado antes de confiar em qualquer record: arquivo sem MAC/schema inválido ⇒ *unreadable/unauthenticated*; MAC divergente ⇒ *MAC is invalid*; chave ausente ⇒ *HMAC key is unavailable*; depois valida seal (`ConstraintRecordContract`) e allowlist de origem (caso R4 — inclusive com MAC válido, cenário de chave roubada). `SupersedeInternal` re-sella o record (Status/ValidUntil mudam ⇒ novo `ContentHash`).
 
 **Corpus multi-turn (P3):** `tests/AECS.IntegrationTests/ConstraintContinuityMultiTurnTests.cs` cobre explicitamente os casos §4.4 R1–R8 (preservação cross-sessão, supersede com trilha, conflito bloqueante, store adulterado/origem não confiável, violação com testes OK, regra subjetiva pendente, detecção de mutação do conjunto, reprodutibilidade/distinção de revisões) + `Coverage_AllPlanCasesAreCovered` falha se um caso sumir.
 
 **Não verificado / pendências:**
-- Autenticação criptográfica do arquivo do store (HMAC/assinatura com as chaves do evidence key directory) — hoje há apenas content-hash + allowlist de origem; um atacante com escrita no store e capacidade de re-selar não é detectado. **Proposto, não verificado.**
 - Captura de sinais de invariantes de processo *durante* a execução no sandbox (§4.3.7).
 - `Assisted` sem runner automatizado — permanece `PendingReview`.
+- Rotação da chave HMAC do ledger store (hoje: criar `constraint-ledger.hmac.key` novo invalida arquivos antigos por design — fail-closed; automação de rotação não implementada).
 
 | Conceito do Ledger | Estado no AECS |
 |---|---|
@@ -332,7 +332,7 @@ Essas limitações não reabrem a trust boundary: uma capacidade ausente que é 
 | Revalidação no meio da execução | **Implementado (P2)** |
 | Persistência entre turnos (store por repo, origens confiáveis) | **Implementado (P3)** |
 | Corpus multi-turn §4.4 R1–R8 com cobertura explícita | **Implementado (P3)** |
-| Autenticação do store (HMAC/assinatura) | **Proposto — não verificado** |
+| Autenticação do store (HMAC/assinatura) | **Implementado** — envelope HMAC-SHA256 + chave no evidence key directory; testes R4 (tamper, sem MAC, sem chave, origem inválida com MAC válido) |
 
 **Ponto de extensão arquitetural:** padrão espelhado de `HistoricalDecision` (versionamento, autoridade, review, ContentHash) — ver `docs/historical-decision-registry.md`.
 

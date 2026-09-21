@@ -75,7 +75,8 @@ public sealed class AecsExecutionRuntime : IDisposable
 
             var store = CreateEvidenceStore(resolved);
             var ledgerStore = new JsonConstraintLedgerStore(
-                configuration.EvidenceJsonRoot.Value);
+                configuration.EvidenceJsonRoot.Value,
+                configuration.EvidenceKeyDirectory.Value);
             return new AecsExecutionRuntime(
                 configuration,
                 agent,
