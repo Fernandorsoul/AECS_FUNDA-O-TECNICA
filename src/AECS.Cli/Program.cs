@@ -11,6 +11,7 @@ using AECS.Application.ControlKernel;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Experiments;
 using AECS.Application.EvidenceGraph;
+using AECS.Application.Observability;
 using AECS.Application.Parsing;
 using AECS.Application.Promotion;
 using AECS.Application.Replay;
@@ -26,11 +27,15 @@ using AECS.Domain.Interfaces;
 using AECS.Domain.Models;
 using AECS.Infrastructure.AgentRuntime;
 using AECS.Infrastructure.Cryptography;
+using AECS.Infrastructure.Observability;
 using AECS.Infrastructure.Processes;
 using AECS.Infrastructure.Repositories;
 
 // Load .env file if present
 LoadEnvFile();
+
+// Optional OTLP trace export (OTEL_EXPORTER_OTLP_ENDPOINT); no-op when unset.
+using var aecsTelemetry = OtlpTelemetry.Configure(AecsActivity.SourceName);
 
 // Determine command
 var command = args.Length > 0 ? args[0] : "jarvis";

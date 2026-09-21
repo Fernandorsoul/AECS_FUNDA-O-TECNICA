@@ -903,6 +903,38 @@ public sealed class StagedExecutionPipelineTests
         new JsonExecutionEvidenceStore(repository.EvidencePath));
 
     [Fact]
+    public async Task Telemetry_ExecutionEmitsActivityWithFundationEvents()
+    {
+        var recorded = new List<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source =>
+                source.Name == AECS.Application.Observability.AecsActivity.SourceName,
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => recorded.Add(activity)
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+        await using var repository = await TemporaryGitRepository.CreateAsync();
+        var agent = Agent.Success(Response("src/new-file.txt"));
+        var store = new JsonExecutionEvidenceStore(repository.EvidencePath);
+        var pipeline = new StagedExecutionPipeline(agent, repository.ProcessRunner, store);
+
+        var result = await pipeline.RunAsync(repository.Path, Contract(), CancellationToken.None);
+
+        var root = recorded.Single(activity => activity.OperationName == "aecs.execution");
+        root.GetTagItem("aecs.task_id").Should().NotBeNull();
+        root.Events.Select(e => e.Name).Should().Contain(AECS.Application.Observability.AecsActivity.TaskCreated);
+        root.Events.Select(e => e.Name).Should().Contain(AECS.Application.Observability.AecsActivity.AgentStarted);
+        root.Events.Select(e => e.Name).Should().Contain(AECS.Application.Observability.AecsActivity.AgentStopped);
+        root.Events.Select(e => e.Name).Should().Contain(AECS.Application.Observability.AecsActivity.VerificationCompleted);
+        root.Events.Select(e => e.Name).Should().Contain(AECS.Application.Observability.AecsActivity.PatchAccepted);
+        recorded.Select(activity => activity.OperationName).Should().Contain(
+            name => name == "aecs.symbol-graph");
+    }
+
+    [Fact]
     public async Task ConstraintLedgerDisabled_EvidenceOmitsLedgerAndDecisionDoesNotRequireIt()
     {
         await using var repository = await TemporaryGitRepository.CreateAsync();

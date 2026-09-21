@@ -4,6 +4,7 @@ using AECS.Application.ConstraintLedger;
 using AECS.Application.ContextCompiler;
 using AECS.Application.Execution;
 using AECS.Application.ControlKernel;
+using AECS.Application.Observability;
 using AECS.Application.RepositorySnapshots;
 using AECS.Application.SemanticLinter;
 using AECS.Application.SymbolGraphs;
@@ -120,7 +121,12 @@ public sealed class StagedExecutionPipeline
         var stateMachine = new TaskStateMachine();
         stateMachine.TransitionTo(TaskState.ContractReady);
 
+        using var executionActivity = AecsActivity.Start("aecs.execution");
+        AecsActivity.Tag(executionActivity, "aecs.task_id", inputContract.Id);
+        AecsActivity.Event(executionActivity, AecsActivity.TaskCreated);
+
         var risk = _riskClassifier.Classify(inputContract);
+        AecsActivity.Tag(executionActivity, "aecs.risk", risk.ToString());
         var contract = WithRisk(inputContract, risk);
         var plan = await _executionController.PlanAsync(contract, cancellationToken);
         CapabilityPolicyGuard.EnsureNoExpansion(
@@ -183,10 +189,14 @@ public sealed class StagedExecutionPipeline
                 contract,
                 baselineCommands,
                 budgetScope.Token);
-            symbolGraph = await _symbolGraphBuilder.BuildAsync(
-                preflightWorkspace.Path,
-                repositorySnapshot,
-                cancellationToken: budgetScope.Token);
+            using (var symbolActivity = AecsActivity.Start("aecs.symbol-graph"))
+            {
+                symbolGraph = await _symbolGraphBuilder.BuildAsync(
+                    preflightWorkspace.Path,
+                    repositorySnapshot,
+                    cancellationToken: budgetScope.Token);
+                AecsActivity.Tag(symbolActivity, "aecs.graph.loaded", symbolGraph.LoadSucceeded);
+            }
             baselineVerificationResults = await VerifyBaselineAsync(
                 stagedProcessRunner,
                 baselineContext,
@@ -318,9 +328,14 @@ public sealed class StagedExecutionPipeline
                 agentProfile: contextProfile,
                 constraints: constraintLedger?.GetActive());
             contextManifest = compiledContext.Manifest;
+            AecsActivity.Event(executionActivity, AecsActivity.TaskCompiled, "aecs.context_hash", contextManifest.ManifestHash);
             _compiledContextGate?.EnsureAccepted(contract, compiledContext);
 
-            var agentOutcome = await _agentExecutionCoordinator.ExecuteAsync(
+            AecsActivity.Event(executionActivity, AecsActivity.AgentStarted, "aecs.model", effectivePlan.Model);
+            AgentExecutionOutcome agentOutcome;
+            using (var agentActivity = AecsActivity.Start("aecs.agent"))
+            {
+                agentOutcome = await _agentExecutionCoordinator.ExecuteAsync(
                 new AgentExecutionRequest
                 {
                     TaskId = baseAgentRequest.TaskId,
@@ -334,9 +349,12 @@ public sealed class StagedExecutionPipeline
                     CodeContext = compiledContext.CodeContext,
                     ContextPrompt = compiledContext.Prompt
                 }, budgetScope);
+            }
+
             agentResult = agentOutcome.Result;
             agentAttempts = agentOutcome.Attempts;
             budgetExhaustionReason = agentOutcome.BudgetExhaustionReason;
+            AecsActivity.Event(executionActivity, AecsActivity.AgentStopped, "aecs.exit_reason", agentResult.ExitReason);
 
             var applicationResult = agentResult.Success
                 ? _fileApplicator.ApplyChanges(
@@ -348,6 +366,14 @@ public sealed class StagedExecutionPipeline
                     Success = false,
                     Errors = ["Agent failed; its response was not applied"]
                 };
+            if (applicationResult.AppliedChanges.Count > 0)
+            {
+                AecsActivity.Event(
+                    executionActivity,
+                    AecsActivity.FileModified,
+                    "aecs.files_changed",
+                    applicationResult.AppliedChanges.Count.ToString());
+            }
 
             candidate = await _workspaceManager.CreateCandidateAsync(
                 workspace,
@@ -372,6 +398,9 @@ public sealed class StagedExecutionPipeline
                 Trajectory = TrajectoryEvidence.Capture(contract)
             };
 
+        AecsActivity.Event(executionActivity, AecsActivity.VerificationStarted);
+        using (var verifyActivity = AecsActivity.Start("aecs.verify"))
+        {
             verificationResults = await VerifyAsync(
                 stagedProcessRunner,
                 verificationContext,
@@ -387,10 +416,17 @@ public sealed class StagedExecutionPipeline
                 () => budgetScope.RemainingDuration,
                 constraintLedger,
                 constraintSet);
+        }
             decision = _decisionEngine.Decide(
                 verificationResults,
                 contract,
                 requireConstraintLedger: _constraintLedgerEnabled);
+            AecsActivity.Event(executionActivity, AecsActivity.VerificationCompleted, "aecs.decision", decision.Decision.ToString());
+            AecsActivity.Event(executionActivity,
+                decision.Decision == TaskDecision.Verified
+                    ? AecsActivity.PatchAccepted
+                    : AecsActivity.PatchRejected,
+                "aecs.task_id", contract.Id);
             decision = ApplyTerminalExecutionState(
                 decision,
                 agentResult,
@@ -512,6 +548,9 @@ public sealed class StagedExecutionPipeline
             agentResult,
             agentAttempts,
             budgetExhaustionReason);
+        AecsActivity.Event(
+            AecsActivity.Start("aecs.publish"),
+            AecsActivity.BudgetUpdated);
         var adaptiveShadow = shadowRecommendation is null
             ? null
             : EvaluateShadow(
