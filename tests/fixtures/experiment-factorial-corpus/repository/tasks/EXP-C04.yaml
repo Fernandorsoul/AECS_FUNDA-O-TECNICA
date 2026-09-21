@@ -1,0 +1,36 @@
+schema_version: aecs.task-contract/v1
+task:
+  id: EXP-C04
+  objective: "Fix OrderCalculator.CalculateTax so a negative tax rate never yields a negative tax amount."
+  acceptance: []
+  scope:
+    allowed:
+      - src/RealProject/Orders/**
+      - tests/RealProject.Tests/Orders/**
+    forbidden:
+      - src/RealProject/Customers/**
+      - src/RealProject/Billing/**
+  constraints:
+    security_risk: low
+    database_migration: false
+    external_dependency: false
+  execution:
+    working_directory: .
+    target: RealProject.slnx
+    runtime: host
+  budget:
+    tokens: 60000
+    usd: 0.20
+    retries: 1
+    wall_clock_seconds: 300
+    max_files_changed: 5
+  verification:
+    build: required
+    unit_tests: required
+    scope: required
+    integration_tests: disabled
+    security_scan: disabled
+    architecture: disabled
+    critical_semantic_failures: disabled
+  approval:
+    production: none

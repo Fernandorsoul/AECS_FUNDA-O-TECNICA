@@ -1,0 +1,110 @@
+{
+    "schemaVersion":  "aecs.experiment-dataset/v5",
+    "id":  "factorial-corpus-smoke",
+    "version":  "1.0.0",
+    "repository":  {
+                       "path":  "repository",
+                       "baseline":  "HEAD"
+                   },
+    "repetitions":  1,
+    "referenceVariantId":  "A",
+    "protocol":  {
+                     "design":  "factorial-ledger-context-2x2",
+                     "hypothesisId":  "H1-LC",
+                     "hypothesis":  "Constraint Ledger enforcement and graph-ranked context are separable factors on a 20-task integration corpus with a broken baseline; the interaction term is reported explicitly.",
+                     "primaryMetric":  "vcc-per-estimated-cost",
+                     "minimumPairedSamples":  2,
+                     "confidenceLevel":  0.95,
+                     "deathCriteria":  {
+                                           "minimumRelativeImprovement":  0,
+                                           "maximumCandidateFailureRate":  1,
+                                           "maximumCandidateScopeViolationRate":  0
+                                       }
+                 },
+    "tasks":  [
+                  {
+                      "id":  "EXP-C01",
+                      "contractPath":  "tasks/EXP-C01.yaml",
+                      "expectedDecision":  "Verified"
+                  },
+                  {
+                      "id":  "EXP-C02",
+                      "contractPath":  "tasks/EXP-C02.yaml",
+                      "expectedDecision":  "Verified"
+                  }
+              ],
+    "variants":  [
+                     {
+                         "id":  "A",
+                         "provider":  "Mock",
+                         "model":  "mock-corpus-v1",
+                         "contextStrategy":  "naive-path-order",
+                         "constraintLedgerEnabled":  false,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     },
+                     {
+                         "id":  "B",
+                         "provider":  "Mock",
+                         "model":  "mock-corpus-v1",
+                         "contextStrategy":  "naive-path-order",
+                         "constraintLedgerEnabled":  true,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     },
+                     {
+                         "id":  "C",
+                         "provider":  "Mock",
+                         "model":  "mock-corpus-v1",
+                         "contextStrategy":  "graph-ranked",
+                         "constraintLedgerEnabled":  false,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     },
+                     {
+                         "id":  "D",
+                         "provider":  "Mock",
+                         "model":  "mock-corpus-v1",
+                         "contextStrategy":  "graph-ranked",
+                         "constraintLedgerEnabled":  true,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     }
+                 ]
+}

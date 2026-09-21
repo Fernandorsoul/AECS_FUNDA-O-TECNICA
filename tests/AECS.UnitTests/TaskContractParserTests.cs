@@ -901,7 +901,7 @@ public class TaskContractParserTests
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
 
-        contracts.Should().HaveCount(35);
+        contracts.Should().HaveCount(55);
         foreach (var path in contracts)
         {
             TaskContract contract;
