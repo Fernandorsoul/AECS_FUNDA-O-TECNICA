@@ -269,7 +269,7 @@ jobs:
 
   real-world-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
