@@ -97,6 +97,41 @@ public sealed class ExperimentFactorialCorpusTests
         }
     }
 
+    [Theory]
+    [InlineData("dataset.json", 4)]
+    [InlineData("dataset.cloud.json", 4)]
+    [InlineData("dataset.local.json", 4)]
+    public void CalibratedLoader_AcceptsFactorialDataset(string fileName, int taskCount)
+    {
+        var root = Path.Combine(
+            FindRepositoryRoot(), "tests", "fixtures", "experiment-factorial-calibrated");
+        var loaded = ExperimentDatasetLoader.Load(Path.Combine(root, fileName));
+
+        loaded.Manifest.SchemaVersion.Should()
+            .Be(ExperimentDatasetSchema.FactorialLedgerContextAbVersion);
+        loaded.Manifest.Variants.Should().HaveCount(4);
+        loaded.Manifest.Tasks.Should().HaveCount(taskCount);
+
+        var parser = new TaskContractParser();
+        foreach (var task in loaded.Manifest.Tasks)
+        {
+            var contract = parser.ParseFromFile(loaded.ContractPath(task));
+            contract.Id.Should().Be(task.Id);
+            contract.Verification.Build.Should().BeTrue();
+            contract.Verification.UnitTests.Should().BeTrue();
+            contract.Execution.Target.Should().Be("RealProject.slnx");
+        }
+    }
+
+    [Fact]
+    public void CalibratedFixture_HasFourContractsOnDisk()
+    {
+        var tasksDir = Path.Combine(
+            FindRepositoryRoot(), "tests", "fixtures",
+            "experiment-factorial-calibrated", "repository", "tasks");
+        Directory.GetFiles(tasksDir, "EXP-K*.yaml").Should().HaveCount(4);
+    }
+
     private static string FindRepositoryRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

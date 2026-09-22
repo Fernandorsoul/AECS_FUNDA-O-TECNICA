@@ -1,0 +1,120 @@
+{
+    "schemaVersion":  "aecs.experiment-dataset/v5",
+    "id":  "factorial-calibrated-mock",
+    "version":  "1.0.0",
+    "repository":  {
+                       "path":  "repository",
+                       "baseline":  "HEAD"
+                   },
+    "repetitions":  1,
+    "referenceVariantId":  "A",
+    "protocol":  {
+                     "design":  "factorial-ledger-context-2x2",
+                     "hypothesisId":  "H1-LC",
+                     "hypothesis":  "Constraint Ledger enforcement and graph-ranked context are separable factors on a calibrated integration corpus (3 failing tests, Customers module); the interaction term is reported explicitly.",
+                     "primaryMetric":  "vcc-per-estimated-cost",
+                     "minimumPairedSamples":  2,
+                     "confidenceLevel":  0.95,
+                     "deathCriteria":  {
+                                           "minimumRelativeImprovement":  0,
+                                           "maximumCandidateFailureRate":  1,
+                                           "maximumCandidateScopeViolationRate":  0
+                                       }
+                 },
+    "tasks":  [
+                  {
+                      "id":  "EXP-K01",
+                      "contractPath":  "tasks/EXP-K01.yaml",
+                      "expectedDecision":  "Verified"
+                  },
+                  {
+                      "id":  "EXP-K02",
+                      "contractPath":  "tasks/EXP-K02.yaml",
+                      "expectedDecision":  "Verified"
+                  },
+                  {
+                      "id":  "EXP-K03",
+                      "contractPath":  "tasks/EXP-K03.yaml",
+                      "expectedDecision":  "Verified"
+                  },
+                  {
+                      "id":  "EXP-K04",
+                      "contractPath":  "tasks/EXP-K04.yaml",
+                      "expectedDecision":  "Verified"
+                  }
+              ],
+    "variants":  [
+                     {
+                         "id":  "A",
+                         "provider":  "Mock",
+                         "model":  "mock-cal-v1",
+                         "contextStrategy":  "naive-path-order",
+                         "constraintLedgerEnabled":  false,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     },
+                     {
+                         "id":  "B",
+                         "provider":  "Mock",
+                         "model":  "mock-cal-v1",
+                         "contextStrategy":  "naive-path-order",
+                         "constraintLedgerEnabled":  true,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     },
+                     {
+                         "id":  "C",
+                         "provider":  "Mock",
+                         "model":  "mock-cal-v1",
+                         "contextStrategy":  "graph-ranked",
+                         "constraintLedgerEnabled":  false,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     },
+                     {
+                         "id":  "D",
+                         "provider":  "Mock",
+                         "model":  "mock-cal-v1",
+                         "contextStrategy":  "graph-ranked",
+                         "constraintLedgerEnabled":  true,
+                         "context":  {
+                                         "maxTokens":  2000,
+                                         "maxCharacters":  8000,
+                                         "maxFileCharacters":  4000,
+                                         "maxFileTokens":  1000,
+                                         "dependencyDepth":  2
+                                     },
+                         "requiresRealProvider":  false,
+                         "parameters":  {
+
+                                        }
+                     }
+                 ]
+}
