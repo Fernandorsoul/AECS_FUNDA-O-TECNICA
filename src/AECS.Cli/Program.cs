@@ -1257,9 +1257,21 @@ static async Task<int> RunExperiment(string[] args)
                     definition,
                     runtime,
                     experimentHttpClient);
+                var placement = ContextCompilationOptions.ParsePlacement(
+                    definition.Variant.Parameters.GetValueOrDefault(
+                        "constraintSectionPlacement"));
+                var contextDefaults = new ContextCompilationOptions
+                {
+                    MaxTokens = definition.Variant.Context.MaxTokens,
+                    MaxCharacters = definition.Variant.Context.MaxCharacters,
+                    MaxFileCharacters = definition.Variant.Context.MaxFileCharacters,
+                    MaxFileTokens = definition.Variant.Context.MaxFileTokens,
+                    DependencyDepth = definition.Variant.Context.DependencyDepth,
+                    ConstraintSectionPlacement = placement.Placement
+                };
                 var pipeline = runtime.CreatePipeline(
                     new RepositoryContextCompiler(
-                        defaultOptions: definition.Variant.Context,
+                        defaultOptions: contextDefaults,
                         selectionStrategy: definition.Variant.ContextStrategy),
                     new FixedModelExecutionController(definition.Variant.Model),
                     agent,
@@ -1857,13 +1869,14 @@ static IAgentAdapter BuildExperimentAgent(
     var variant = definition.Variant;
     if (variant.Provider == ExperimentProvider.Mock)
     {
-        EnsureExperimentParameters(variant);
+        EnsureExperimentParameters(variant, "constraintSectionPlacement");
         return new MockAgentAdapter();
     }
 
     if (variant.Provider == ExperimentProvider.Local)
     {
-        EnsureExperimentParameters(variant, "baseUrl", "contextWindowTokens");
+        EnsureExperimentParameters(variant,
+            "baseUrl", "contextWindowTokens", "constraintSectionPlacement");
         var baseUrl = Parameter(variant, "baseUrl") ??
             runtime.Configuration.OllamaBaseUrl.Value;
         var contextWindow = IntParameter(
@@ -1883,7 +1896,8 @@ static IAgentAdapter BuildExperimentAgent(
         "baseUrl",
         "contextWindowTokens",
         "maxOutputTokens",
-        "temperature");
+        "temperature",
+        "constraintSectionPlacement");
     var key = runtime.CloudApiKey;
     if (string.IsNullOrWhiteSpace(key))
     {

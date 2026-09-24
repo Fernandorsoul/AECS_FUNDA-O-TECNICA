@@ -38,6 +38,12 @@ public static class HarnessVariantBinding
             contextParameters["dependency_depth"] = variant.Context.DependencyDepth.ToString();
         }
 
+        if (variant.Parameters.TryGetValue("constraintSectionPlacement", out var placement) &&
+            !string.IsNullOrWhiteSpace(placement))
+        {
+            contextParameters["constraintSectionPlacement"] = placement;
+        }
+
         return HarnessManifestContract.Seal(new HarnessManifest
         {
             VariantId = variant.Id,

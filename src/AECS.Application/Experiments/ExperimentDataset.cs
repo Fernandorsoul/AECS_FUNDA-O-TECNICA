@@ -544,10 +544,12 @@ public static class ExperimentDatasetContract
     private static IReadOnlyCollection<string> SupportedParameters(
         ExperimentProvider provider) => provider switch
         {
-            ExperimentProvider.Mock => [],
-            ExperimentProvider.Local => ["baseUrl", "contextWindowTokens"],
+            ExperimentProvider.Mock => ["constraintSectionPlacement"],
+            ExperimentProvider.Local =>
+                ["baseUrl", "contextWindowTokens", "constraintSectionPlacement"],
             ExperimentProvider.Cloud =>
-                ["baseUrl", "contextWindowTokens", "maxOutputTokens", "temperature"],
+                ["baseUrl", "contextWindowTokens", "maxOutputTokens", "temperature",
+                    "constraintSectionPlacement"],
             _ => []
         };
 
@@ -571,6 +573,8 @@ public static class ExperimentDatasetContract
                     NumberStyles.Float,
                     CultureInfo.InvariantCulture,
                     out var temperature) || temperature is < 0 or > 2,
+            "constraintSectionPlacement" =>
+                !ContextCompilationOptions.ParsePlacement(parameter.Value).IsValid,
             _ => true
         };
 

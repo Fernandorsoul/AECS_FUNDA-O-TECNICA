@@ -106,7 +106,7 @@ public static class HarnessManifestContract
             ["agent-loop"] = new HashSet<string>(StringComparer.Ordinal),
             ["context"] = new HashSet<string>(StringComparer.Ordinal)
             {
-                "max_tokens", "dependency_depth"
+                "max_tokens", "dependency_depth", "constraintSectionPlacement"
             },
             ["observation"] = new HashSet<string>(StringComparer.Ordinal),
             ["tool-use"] = new HashSet<string>(StringComparer.Ordinal),
