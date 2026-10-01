@@ -352,6 +352,56 @@ public class RepositoryContextCompilerTests
         result.Manifest.TotalCharacters.Should().BeLessThanOrEqualTo(1_000);
     }
 
+    [Fact]
+    public void Compile_PlacementBottom_AppendsConstraintsAfterContext()
+    {
+        using var repository = new TemporaryContextRepository();
+        repository.Write(
+            "src/Allowed.cs",
+            "namespace Demo; public class Allowed { /*" + new string('x', 800) + "*/ }");
+        var contract = Contract(
+            objective: "Change Allowed",
+            allowed: ["src/**"],
+            forbidden: ["src/Forbidden/**"]);
+        var constraints = ConstraintLedgerProjector
+            .Project(contract, "sha256:snapshot")
+            .ToList();
+
+        var result = _compiler.Compile(
+            repository.Path,
+            contract,
+            "baseline-123",
+            new ContextCompilationOptions
+            {
+                MaxTokens = 2_000,
+                MaxCharacters = 8_000,
+                MaxFileCharacters = 4_000,
+                ConstraintSectionPlacement = ConstraintSectionPlacement.Bottom
+            },
+            constraints: constraints);
+
+        result.Prompt.Should().Contain("## ACTIVE CONSTRAINTS");
+        result.Prompt.Should().Contain("budget.limits");
+        result.Prompt.IndexOf("## ACTIVE CONSTRAINTS", StringComparison.Ordinal)
+            .Should().BeGreaterThan(
+                result.Prompt.IndexOf("## REPOSITORY CONTEXT", StringComparison.Ordinal),
+                "bottom placement puts obligations after the header");
+        result.Prompt.IndexOf("## ACTIVE CONSTRAINTS", StringComparison.Ordinal)
+            .Should().BeGreaterThan(
+                result.Prompt.IndexOf("### src/", StringComparison.Ordinal),
+                "bottom placement puts obligations after the files");
+    }
+
+    [Fact]
+    public void ParsePlacement_AcceptsTopBottom_RejectsUnknown()
+    {
+        ContextCompilationOptions.ParsePlacement("top").IsValid.Should().BeTrue();
+        ContextCompilationOptions.ParsePlacement("bottom").IsValid.Should().BeTrue();
+        ContextCompilationOptions.ParsePlacement(null).Placement
+            .Should().Be(ConstraintSectionPlacement.Top);
+        ContextCompilationOptions.ParsePlacement("sideways").IsValid.Should().BeFalse();
+    }
+
     private static TaskContract Contract(
         string objective,
         List<string> allowed,

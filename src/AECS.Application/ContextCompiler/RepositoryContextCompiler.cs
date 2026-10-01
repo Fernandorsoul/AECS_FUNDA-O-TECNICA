@@ -4,6 +4,18 @@ using AECS.Domain.Models;
 
 namespace AECS.Application.ContextCompiler;
 
+/// <summary>
+/// Where the ACTIVE CONSTRAINTS section is placed in the compiled prompt.
+/// Top (default) = first thing the model sees; Bottom = after header and files
+/// (recency position). Both keep obligations present per plan §4.3.3 — this
+/// exists only as an experimental A/B factor for prompt placement.
+/// </summary>
+public enum ConstraintSectionPlacement
+{
+    Top,
+    Bottom
+}
+
 public sealed class ContextCompilationOptions
 {
     public const int DefaultMaxTokens = 12_000;
@@ -17,6 +29,8 @@ public sealed class ContextCompilationOptions
     public int MaxFileCharacters { get; init; } = DefaultMaxFileCharacters;
     public int MaxFileTokens { get; init; } = DefaultMaxFileTokens;
     public int DependencyDepth { get; init; } = DefaultDependencyDepth;
+    public ConstraintSectionPlacement ConstraintSectionPlacement { get; init; } =
+        ConstraintSectionPlacement.Top;
 
     public static ContextCompilationOptions FromBudget(ExecutionBudget budget)
     {
@@ -31,6 +45,27 @@ public sealed class ContextCompilationOptions
             MaxFileTokens = Math.Min(DefaultMaxFileTokens, maxTokens)
         };
     }
+
+    public static ContextPlacementParseResult ParsePlacement(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? ContextPlacementParseResult.Valid(ConstraintSectionPlacement.Top)
+            : value.Trim().ToLowerInvariant() switch
+            {
+                "top" => ContextPlacementParseResult.Valid(ConstraintSectionPlacement.Top),
+                "bottom" => ContextPlacementParseResult.Valid(ConstraintSectionPlacement.Bottom),
+                _ => ContextPlacementParseResult.Invalid
+            };
+}
+
+public readonly record struct ContextPlacementParseResult(
+    bool IsValid,
+    ConstraintSectionPlacement Placement)
+{
+    public static ContextPlacementParseResult Valid(ConstraintSectionPlacement placement) =>
+        new(true, placement);
+
+    public static ContextPlacementParseResult Invalid =>
+        new(false, ConstraintSectionPlacement.Top);
 }
 
 public sealed class CompiledRepositoryContext
@@ -126,7 +161,12 @@ public sealed class RepositoryContextCompiler
             header.Length <= characterLimit &&
             tokenCounter.CountTokens(header) <= effectiveTokenLimit;
         var constraintSection = BuildConstraintSection(constraints);
-        var prompt = new StringBuilder(constraintSection);
+        var prompt = new StringBuilder();
+        if (options.ConstraintSectionPlacement == ConstraintSectionPlacement.Top)
+        {
+            prompt.Append(constraintSection);
+        }
+
         if (headerFits)
         {
             prompt.Append(header);
@@ -250,6 +290,11 @@ public sealed class RepositoryContextCompiler
                 OriginalTokens = originalTokens,
                 IncludedTokens = includedTokens
             });
+        }
+
+        if (options.ConstraintSectionPlacement == ConstraintSectionPlacement.Bottom)
+        {
+            prompt.Append(constraintSection);
         }
 
         var promptText = prompt.ToString();
