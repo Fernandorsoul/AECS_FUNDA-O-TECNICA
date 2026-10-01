@@ -39,7 +39,7 @@ public sealed class AcceptanceCriteriaExecutionTests
         var build = await runner.RunAsync(new ProcessExecutionRequest
         {
             FileName = "dotnet",
-            Arguments = ["build", "AECS.sln", "--nologo", "--verbosity", "quiet"],
+            Arguments = ["build", "AECS.sln", "--disable-build-servers", "--nologo", "--verbosity", "quiet"],
             WorkingDirectory = workspace.Path,
             Timeout = TimeSpan.FromMinutes(2)
         }, CancellationToken.None);

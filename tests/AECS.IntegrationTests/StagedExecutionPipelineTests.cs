@@ -506,7 +506,7 @@ public sealed class StagedExecutionPipelineTests
         var project = """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net8.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
               </PropertyGroup>
             </Project>
             """;
@@ -538,7 +538,7 @@ public sealed class StagedExecutionPipelineTests
         var project = """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net8.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
               </PropertyGroup>
               <Target Name="FailBuild" BeforeTargets="CoreCompile">
                 <Error Text="intentional baseline build failure" />
@@ -584,7 +584,7 @@ public sealed class StagedExecutionPipelineTests
         var project = """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net8.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
               </PropertyGroup>
             </Project>
             """;
@@ -669,7 +669,7 @@ public sealed class StagedExecutionPipelineTests
         var project = """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net8.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
               </PropertyGroup>
               <Target Name="FailTests" BeforeTargets="VSTest" Condition="Exists('src/fail-tests.flag')">
                 <Error Text="intentional test failure" />

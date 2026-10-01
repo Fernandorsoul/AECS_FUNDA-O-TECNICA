@@ -51,12 +51,12 @@ public sealed class RepositorySnapshotTests
         first.Projects.Should().Contain(project =>
             project.Path == "tests/Unit/App.UnitTests.csproj" &&
             project.IsTestProject &&
-            project.Frameworks.Contains("net8.0"));
+            project.Frameworks.Contains("net10.0"));
         first.Projects.Should().Contain(project =>
             project.Path == "tests/Integration/App.IntegrationTests.csproj" &&
             project.IsTestProject);
         first.Languages.Should().Contain(language => language.Name == "C#" && language.FileCount >= 4);
-        first.Frameworks.Should().Contain("net8.0");
+        first.Frameworks.Should().Contain("net10.0");
         first.Manifests.Should().Contain(manifest => manifest.Path == "package.json");
         first.Packages.Should().Contain(package =>
             package.Ecosystem == "nuget" && package.Name == "MediatR");
@@ -207,7 +207,7 @@ public sealed class RepositorySnapshotTests
             FileName = "dotnet",
             Arguments = ["--version"],
             ExitCode = 0,
-            StandardOutput = "10.0.400\n"
+            StandardOutput = "8.0.410\n"
         }
     ];
 
@@ -394,7 +394,7 @@ public sealed class RepositorySnapshotTests
             IReadOnlyList<string>? references = null,
             IReadOnlyList<(string Name, string Version)>? packages = null)
         {
-            var properties = $"<TargetFramework>net8.0</TargetFramework>" +
+            var properties = $"<TargetFramework>net10.0</TargetFramework>" +
                 (outputType is null ? string.Empty : $"<OutputType>{outputType}</OutputType>") +
                 (isTest ? "<IsTestProject>true</IsTestProject>" : string.Empty);
             var projectReferences = string.Join(string.Empty, (references ?? [])

@@ -29,7 +29,7 @@ melhoria adaptativa não fazem parte da promessa inicial.
 ## Matriz de suporte
 
 - SDK/build: .NET 10 LTS estável.
-- Runtime do produto: `net10.0`.
+- Runtime do produto: `net8.0`.
 - Sandbox staged: imagem .NET 10 fixada por digest.
 - VS Code: 1.95+ para o cliente mínimo.
 - Sistemas validados: preencher a partir do pacote final.

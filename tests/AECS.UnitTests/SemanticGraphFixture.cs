@@ -107,7 +107,7 @@ internal static class SemanticGraphFixture
         Hash = $"git:{path}",
         Language = "C#",
         IsTestProject = test,
-        Frameworks = ["net8.0"]
+        Frameworks = ["net10.0"]
     };
 
     private static RepositorySnapshot Snapshot(

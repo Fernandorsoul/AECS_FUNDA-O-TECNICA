@@ -563,7 +563,7 @@ public sealed class RoslynSymbolGraphTests
 
         private static string Project(string? reference = null) =>
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
-            "<TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable>" +
+            "<TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable>" +
             "<ImplicitUsings>enable</ImplicitUsings><Deterministic>true</Deterministic>" +
             "</PropertyGroup>" +
             (reference is null

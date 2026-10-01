@@ -1,0 +1,15 @@
+.git
+.mimocode
+.codex
+**/node_modules
+**/bin
+**/obj
+**/TestResults
+**/.env
+**/.env.*
+**/*.pfx
+**/*.pem
+**/*.key
+artifacts/
+*.vsix
+# Keep tasks, experiments, docs and scripts: repository-aware tests use them.

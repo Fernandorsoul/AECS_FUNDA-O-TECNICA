@@ -59,7 +59,7 @@ body:
       description: Include OS, architecture, .NET SDK/runtime, Docker status, provider mode and evidence backend. Redact secrets.
       placeholder: |
         OS: Windows 11 x64
-        .NET SDK: 10.0.x stable
+        .NET SDK: 8.0.x LTS
         Docker: running
         Provider: mock/local/cloud (no token values)
         Evidence backend: json/postgres

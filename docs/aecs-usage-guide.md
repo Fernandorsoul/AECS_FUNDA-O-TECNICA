@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-1. .NET 10 SDK
+1. .NET 8 SDK
 2. Docker Desktop
 3. Python 3.12+
 4. Groq API key (or Ollama for local)
@@ -33,7 +33,7 @@ dotnet build src/AECS.Cli/AECS.Cli.csproj --no-restore
 ### Running a Single Task
 
 ```bash
-dotnet src/AECS.Cli/bin/Debug/net10.0/AECS.Cli.dll run \
+dotnet src/AECS.Cli/bin/Debug/net8.0/AECS.Cli.dll run \
   --repo ./sample/SampleProject \
   --task-file tasks/task-001-fix-null.yaml \
   --enable-cloud-fallback \
@@ -43,7 +43,7 @@ dotnet src/AECS.Cli/bin/Debug/net10.0/AECS.Cli.dll run \
 ### Running an Experiment (Multiple Tasks)
 
 ```bash
-dotnet src/AECS.Cli/bin/Debug/net10.0/AECS.Cli.dll experiment \
+dotnet src/AECS.Cli/bin/Debug/net8.0/AECS.Cli.dll experiment \
   --repo ./sample/SampleProject \
   --tasks ./tasks/experiment \
   --enable-cloud-fallback \

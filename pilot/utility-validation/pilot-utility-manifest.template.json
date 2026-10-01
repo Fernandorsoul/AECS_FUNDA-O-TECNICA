@@ -14,7 +14,7 @@
     "provider_mode": "local",
     "provider_name": "ollama",
     "model": "qwen2.5-coder:14b",
-    "sdk": "10.0.x",
+    "sdk": "8.0.x",
     "docker_image": "mcr.microsoft.com/dotnet/sdk:10.0@sha256:4beef5b8919dcaa2dc924233bd069257e883cc7a061e09088a97d152d6a48510",
     "hardware": "preencher CPU/RAM/GPU",
     "context_window_tokens": 32768,
